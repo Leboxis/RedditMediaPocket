@@ -6,12 +6,14 @@ import SwiftUI
 
 private struct Selection: Identifiable {
     let url: URL
+    let files: [URL]
     var id: URL { url }
 }
 
 struct ContentView: View {
     @StateObject private var model = Downloader()
     @State private var selection: Selection?
+    @State private var export: ExportSelection?
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -57,6 +59,13 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 18).padding(.bottom, 12)
 
+                if !model.limitNotice.isEmpty {
+                    Label(model.limitNotice, systemImage: "clock")
+                        .font(.caption).foregroundStyle(.orange).lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18).padding(.bottom, 10)
+                }
+
                 if model.files.isEmpty {
                     Spacer()
                     Image(systemName: "photo.on.rectangle.angled")
@@ -67,7 +76,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 3) {
                             ForEach(model.files, id: \.self) { url in
-                                Button { selection = Selection(url: url) } label: {
+                                Button { selection = Selection(url: url, files: model.files) } label: {
                                     MediaThumbnail(url: url)
                                 }
                                 .buttonStyle(.plain)
@@ -80,21 +89,20 @@ struct ContentView: View {
             }
             .navigationTitle("Pocket")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $selection) { item in
-                NavigationStack {
-                    MediaPreview(url: item.url)
-                        .ignoresSafeArea(edges: .bottom)
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .navigationBarLeading) {
-                                Button { selection = nil } label: { Image(systemName: "xmark") }
-                                    .accessibilityLabel("Fermer")
-                            }
-                            ToolbarItem(placement: .navigationBarTrailing) {
-                                ShareLink(item: item.url) { Image(systemName: "square.and.arrow.up") }
-                            }
-                        }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { export = ExportSelection(files: model.files) } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .disabled(model.files.isEmpty)
+                    .accessibilityLabel("Exporter tous les médias")
                 }
+            }
+            .sheet(item: $selection) { item in
+                MediaPreview(urls: item.files, selectedURL: item.url).ignoresSafeArea()
+            }
+            .sheet(item: $export) { item in
+                ExportSheet(files: item.files).ignoresSafeArea()
             }
             .tint(.orange)
         }

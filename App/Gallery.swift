@@ -77,20 +77,41 @@ struct MediaThumbnail: View {
     }
 }
 
-// Native preview provides full-resolution images, zoom, animated GIFs and video controls.
+// Quick Look owns navigation and sharing, so the shared item follows every swipe.
 struct MediaPreview: UIViewControllerRepresentable {
-    let url: URL
-    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
-    func makeUIViewController(context: Context) -> QLPreviewController {
+    let urls: [URL]
+    let selectedURL: URL
+    @Environment(\.dismiss) private var dismiss
+    func makeCoordinator() -> Coordinator { Coordinator(urls: urls, close: { dismiss() }) }
+    func makeUIViewController(context: Context) -> UINavigationController {
         let controller = QLPreviewController()
         controller.dataSource = context.coordinator
-        return controller
+        controller.currentPreviewItemIndex = urls.firstIndex(of: selectedURL) ?? 0
+        controller.navigationItem.leftBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done, target: context.coordinator, action: #selector(Coordinator.close))
+        return UINavigationController(rootViewController: controller)
     }
-    func updateUIViewController(_ controller: QLPreviewController, context: Context) {}
+    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
     final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let url: URL
-        init(url: URL) { self.url = url }
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
+        let urls: [URL]
+        let onClose: () -> Void
+        init(urls: [URL], close: @escaping () -> Void) { self.urls = urls; self.onClose = close }
+        @objc func close() { onClose() }
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { urls.count }
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { urls[index] as NSURL }
     }
+}
+
+struct ExportSelection: Identifiable {
+    let id = UUID()
+    let files: [URL]
+}
+
+struct ExportSheet: UIViewControllerRepresentable {
+    let files: [URL]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        // Share file URLs, never decode the entire gallery into memory.
+        UIActivityViewController(activityItems: files, applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

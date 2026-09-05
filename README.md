@@ -59,9 +59,9 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les 
 
 ## Comportement réseau et stockage
 
-- Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Seules les requêtes de découverte RSS sont espacées de 7 secondes. Aucun débit ne garantit l’accès.
+- Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Les départs sont espacés par service : 7 secondes pour le RSS, 2 secondes pour les métadonnées RedGIFs, 1 seconde pour les médias. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
-- Un HTTP 429 arrête la session et conserve le délai `Retry-After` entre lancements (15 minutes par défaut). Les autres erreurs arrêtent également la session.
+- Un HTTP 429 conserve le délai `Retry-After` par service entre lancements (15 minutes par défaut). Les médias des autres services déjà découverts continuent. Une limite sur le flux RSS arrête la découverte des pages suivantes. Les autres erreurs arrêtent la session.
 - Reprise par fichiers complets : relancer le pseudo saute les URLs déjà enregistrées. Un transfert interrompu recommence depuis le début. Le parcours RSS repart de la première page.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
 - Garder l'application au premier plan. Le prototype n'implémente pas de service de téléchargement en arrière-plan.
@@ -88,6 +88,14 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 Interface compacte : pseudo, bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
-Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur annule les autres transferts. Les fichiers complets restent conservés.
+Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur autre qu’un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 
 Les tests de concurrence vérifient le plafond de trois, le remplacement avant la fin du transfert le plus lent, l’annulation après erreur et le bouton arrêter.
+
+## Export et navigation
+
+Le bouton de partage en haut à droite exporte tous les médias actuellement téléchargés via la feuille de partage iOS. Il partage les fichiers originaux par URL sans charger toute la galerie en mémoire. Les destinations proposées et leurs limites dépendent d’iOS et des apps installées.
+
+La visionneuse reçoit un instantané de la galerie et ouvre le média touché ; balayer à gauche/droite passe aux éléments suivants/précédents, images et vidéos mélangées. Le partage intégré suit le média affiché. Les téléchargements arrivant pendant la consultation apparaissent après réouverture de la visionneuse.
+
+Les hôtes Reddit et redd.it partagent un délai, tout comme les hôtes API/CDN RedGIFs. Les nouvelles requêtes vers un service limité sont évitées localement, sans annuler les autres services. Les fichiers non téléchargés sont indiqués « à reprendre » ; relancer après le délai. Les anciens délais globaux sont respectés jusqu’à leur expiration car leur source n’était pas enregistrée. Aucun réglage ne garantit l’absence de limitation serveur.

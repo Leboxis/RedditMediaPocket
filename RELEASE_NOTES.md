@@ -1,9 +1,9 @@
-Galerie et téléchargements simultanés.
+Export global, navigation et gestion des limites.
 
-- Trois médias en parallèle, enchaînement immédiat à chaque fin de transfert.
-- Galerie persistante à trois colonnes avec miniatures locales d’images et de vidéos.
-- Prévisualisation native, zoom, lecture vidéo et partage.
-- Interface réduite au pseudo, aux commandes et à la galerie.
-- Arrêt collectif sur erreur et respect de Retry-After conservés.
+- Bouton de partage de tous les médias depuis la galerie.
+- Balayage entre images et vidéos dans la visionneuse native.
+- Limites HTTP 429 isolées par service, avec nom et heure de reprise.
+- Les autres hébergeurs de la page continuent ; les médias bloqués sont comptés à reprendre.
+- Trois transferts possibles avec départs légèrement espacés par service.
 
-IPA pour LiveContainer. Garder l’app ouverte pendant les transferts. Galeries Reddit et historique complet toujours non garantis.
+Un délai déjà enregistré par une ancienne version reste respecté. Les limites serveur restent possibles. Relancer après le délai reprend les fichiers manquants sans retélécharger les fichiers complets.

@@ -11,6 +11,9 @@ import MediaCore
     @Published var files: [URL] = []
     @Published var count = 0
     @Published var active = 0
+    @Published var limitNotice = ""
+    private var limitedServices: [String: Date] = [:]
+    private var skipped = 0
     private let network = Network()
     private var task: Task<Void, Never>?
     private var tokenTask: Task<String, Error>?
@@ -38,7 +41,7 @@ import MediaCore
     func stop() { task?.cancel(); tokenTask?.cancel() }
     func start() {
         guard !running else { return }
-        running = true; count = 0; status = ""
+        running = true; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
             do { try await run() }
@@ -83,12 +86,25 @@ import MediaCore
             }
             status = ""
             try await ConcurrentDownloads.run(downloads, limit: 3) { item in
-                try await self.save(item)
+                try await self.saveUnlessLimited(item)
             }
             guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }
             after = last
         }
-        status = count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés"
+        status = skipped > 0 ? "\(count) reçus · \(skipped) à reprendre" : (count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés")
+    }
+
+    private func saveUnlessLimited(_ item: Download) async throws {
+        do { try await save(item) }
+        catch NetworkError.limited(let service, let until) {
+            try Task.checkCancellation()
+            skipped += 1
+            limitedServices[service] = max(limitedServices[service] ?? .distantPast, until)
+            limitNotice = limitedServices.sorted { $0.key < $1.key }.map {
+                "\($0.key) · \($0.value.formatted(date: .numeric, time: .shortened))"
+            }.joined(separator: " — ")
+            // Keep processing the other services. Blocked requests fail locally without contacting them.
+        }
     }
 
     private func save(_ item: Download) async throws {
