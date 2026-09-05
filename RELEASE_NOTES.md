@@ -1,9 +1,10 @@
-Export global, navigation et gestion des limites.
+Qualité maximale exposée et reprises plus efficaces.
 
-- Bouton de partage de tous les médias depuis la galerie.
-- Balayage entre images et vidéos dans la visionneuse native.
-- Limites HTTP 429 isolées par service, avec nom et heure de reprise.
-- Les autres hébergeurs de la page continuent ; les médias bloqués sont comptés à reprendre.
-- Trois transferts possibles avec départs légèrement espacés par service.
+- Reddit : sélection par résolution, fréquence d’images puis débit ; meilleure piste audio par débit.
+- Assemblage audio/vidéo sans recompression.
+- RedGIFs : HD prioritaire, aucun repli en SD après un échec HD.
+- Images originales conservées sans recompression ; normalisation des suffixes de miniatures Imgur reconnus.
+- Réutilisation des pages RSS pendant 2 minutes dans la session pour réduire les requêtes de reprise.
+- Respect des en-têtes de quota quand présents, en plus de Retry-After.
 
-Un délai déjà enregistré par une ancienne version reste respecté. Les limites serveur restent possibles. Relancer après le délai reprend les fichiers manquants sans retélécharger les fichiers complets.
+Trois transferts conservés. Aucun débit anonyme garanti sans limitation. Les anciens fichiers restent conservés ; ils ne sont pas automatiquement remplacés. Les manifests segmentés non pris en charge produisent une erreur plutôt qu’un téléchargement en qualité inférieure.

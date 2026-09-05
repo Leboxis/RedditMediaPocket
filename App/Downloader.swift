@@ -141,7 +141,7 @@ import MediaCore
             struct Response: Decodable { struct Gif: Decodable { struct URLs: Decodable { let hd: URL?; let sd: URL? }; let urls: URLs }; let gif: Gif }
             let data = try await network.data(URL(string: "https://api.redgifs.com/v2/gifs/\(id)")!, bearer: bearer)
             let urls = try JSONDecoder().decode(Response.self, from: data).gif.urls
-            guard let url = urls.hd ?? urls.sd, let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid("Média RedGIFs indisponible.") }
+            guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid("Média RedGIFs indisponible.") }
             return try await network.download(url)
         case .redditVideo(let base):
             let manifest = base.appendingPathComponent("DASHPlaylist.mpd")

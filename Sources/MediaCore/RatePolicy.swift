@@ -10,6 +10,13 @@ public enum RatePolicy {
         return host
     }
 
+    /// Optional advisory headers; their absence does not imply an anonymous quota.
+    public static func quotaDelay(remaining: String?, reset: String?) -> TimeInterval? {
+        guard let remaining = remaining.flatMap(Double.init), remaining.isFinite, remaining >= 0,
+              let reset = reset.flatMap(Double.init), reset.isFinite, reset > 0 else { return nil }
+        return remaining < 1 ? reset : reset / remaining
+    }
+
     public static func retryDate(header: String?, now: Date) -> Date {
         let value = (header ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if let seconds = Double(value), seconds.isFinite, seconds >= 0 {

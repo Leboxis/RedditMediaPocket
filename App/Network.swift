@@ -17,6 +17,8 @@ enum NetworkError: LocalizedError {
     private let session: URLSession
     private var nextRequest: [String: Date] = [:]
     private var limits: ServiceLimits
+    private var rssCache: [URL: (date: Date, data: Data)] = [:]
+    private var advisedPacing: [String: (until: Date, interval: TimeInterval)] = [:]
     private let defaults = UserDefaults.standard
 
     private func checkLimit(_ service: String) throws {
@@ -44,7 +46,9 @@ enum NetworkError: LocalizedError {
         let service = RatePolicy.service(for: url.host ?? "Serveur")
         try checkLimit(service)
         // Space starts, not whole transfers: up to three large files still overlap.
-        let interval: TimeInterval = url.host == "www.reddit.com" ? 7 : (url.host == "api.redgifs.com" ? 2 : 1)
+        let baseInterval: TimeInterval = url.host == "www.reddit.com" ? 7 : (url.host == "api.redgifs.com" ? 2 : 1)
+        let advice = advisedPacing[service]
+        let interval = max(baseInterval, advice.map { $0.until > Date() ? $0.interval : 0 } ?? 0)
         let reserved = max(Date(), nextRequest[service] ?? .distantPast)
         nextRequest[service] = reserved.addingTimeInterval(interval)
         let delay = reserved.timeIntervalSinceNow
@@ -65,12 +69,30 @@ enum NetworkError: LocalizedError {
             defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
             throw NetworkError.limited(service: service, until: limits.deadlines[service] ?? date)
         }
+        if (200...299).contains(http.statusCode),
+           let delay = RatePolicy.quotaDelay(remaining: http.value(forHTTPHeaderField: "X-Ratelimit-Remaining"), reset: http.value(forHTTPHeaderField: "X-Ratelimit-Reset")),
+           let reset = Double(http.value(forHTTPHeaderField: "X-Ratelimit-Reset") ?? "") {
+            let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
+            if let remaining = Double(http.value(forHTTPHeaderField: "X-Ratelimit-Remaining") ?? ""), remaining < 1 {
+                limits.record(service: service, until: Date().addingTimeInterval(reset))
+                defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
+            }
+            advisedPacing[service] = (Date().addingTimeInterval(reset), delay)
+            nextRequest[service] = max(nextRequest[service] ?? .distantPast, Date().addingTimeInterval(delay))
+        }
         guard (200...299).contains(http.statusCode) else { throw NetworkError.refused(http.statusCode) }
     }
     func data(_ url: URL, bearer: String? = nil) async throws -> Data {
+        let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss")
+        if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 { return cached.data }
         let req = try await request(url, bearer: bearer)
         let (data, response) = try await session.data(for: req)
         try check(response, requestedURL: url)
+        if isRSS, data.count <= 2_000_000 {
+            // Short-lived local reuse avoids repeating page requests on stop/restart.
+            if rssCache.count >= 16, let oldest = rssCache.min(by: { $0.value.date < $1.value.date })?.key { rssCache.removeValue(forKey: oldest) }
+            rssCache[url] = (Date(), data)
+        }
         return data
     }
     func download(_ url: URL) async throws -> URL {

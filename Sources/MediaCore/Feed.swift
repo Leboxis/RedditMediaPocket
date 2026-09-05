@@ -22,9 +22,10 @@ public enum Media: Hashable, Sendable {
 }
 
 public enum FeedError: LocalizedError {
-    case invalidFeed, invalidUsername
+    case invalidFeed, invalidUsername, unsupportedVideo
     public var errorDescription: String? {
         switch self {
+        case .unsupportedVideo: return "Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée."
         case .invalidFeed: return "Réponse RSS invalide : Reddit peut refuser cet accès anonyme."
         case .invalidUsername: return "Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores)."
         }
@@ -85,7 +86,7 @@ public enum MediaExtractor {
                     media = .redgifs(parts[2].lowercased())
                 }
             } else if ["i.redd.it", "i.imgur.com"].contains(host), ["jpg", "jpeg", "png", "gif", "webp", "mp4"].contains(url.pathExtension.lowercased()) {
-                media = .direct(url)
+                media = .direct(QualityPolicy.originalImageURL(url))
             }
             guard let media, seen.insert(media).inserted else { return nil }
             return media
@@ -98,29 +99,66 @@ public struct DASHTracks {
     public let audio: URL?
 }
 public final class DASHParser: NSObject, XMLParserDelegate {
-    private var adaptationMime = "", mime = "", height = 0, base = ""
-    private var readingBase = false
+    private struct Track {
+        let path: String
+        let height: Int
+        let width: Int
+        let fps: Double
+        let bandwidth: Int
+    }
+    private var adaptation: [String: String] = [:]
+    private var attributes: [String: String] = [:]
+    private var base = "", element = ""
     private var inRepresentation = false
-    private var videos: [(Int, String)] = [], audios: [String] = []
+    private var segmented = false
+    private var adaptationSegmented = false
+    private var unsupportedSegments = false
+    private var videos: [Track] = [], audios: [Track] = []
+
     public static func parse(_ data: Data, relativeTo url: URL) throws -> DASHTracks {
         let d = DASHParser(); let p = XMLParser(data: data); p.delegate = d
         p.shouldResolveExternalEntities = false
-        guard p.parse(), let best = d.videos.max(by: { $0.0 < $1.0 }), let video = URL(string: best.1, relativeTo: url)?.absoluteURL else { throw FeedError.invalidFeed }
-        let audio = d.audios.first.flatMap { URL(string: $0, relativeTo: url)?.absoluteURL }
+        guard p.parse() else { throw FeedError.invalidFeed }
+        guard !d.unsupportedSegments else { throw FeedError.unsupportedVideo }
+        guard let best = d.videos.max(by: {
+            if $0.height != $1.height { return $0.height < $1.height }
+            if $0.width != $1.width { return $0.width < $1.width }
+            if $0.fps != $1.fps { return $0.fps < $1.fps }
+            return $0.bandwidth < $1.bandwidth
+        }), let video = URL(string: best.path, relativeTo: url)?.absoluteURL else { throw FeedError.invalidFeed }
+        let audio = d.audios.max(by: { $0.bandwidth < $1.bandwidth }).flatMap { URL(string: $0.path, relativeTo: url)?.absoluteURL }
         return DASHTracks(video: video, audio: audio)
     }
-    public func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
-        if name == "AdaptationSet" { adaptationMime = attributes["mimeType"] ?? attributes["contentType"] ?? "" }
-        if name == "Representation" { inRepresentation = true; mime = attributes["mimeType"] ?? adaptationMime; height = Int(attributes["height"] ?? "0") ?? 0; base = "" }
-        if name == "BaseURL", inRepresentation { readingBase = true }
+    public func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes attrs: [String: String]) {
+        element = name
+        if name == "AdaptationSet" { adaptation = attrs; adaptationSegmented = false }
+        if name == "Representation" {
+            inRepresentation = true; attributes = adaptation.merging(attrs) { _, new in new }; base = ""; segmented = adaptationSegmented
+        }
+        if name == "SegmentTemplate" || name == "SegmentList" {
+            unsupportedSegments = true
+            if inRepresentation { segmented = true } else { adaptationSegmented = true }
+        }
     }
-    public func parser(_ parser: XMLParser, foundCharacters text: String) { if readingBase { base += text } }
+    public func parser(_ parser: XMLParser, foundCharacters text: String) {
+        if element == "BaseURL", inRepresentation { base += text }
+    }
     public func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if name == "BaseURL" { readingBase = false }
         if name == "Representation" {
             let value = base.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !value.isEmpty { if mime.hasPrefix("video") { videos.append((height, value)) }; if mime.hasPrefix("audio") { audios.append(value) } }
+            let mime = attributes["mimeType"] ?? attributes["contentType"] ?? ""
+            let fpsParts = (attributes["frameRate"] ?? "0").split(separator: "/").compactMap { Double($0) }
+            let fps = fpsParts.count == 2 && fpsParts[1] > 0 ? fpsParts[0] / fpsParts[1] : (fpsParts.first ?? 0)
+            if !value.isEmpty, !segmented {
+                let track = Track(path: value, height: Int(attributes["height"] ?? "0") ?? 0,
+                    width: Int(attributes["width"] ?? "0") ?? 0, fps: fps,
+                    bandwidth: Int(attributes["bandwidth"] ?? "0") ?? 0)
+                if mime.hasPrefix("video") { videos.append(track) }
+                if mime.hasPrefix("audio") { audios.append(track) }
+            }
             inRepresentation = false
         }
+        if name == "AdaptationSet" { adaptation = [:]; adaptationSegmented = false }
+        element = ""
     }
 }

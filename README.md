@@ -99,3 +99,19 @@ Le bouton de partage en haut à droite exporte tous les médias actuellement té
 La visionneuse reçoit un instantané de la galerie et ouvre le média touché ; balayer à gauche/droite passe aux éléments suivants/précédents, images et vidéos mélangées. Le partage intégré suit le média affiché. Les téléchargements arrivant pendant la consultation apparaissent après réouverture de la visionneuse.
 
 Les hôtes Reddit et redd.it partagent un délai, tout comme les hôtes API/CDN RedGIFs. Les nouvelles requêtes vers un service limité sont évitées localement, sans annuler les autres services. Les fichiers non téléchargés sont indiqués « à reprendre » ; relancer après le délai. Les anciens délais globaux sont respectés jusqu’à leur expiration car leur source n’était pas enregistrée. Aucun réglage ne garantit l’absence de limitation serveur.
+
+## Qualité et investigation du débit
+
+La meilleure qualité signifie la meilleure variante exposée par le chemin public pris en charge, pas le fichier source privé de l’auteur. Les images sont copiées telles quelles ; aucune réduction n’est appliquée au fichier enregistré. Seules les miniatures de galerie sont réduites en mémoire. Les suffixes Imgur de miniature sur identifiants historiques de 5/7 caractères sont retirés ; les autres liens restent inchangés. Reddit preview.redd.it n’est jamais utilisé comme original.
+
+Pour DASH, la priorité est hauteur, largeur, fréquence d’images puis débit ; les attributs hérités de l’AdaptationSet sont lus. La piste audio au débit maximal est choisie. AVAssetExportPresetPassthrough conserve les pistes sans recompression. Si le manifest nécessite SegmentTemplate/SegmentList, cette version échoue explicitement plutôt que choisir discrètement une piste inférieure. RedGIFs prend HD quand cette URL existe ; SD seulement si le serveur n’expose pas HD. Une erreur HD ne déclenche pas de repli SD. Les fichiers anciens ne sont pas requalifiés ou remplacés automatiquement.
+
+Investigation : aucune cadence sûre officielle trouvée pour le RSS anonyme et les CDN utilisés. Le quota Reddit Data API de 100 requêtes/minute concerne les clients OAuth et ne doit pas être transposé au RSS de cette app. Augmenter le nombre de connexions ou supprimer les pauses pourrait provoquer davantage de 429 ; aucune accélération chiffrée n’est revendiquée.
+
+L’amélioration mise en œuvre vise les requêtes évitables : 16 pages RSS maximum réutilisables pendant 120 secondes, en mémoire seulement, limitées à 2 Mo chacune. Cela sert aux arrêts/reprises proches et peut retarder l’apparition d’un nouveau post de deux minutes. Les fichiers complets sont toujours ignorés à la reprise. Les en-têtes X-Ratelimit-Remaining/Reset, quand présents, peuvent ralentir préventivement les requêtes ; leur absence ne vaut pas autorisation d’accélérer. Les délais de base et le plafond de trois transferts restent inchangés.
+
+Références consultées :
+- Reddit : https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki
+- Apple : https://developer.apple.com/documentation/avfoundation/avassetexportpresetpassthrough
+- Sélection des formats RedGIFs dans yt-dlp : https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/redgifs.py
+- Modèle d’images et miniatures Imgur : https://api.imgur.com/models/image
