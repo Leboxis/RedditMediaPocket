@@ -1,0 +1,72 @@
+name: Build and publish IPA
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test core parsers
+        run: swift test
+      - name: Test source generator
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Prepare Xcode project
+        run: |
+          brew install xcodegen
+          python3 scripts/make_icon.py
+          xcodegen generate
+      - name: Build unsigned iPhone app
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          xcodebuild -project RedditMediaPocket.xcodeproj -scheme RedditMediaPocket \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="0.1.${BUILD_NUMBER}" CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" build
+          mkdir -p dist/Payload
+          cp -R build/Build/Products/Release-iphoneos/RedditMediaPocket.app dist/Payload/
+          cd dist
+          zip -qry RedditMediaPocket.ipa Payload
+      - name: Generate LiveContainer source
+        env:
+          REPOSITORY: ${{ github.repository }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          python3 scripts/make_source.py --repo "$REPOSITORY" --version "0.1.${BUILD_NUMBER}" \
+            --ipa dist/RedditMediaPocket.ipa --output dist/apps.json
+          cp icon.png dist/icon.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RedditMediaPocket
+          path: |
+            dist/RedditMediaPocket.ipa
+            dist/apps.json
+            dist/icon.png
+      - name: Publish release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          TAG="v0.1.${BUILD_NUMBER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
+          else
+            gh release create "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png \
+              --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
+              --notes-file RELEASE_NOTES.md --latest
+          fi
