@@ -10,7 +10,7 @@ public struct Post: Identifiable {
     public init(id: String, title: String, html: String) { self.id = id; self.title = title; self.html = html }
 }
 
-public enum Media: Hashable {
+public enum Media: Hashable, Sendable {
     case direct(URL), redditVideo(URL), redgifs(String)
     public var key: String {
         switch self {

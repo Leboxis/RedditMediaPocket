@@ -59,7 +59,7 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les 
 
 ## Comportement réseau et stockage
 
-- Un transfert à la fois, au moins 7 secondes entre débuts de requêtes. C'est un choix prudent du prototype, pas une limite officielle garantissant l'accès.
+- Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Seules les requêtes de découverte RSS sont espacées de 7 secondes. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
 - Un HTTP 429 arrête la session et conserve le délai `Retry-After` entre lancements (15 minutes par défaut). Les autres erreurs arrêtent également la session.
 - Reprise par fichiers complets : relancer le pseudo saute les URLs déjà enregistrées. Un transfert interrompu recommence depuis le début. Le parcours RSS repart de la première page.
@@ -83,3 +83,11 @@ open RedditMediaPocket.xcodeproj
 Les tests Swift vérifient le RSS Atom, le rejet d'une page de blocage, les liens originaux, la déduplication, les noms d'utilisateur, et les pistes DASH avec/sans audio. Les tests Python vérifient le JSON de source, la taille réelle, les URLs versionnées et le rejet d'une archive invalide. Ils ne prouvent pas la compatibilité actuelle des hébergeurs.
 
 Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succès, installer dans LiveContainer, essayer un profil avec image, une vidéo avec audio et un lien RedGIFs, interrompre/reprendre, puis tester une seconde release pour la conservation des fichiers. Aucun accès anonyme exhaustif n'est garanti.
+
+## Galerie et téléchargements simultanés
+
+Interface compacte : pseudo, bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
+
+Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur annule les autres transferts. Les fichiers complets restent conservés.
+
+Les tests de concurrence vérifient le plafond de trois, le remplacement avant la fin du transfert le plus lent, l’annulation après erreur et le bouton arrêter.

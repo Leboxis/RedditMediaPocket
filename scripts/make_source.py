@@ -34,7 +34,7 @@ def build_source(repo, version, ipa):
             "versions": [{
                 "version": version,
                 "date": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-                "localizedDescription": "Prototype RSS public avec reprise et arrêt sur refus réseau.",
+                "localizedDescription": "Trois téléchargements simultanés, galerie avec miniatures et interface épurée.",
                 "downloadURL": f"{base}/{ipa.name}",
                 "size": ipa.stat().st_size,
                 "minOSVersion": "16.0"

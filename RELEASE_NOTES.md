@@ -1,11 +1,9 @@
-Prototype RSS public sans compte Reddit ni API JSON Reddit.
+Galerie et téléchargements simultanés.
 
-- Images directes i.redd.it / i.imgur.com.
-- Vidéos Reddit : meilleure piste du manifest DASH avec assemblage audio lorsqu'il est exposé.
-- RedGIFs : jeton anonyme temporaire, sans connexion à un compte.
-- Fichiers dans Documents, partage iOS, reprise sans doublons.
-- 7 secondes minimum entre requêtes, arrêt sur erreur et respect de Retry-After.
+- Trois médias en parallèle, enchaînement immédiat à chaque fin de transfert.
+- Galerie persistante à trois colonnes avec miniatures locales d’images et de vidéos.
+- Prévisualisation native, zoom, lecture vidéo et partage.
+- Interface réduite au pseudo, aux commandes et à la galerie.
+- Arrêt collectif sur erreur et respect de Retry-After conservés.
 
-IPA non signée destinée à LiveContainer configuré pour exécuter les applications invitées.
-Les galeries Reddit et les historiques complets ne sont pas pris en charge dans cette version.
-La disponibilité du RSS et des hébergeurs dépend du réseau et peut changer. Garder l'app ouverte.
+IPA pour LiveContainer. Garder l’app ouverte pendant les transferts. Galeries Reddit et historique complet toujours non garantis.

@@ -11,10 +11,10 @@ enum NetworkError: LocalizedError {
     }
 }
 
-// Single queue: at least 7 seconds between request starts, no automatic retries.
+// Media starts immediately; only public RSS discovery is paced. No automatic retries.
 @MainActor final class Network {
     private let session: URLSession
-    private var nextRequest = Date.distantPast
+    private var nextRSSRequest = Date.distantPast
     private var cooldown: Date {
         get { Date(timeIntervalSince1970: UserDefaults.standard.double(forKey: "cooldown")) }
         set { UserDefaults.standard.set(newValue.timeIntervalSince1970, forKey: "cooldown") }
@@ -26,16 +26,20 @@ enum NetworkError: LocalizedError {
         config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 1800
-        config.httpMaximumConnectionsPerHost = 1
+        config.httpMaximumConnectionsPerHost = 3
         session = URLSession(configuration: config)
     }
     private func request(_ url: URL, bearer: String?) async throws -> URLRequest {
         guard url.scheme == "https" else { throw NetworkError.invalid("Seuls les liens HTTPS sont acceptés.") }
         if cooldown > Date() { throw NetworkError.limited(cooldown) }
-        let delay = nextRequest.timeIntervalSinceNow
-        if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        if url.host == "www.reddit.com" {
+            let reserved = max(Date(), nextRSSRequest)
+            nextRSSRequest = reserved.addingTimeInterval(7)
+            let delay = reserved.timeIntervalSinceNow
+            if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        }
         try Task.checkCancellation()
-        nextRequest = Date().addingTimeInterval(7)
+        if cooldown > Date() { throw NetworkError.limited(cooldown) }
         var request = URLRequest(url: url)
         request.setValue("RedditMediaPocket/0.1 (iOS; anonymous RSS reader)", forHTTPHeaderField: "User-Agent")
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }

@@ -4,49 +4,105 @@ import SwiftUI
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
+private struct Selection: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
 struct ContentView: View {
     @StateObject private var model = Downloader()
+    @State private var selection: Selection?
+    @FocusState private var editing: Bool
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Label("Les médias, dans ta poche", systemImage: "arrow.down.circle.fill")
-                        .font(.title2.bold()).foregroundStyle(.orange)
-                    Text("Images et vidéos publiques, sans compte Reddit.").foregroundStyle(.secondary)
-                    TextField("Pseudo Reddit — sans @", text: $model.username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(model.running)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        Text("u/").foregroundStyle(.secondary)
+                        TextField("Pseudo Reddit", text: $model.username)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .submitLabel(.go).focused($editing)
+                            .disabled(model.running)
+                            .onSubmit { start() }
+                    }
+                    .padding(13)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    Button {
+                        if model.running { model.stop() } else { start() }
+                    } label: {
+                        Image(systemName: model.running ? "stop.fill" : "arrow.down")
+                            .font(.system(size: 19, weight: .semibold))
+                            .frame(width: 48, height: 48)
+                            .foregroundStyle(.white)
+                            .background(.orange, in: RoundedRectangle(cornerRadius: 14))
+                    }
+                    .disabled(!model.running && model.username.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityLabel(model.running ? "Arrêter" : "Télécharger")
+                }
+                .padding(.horizontal, 16).padding(.bottom, 10)
+
+                HStack(spacing: 8) {
+                    Text("\(model.files.count)").monospacedDigit()
+                    Spacer()
                     if model.running {
-                        Button("Arrêter", role: .cancel) { model.stop() }
-                        ProgressView()
+                        ProgressView().controlSize(.small)
+                        Text(model.active > 0 ? "\(model.active)/3 · \(model.count) reçus" : model.status)
+                            .monospacedDigit()
                     } else {
-                        Button("Télécharger les médias accessibles") { model.start() }
-                            .disabled(model.username.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Text(model.status).lineLimit(2)
                     }
                 }
-                Section("État") { Text(model.status).textSelection(.enabled) }
-                Section("À savoir") {
-                    Text("Garde l’app ouverte pendant le téléchargement. Un seul transfert à la fois, avec au moins 7 secondes entre les requêtes. Aucun débit ne garantit l’absence de blocage.")
-                    Text("Ce prototype lit le RSS public. Galeries Reddit, posts privés ou supprimés et liens externes non reconnus ne sont pas téléchargés. RedGIFs utilise un jeton temporaire anonyme, sans compte.")
-                    Text("Les fichiers existants sont conservés à la reprise. Un refus HTTP arrête la session.")
-                }.font(.footnote).foregroundStyle(.secondary)
-                if !model.files.isEmpty {
-                    Section("Fichiers · \(model.files.count)") {
-                        ForEach(model.files, id: \.self) { url in
-                            ShareLink(item: url) {
-                                Label(String(url.lastPathComponent.prefix(16)) + "." + url.pathExtension, systemImage: "square.and.arrow.up")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 18).padding(.bottom, 12)
+
+                if model.files.isEmpty {
+                    Spacer()
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
+                        .accessibilityLabel("Galerie vide")
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 3) {
+                            ForEach(model.files, id: \.self) { url in
+                                Button { selection = Selection(url: url) } label: {
+                                    MediaThumbnail(url: url)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(isVideo(url) ? "Ouvrir la vidéo" : "Ouvrir l’image")
                             }
                         }
                     }
-                }
-                if !model.logs.isEmpty {
-                    Section("Journal") {
-                        ForEach(Array(model.logs.enumerated()), id: \.offset) { _, line in Text(line).font(.caption) }
-                    }
+                    .scrollDismissesKeyboard(.interactively)
                 }
             }
-            .navigationTitle("Media Pocket")
+            .navigationTitle("Pocket")
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $selection) { item in
+                NavigationStack {
+                    MediaPreview(url: item.url)
+                        .ignoresSafeArea(edges: .bottom)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarLeading) {
+                                Button { selection = nil } label: { Image(systemName: "xmark") }
+                                    .accessibilityLabel("Fermer")
+                            }
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                ShareLink(item: item.url) { Image(systemName: "square.and.arrow.up") }
+                            }
+                        }
+                }
+            }
             .tint(.orange)
         }
+    }
+
+    private func start() {
+        guard !model.running else { return }
+        editing = false
+        model.start()
     }
 }
