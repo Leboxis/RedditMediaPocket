@@ -37,8 +37,7 @@ public struct SavedFeed {
             guard users.count == 1, let owner = users.first?.value,
                   (try? MediaExtractor.username(owner)) != nil,
                   tokens.count == 1, let token = tokens.first?.value, !token.isEmpty else { continue }
-            let path = parts.path.lowercased()
-            guard path == "/saved.rss" || path == "/user/\(owner.lowercased())/saved.rss" else { continue }
+            guard Self.isSavedPath(parts.path, owner: owner) else { continue }
             guard owner.caseInsensitiveCompare(expected) == .orderedSame else { wrongAccount = true; continue }
             // Preserve Reddit's saved endpoint and credential; discard unrelated query parameters.
             var clean = URLComponents()
@@ -63,8 +62,43 @@ public struct SavedFeed {
     }
 
     public static func allowsRedirect(from source: URL, to destination: URL) -> Bool {
-        guard destination.scheme == "https" else { return false }
-        guard containsCredential(source) || containsCredential(destination) else { return true }
-        return source.host == destination.host && source.path == destination.path
+        redirectURL(from: source, to: destination) != nil
+    }
+
+    /// Follow canonical saved-feed redirects, retaining auth and pagination even
+    /// when Location omits the query. Never send a private token to another service.
+    public static func redirectURL(from source: URL, to destination: URL) -> URL? {
+        guard destination.scheme == "https" else { return nil }
+        guard containsCredential(source) || containsCredential(destination) else { return destination }
+        guard let origin = trustedComponents(source), var target = trustedComponents(destination),
+              let items = origin.queryItems else { return nil }
+        let users = items.filter { $0.name == "user" }
+        let tokens = items.filter { $0.name == "feed" }
+        guard users.count == 1, let owner = users.first?.value,
+              (try? MediaExtractor.username(owner)) != nil,
+              tokens.count == 1, let token = tokens.first?.value, !token.isEmpty,
+              isSavedPath(origin.path, owner: owner), isSavedPath(target.path, owner: owner) else { return nil }
+        let targetItems = target.queryItems ?? []
+        guard targetItems.filter({ $0.name == "user" }).allSatisfy({ $0.value?.caseInsensitiveCompare(owner) == .orderedSame }),
+              targetItems.filter({ $0.name == "feed" }).allSatisfy({ $0.value == token }) else { return nil }
+        let preserved = Set(["feed", "user", "limit", "after"])
+        target.queryItems = targetItems.filter { !preserved.contains($0.name) }
+            + items.filter { preserved.contains($0.name) }
+        target.fragment = nil
+        return target.url
+    }
+
+    private static func trustedComponents(_ url: URL) -> URLComponents? {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == "https", let host = parts.host?.lowercased(),
+              ["reddit.com", "www.reddit.com", "old.reddit.com"].contains(host),
+              parts.user == nil, parts.password == nil, parts.port == nil || parts.port == 443 else { return nil }
+        return parts
+    }
+
+    private static func isSavedPath(_ path: String, owner: String) -> Bool {
+        let normalized = path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            .replacingOccurrences(of: "/.rss", with: ".rss")
+        return normalized == "saved.rss" || normalized == "user/\(owner.lowercased())/saved.rss"
     }
 }

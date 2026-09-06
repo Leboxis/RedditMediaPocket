@@ -60,4 +60,44 @@ final class SavedFeedTests: XCTestCase {
         }
         XCTAssertTrue(SavedFeed.allowsRedirect(from: URL(string: "https://www.reddit.com/")!, to: URL(string: "https://old.reddit.com/")!))
     }
+
+    func testCanonicalRedirectRetainsAuthenticationAndCursor() throws {
+        let source = URL(string: "https://old.reddit.com/saved.rss?feed=a%2Bb%26c&user=Alice&limit=100&after=t1_comment")!
+        for host in ["reddit.com", "www.reddit.com", "old.reddit.com"] {
+            for path in ["/saved.rss", "/saved/.rss", "/user/Alice/saved.rss", "/user/Alice/saved/.rss", "/user/Alice/saved.rss/"] {
+                let destination = URL(string: "https://\(host)\(path)")!
+                let resolved = try XCTUnwrap(SavedFeed.redirectURL(from: source, to: destination))
+                let parts = try XCTUnwrap(URLComponents(url: resolved, resolvingAgainstBaseURL: false))
+                XCTAssertEqual(parts.host, host)
+                XCTAssertEqual(parts.path, path)
+                XCTAssertEqual(parts.queryItems?.first { $0.name == "feed" }?.value, "a+b&c")
+                XCTAssertEqual(parts.queryItems?.first { $0.name == "user" }?.value, "Alice")
+                XCTAssertEqual(parts.queryItems?.first { $0.name == "limit" }?.value, "100")
+                XCTAssertEqual(parts.queryItems?.first { $0.name == "after" }?.value, "t1_comment")
+                XCTAssertEqual(SavedFeed.redirectURL(from: resolved, to: resolved), resolved)
+            }
+        }
+    }
+
+    func testRedirectRejectsOtherAccountsAndCredentialDestinations() {
+        let source = URL(string: "https://old.reddit.com/saved.rss?feed=secret&user=Alice")!
+        for target in [
+            "https://www.reddit.com/user/Bob/saved.rss",
+            "https://www.reddit.com/saved.rss?user=Bob",
+            "https://www.reddit.com/saved.rss?feed=other",
+            "https://www.reddit.com/login", "https://www.reddit.com/saved.json",
+            "https://reddit.com.evil.example/saved.rss",
+            "https://arbitrary.reddit.com/saved.rss",
+            "https://name@www.reddit.com/saved.rss",
+            "https://www.reddit.com:8443/saved.rss"
+        ] {
+            XCTAssertNil(SavedFeed.redirectURL(from: source, to: URL(string: target)!), target)
+        }
+        XCTAssertNil(SavedFeed.redirectURL(from: URL(string: "https://evil.example/saved.rss?feed=secret&user=Alice")!, to: source))
+    }
+
+    func testPreferencesAcceptCanonicalSlashBeforeRSS() throws {
+        let feed = try SavedFeed(preferencesHTML: "<a href='/user/Alice/saved/.rss?feed=secret&amp;user=Alice'>RSS</a>", username: "Alice")
+        XCTAssertEqual(feed.pageURL().path, "/user/Alice/saved/.rss")
+    }
 }

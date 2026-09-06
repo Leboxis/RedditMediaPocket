@@ -111,6 +111,9 @@ enum NetworkError: LocalizedError {
             if error is CancellationError { throw error }
             if case NetworkError.limited = error { throw error }
             if case NetworkError.refused(let code) = error {
+                if (300...399).contains(code) {
+                    throw NetworkError.invalid("Redirection du flux privé non prise en charge (HTTP \(code)). La destination ne correspond pas au flux des sauvegardés du compte ; téléchargement arrêté pour protéger le lien privé.")
+                }
                 throw NetworkError.invalid("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)). Vérifie la session et l’activation des flux RSS privés dans prefs/feeds. Aucune nouvelle tentative automatique.")
             }
             // URLSession errors can contain the private URL: never expose its token.

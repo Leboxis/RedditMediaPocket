@@ -1,3 +1,9 @@
+Correction des redirections HTTP 301 des sauvegardés.
+
+- Suit les redirections HTTPS du flux sauvegardé entre `old.reddit.com`, `www.reddit.com` et `reddit.com`, y compris les variantes de chemin du même compte.
+- Conserve le jeton privé et le curseur de pagination lorsque la redirection omet les paramètres.
+- Refuse toujours les destinations externes, les autres comptes et les pages hors flux ; distingue une redirection bloquée d’un refus d’authentification.
+
 Correction de l’authentification des sauvegardés.
 
 - Récupération du lien RSS privé du compte connecté au lieu d’un simple `saved.rss` avec cookies.

@@ -134,12 +134,11 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
 final class SafeRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        guard let url = request.url, url.scheme == "https" else { completionHandler(nil); return }
-        if let source = response.url, !SavedFeed.allowsRedirect(from: source, to: url) {
-            completionHandler(nil); return
-        }
+        guard let destination = request.url, let source = response.url,
+              let url = SavedFeed.redirectURL(from: source, to: destination) else { completionHandler(nil); return }
         Task { @MainActor in
             var redirected = request
+            redirected.url = url
             redirected.setValue(nil, forHTTPHeaderField: "Cookie")
             if url.host != response.url?.host { redirected.setValue(nil, forHTTPHeaderField: "Authorization") }
             if let cookie = await RedditSession.shared.cookieHeader(for: url) {
