@@ -14,6 +14,13 @@ final class MediaCoreTests: XCTestCase {
     func testRejectBlockPage() {
         XCTAssertThrowsError(try FeedParser.parse(Data("<html><body>Blocked</body></html>".utf8)))
     }
+    func testPostTitleFilenamePolicy() {
+        XCTAssertEqual(FilenamePolicy.postTitle("  A / B:\nC  "), "A - B- C")
+        XCTAssertEqual(FilenamePolicy.postTitle(".."), "post")
+        XCTAssertEqual(FilenamePolicy.postTitle("", fallback: "t3_abc"), "t3_abc")
+        XCTAssertLessThanOrEqual(FilenamePolicy.postTitle(String(repeating: "é", count: 200)).utf8.count, 180)
+    }
+
     func testRecognizedMediaAndDeduplication() {
         let html = """
         <img src="https://preview.redd.it/thumbnail.jpg"><a href="https://v.redd.it/abc/">video</a>

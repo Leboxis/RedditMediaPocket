@@ -322,6 +322,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var after: String?
         var visited = Set<String>()
         var seenMedia = Set<Media>()
+        var usedFilenames = Set<String>()
         // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
         // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
         for _ in 1...100 {
@@ -336,15 +337,44 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
             var downloads: [Download] = []
+            var renamedExisting = false
             for post in fresh {
-                for item in MediaExtractor.extract(post.html) where seenMedia.insert(item).inserted {
-                    let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
+                let media = MediaExtractor.extract(post.html)
+                for (index, item) in media.enumerated() where seenMedia.insert(item).inserted {
                     let ext: String
                     if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
-                    let destination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
-                    if !fm.fileExists(atPath: destination.path) { downloads.append(Download(media: item, destination: destination)) }
+
+                    let title = FilenamePolicy.postTitle(post.title, fallback: post.id)
+                    let numberedTitle = media.count > 1 ? "\(title) - \(index + 1)" : title
+                    var filename = "\(numberedTitle).\(ext)"
+                    if !usedFilenames.insert(filename.lowercased()).inserted {
+                        let postID = post.id.replacingOccurrences(of: "t3_", with: "")
+                        filename = "\(numberedTitle) - \(postID).\(ext)"
+                        var duplicate = 2
+                        while !usedFilenames.insert(filename.lowercased()).inserted {
+                            filename = "\(numberedTitle) - \(postID)-\(duplicate).\(ext)"
+                            duplicate += 1
+                        }
+                    }
+
+                    let destination = folder.appendingPathComponent(filename)
+                    let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
+                    let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
+
+                    if fm.fileExists(atPath: destination.path) {
+                        if fm.fileExists(atPath: legacyDestination.path) {
+                            try? fm.removeItem(at: legacyDestination)
+                            renamedExisting = true
+                        }
+                    } else if fm.fileExists(atPath: legacyDestination.path) {
+                        try? fm.moveItem(at: legacyDestination, to: destination)
+                        renamedExisting = true
+                    } else {
+                        downloads.append(Download(media: item, destination: destination))
+                    }
                 }
             }
+            if renamedExisting { reload() }
             discovered += downloads.count
             status = ""
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
