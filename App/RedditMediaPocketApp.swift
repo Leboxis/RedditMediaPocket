@@ -64,21 +64,17 @@ struct ContentView: View {
         HStack(spacing: 12) {
             SourceKindToggle(kind: $model.sourceKind)
                 .disabled(model.running)
-            Group {
-                if model.sourceKind == "saved" {
-                    Text("Sauvegardés du compte connecté")
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.go).focused($editing)
-                        .disabled(model.running)
-                        .onSubmit { start() }
-                }
+            if model.sourceKind == "saved" {
+                Spacer()
+            } else {
+                TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.go).focused($editing)
+                    .disabled(model.running)
+                    .onSubmit { start() }
+                    .padding(13)
+                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
             }
-            .padding(13)
-            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
             Button {
                 if model.running { model.stop() } else { start() }
             } label: {
