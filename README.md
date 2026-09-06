@@ -147,3 +147,9 @@ La connexion est présentée en plein écran. Une seule barre supérieure affich
 Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tronqué au milieu et centré entre commandes de même largeur, index centré, croix et partage. Les vidéos utilisent AVPlayer et s’arrêtent quand on quitte leur page. Les images disposent d’un zoom par pincement/double toucher. Seuls les médias voisins sont préparés ; les images d’affichage sont limitées à 4096 pixels, sans modifier les originaux téléchargés ou partagés. Les GIF sont affichés dans une vue Web locale non persistante sans JavaScript.
 
 À vérifier sur iPhone : connexion avec clavier visible, balayage des images et vidéos, fermeture du lecteur, zoom et partage. La compilation CI ne remplace pas ces essais d’interface.
+
+## Galerie compacte et zones tactiles
+
+Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs fatales apparaissent dans une alerte ponctuelle ; les limites de service gardent leur message conditionnel.
+
+Chaque bouton de galerie définit une zone tactile rectangulaire et les overlays décoratifs ne participent pas au hit-testing. Le découpage visuel seul de scaledToFill ne suffisait pas à borner la zone tactile. Vérifier sur iPhone les touchers près du bord supérieur d’une vidéo et du bord inférieur de la carte qui la précède.

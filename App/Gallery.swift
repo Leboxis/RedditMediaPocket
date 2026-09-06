@@ -62,15 +62,18 @@ struct MediaThumbnail: View {
                         }.frame(width: geometry.size.width, height: geometry.size.height)
                     }
                 }
+                .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomTrailing) {
                 if isVideo(url) {
                     Image(systemName: "play.fill").font(.caption2)
                         .foregroundStyle(.white).padding(7)
                         .background(.black.opacity(0.45), in: Circle()).padding(7)
+                        .allowsHitTesting(false)
                 }
             }
             .clipped()
+            .contentShape(Rectangle())
             .task(id: url) {
                 image = await Thumbnails.shared.image(for: url)
                 loaded = true

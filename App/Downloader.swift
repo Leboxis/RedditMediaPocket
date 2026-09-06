@@ -8,6 +8,7 @@ import MediaCore
     @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
     @Published var running = false
     @Published var status = ""
+    @Published var errorMessage: String?
     @Published var files: [URL] = []
     @Published var count = 0
     @Published private(set) var totalBytes: Int64 = 0
@@ -54,6 +55,7 @@ import MediaCore
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
+        errorMessage = nil
         running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
@@ -61,6 +63,7 @@ import MediaCore
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
                 status = Task.isCancelled || error is CancellationError ? "Arrêté" : error.localizedDescription
+                if !Task.isCancelled && !(error is CancellationError) { errorMessage = error.localizedDescription }
             }
         }
     }

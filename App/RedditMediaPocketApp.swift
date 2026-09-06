@@ -50,27 +50,13 @@ struct ContentView: View {
                 .padding(.horizontal, 16).padding(.bottom, 10)
 
                 HStack(spacing: 0) {
-                    metric("\(model.files.count)", label: "Médias")
-                    Divider().frame(height: 30)
-                    metric(model.totalSize, label: "Au total")
+                    metric("\(model.files.count)", label: "médias")
+                    metric(model.totalSize, label: "")
                     if model.running || model.discovered > 0 {
-                        Divider().frame(height: 30)
-                        metric("\(model.count)/\(model.discovered)", label: "Repérés à recevoir")
+                        metric("\(model.count)/\(model.discovered)", label: "repérés")
                     }
                 }
-                .padding(.vertical, 14)
-                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-                .padding(.horizontal, 16).padding(.bottom, 10)
-
-                if model.running || !model.status.isEmpty {
-                    HStack(spacing: 6) {
-                        if model.running { ProgressView().controlSize(.small) }
-                        Text(model.transfers > 0 ? "\(model.transfers)/\(model.sessionLimit) transferts" : (model.active > 0 ? "Préparation…" : model.status))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.bottom, 10)
-                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
 
                 if !model.limitNotice.isEmpty {
                     Label(model.limitNotice, systemImage: "clock")
@@ -91,8 +77,10 @@ struct ContentView: View {
                             ForEach(model.files, id: \.self) { url in
                                 Button { editing = false; selection = Selection(url: url, files: model.files) } label: {
                                     MediaThumbnail(url: url)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .contentShape(Rectangle())
                                 .accessibilityLabel(isVideo(url) ? "Ouvrir la vidéo" : "Ouvrir l’image")
                             }
                         }
@@ -124,15 +112,24 @@ struct ContentView: View {
             .sheet(item: $export) { item in
                 ExportSheet(files: item.files).ignoresSafeArea()
             }
+            .alert("Téléchargement interrompu", isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { model.errorMessage = nil }
+            } message: { Text(model.errorMessage ?? "") }
             .tint(.orange)
         }
     }
 
     private func metric(_ value: String, label: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value).font(.headline).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
-            Text(label).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
-        }.frame(maxWidth: .infinity).padding(.horizontal, 4)
+        HStack(spacing: 3) {
+            Text(value).fontWeight(.medium).monospacedDigit()
+            if !label.isEmpty { Text(label) }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .lineLimit(1).minimumScaleFactor(0.65)
+        .frame(maxWidth: .infinity)
     }
 
     private func start() {
