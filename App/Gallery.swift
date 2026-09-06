@@ -175,7 +175,15 @@ private struct AnimatedImage: UIViewRepresentable {
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let view = WKWebView(frame: .zero, configuration: config)
         view.isOpaque = false; view.backgroundColor = .black; view.scrollView.backgroundColor = .black
-        view.loadFileURL(url, allowingReadAccessTo: url)
+        view.scrollView.isScrollEnabled = false
+        view.scrollView.bounces = false
+        let html = """
+        <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+        <style>html,body{margin:0;height:100%;background:#000;display:flex;align-items:center;justify-content:center}
+        img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
+        <body><img src="\(url.lastPathComponent)"></body></html>
+        """
+        view.loadHTMLString(html, baseURL: url.deletingLastPathComponent())
         return view
     }
     func updateUIView(_ view: WKWebView, context: Context) {}
@@ -212,6 +220,12 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
         }
     }
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer is UIPanGestureRecognizer && zoomScale <= minimumZoomScale + .leastNormalMagnitude {
+            return false
+        }
+        return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
     @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
         if zoomScale > 1 { setZoomScale(1, animated: true) }
         else {

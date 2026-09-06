@@ -49,6 +49,19 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 10)
 
+                if !model.collections.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(model.collections.sorted { ($0.archived, $0.name) < ($1.archived, $1.name) }) { collection in
+                                userChip(collection)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                    .padding(.bottom, 10)
+                    .disabled(model.running)
+                }
+
                 HStack(spacing: 0) {
                     metric("\(model.files.count)", label: "médias")
                     metric(model.totalSize, label: "")
@@ -70,6 +83,8 @@ struct ContentView: View {
                     Image(systemName: "photo.on.rectangle.angled")
                         .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                         .accessibilityLabel("Galerie vide")
+                    Text(model.activeUser.map { "Aucun média pour u/\($0)" } ?? "Choisis un utilisateur")
+                        .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
                     Spacer()
                 } else {
                     ScrollView {
@@ -100,7 +115,7 @@ struct ContentView: View {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .disabled(model.files.isEmpty)
-                    .accessibilityLabel("Exporter tous les médias")
+                    .accessibilityLabel("Exporter les médias de l’utilisateur")
                 }
             }
             .sheet(isPresented: $settingsPresented) {
@@ -130,6 +145,36 @@ struct ContentView: View {
         .font(.caption).foregroundStyle(.secondary)
         .lineLimit(1).minimumScaleFactor(0.65)
         .frame(maxWidth: .infinity)
+    }
+
+    private func userChip(_ collection: UserCollection) -> some View {
+        let active = model.activeUser == collection.name
+        return Button { model.selectUser(collection.name) } label: {
+            HStack(spacing: 5) {
+                Image(systemName: collection.archived ? "archivebox" : "person.crop.circle")
+                Text("u/\(collection.name)").lineLimit(1)
+                if active { Image(systemName: "checkmark") }
+            }
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 11).padding(.vertical, 7)
+            .foregroundStyle(active ? Color.white : (collection.archived ? Color.secondary : Color.primary))
+            .background(active ? Color.orange : Color(uiColor: .secondarySystemBackground), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if collection.archived {
+                Button { model.setArchived(collection.name, false) } label: {
+                    Label("Retirer des archives", systemImage: "tray.and.arrow.up")
+                }
+            } else {
+                Button { model.setArchived(collection.name, true) } label: {
+                    Label("Archiver", systemImage: "archivebox")
+                }
+            }
+            Button { model.download(user: collection.name) } label: {
+                Label("Reprendre le téléchargement", systemImage: "arrow.clockwise")
+            }
+        }
     }
 
     private func start() {

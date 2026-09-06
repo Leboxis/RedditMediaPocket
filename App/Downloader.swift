@@ -4,8 +4,17 @@ import AVFoundation
 import CryptoKit
 import MediaCore
 
+struct UserCollection: Codable, Identifiable, Equatable {
+    var name: String
+    var archived = false
+    var lastRun: Date?
+    var id: String { name }
+}
+
 @MainActor final class Downloader: ObservableObject {
     @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
+    @Published var collections: [UserCollection] = []
+    @Published var activeUser: String?
     @Published var running = false
     @Published var status = ""
     @Published var errorMessage: String?
@@ -30,16 +39,84 @@ import MediaCore
     private var tokenDate = Date.distantPast
     private let fm = FileManager.default
     private var root: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
+    var archivedCollections: [UserCollection] { collections.filter(\.archived) }
+    var liveCollections: [UserCollection] { collections.filter { !$0.archived } }
+    var activeCollection: UserCollection? { collections.first { $0.name == activeUser } }
 
     init() {
         network.$transfers.assign(to: &$transfers)
-        loadGallery()
+        loadCollections()
+        migrateFolders()
+        if activeUser == nil { activeUser = liveCollections.first?.name ?? collections.first?.name }
+        if let activeUser { username = activeUser }
+        reload()
     }
 
-    private func loadGallery() {
+    private func loadCollections() {
+        if let data = UserDefaults.standard.data(forKey: "collections"),
+           let saved = try? JSONDecoder().decode([UserCollection].self, from: data) {
+            collections = saved
+        }
+        if let last = UserDefaults.standard.string(forKey: "lastUsername") {
+            username = last
+            if collections.contains(where: { $0.name == last }) { activeUser = last }
+        }
+    }
+
+    private func saveCollections() {
+        if let data = try? JSONEncoder().encode(collections) {
+            UserDefaults.standard.set(data, forKey: "collections")
+        }
+    }
+
+    private func migrateFolders() {
+        let known = Set(collections.map(\.name))
+        let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true } ?? []
+        let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
+        guard !fresh.isEmpty else { return }
+        collections.append(contentsOf: fresh.map { UserCollection(name: $0) })
+        saveCollections()
+    }
+
+    func selectUser(_ name: String) {
+        guard !running else { return }
+        activeUser = name
+        username = name
+        UserDefaults.standard.set(name, forKey: "lastUsername")
+        reload()
+    }
+
+    func setArchived(_ name: String, _ archived: Bool) {
+        guard !running, let index = collections.firstIndex(where: { $0.name == name }) else { return }
+        collections[index].archived = archived
+        saveCollections()
+        if name == activeUser { reload() }
+    }
+
+    func download(user name: String) {
+        guard !running else { return }
+        username = name
+        start()
+    }
+
+    private func upsertCollection(_ name: String) {
+        if let index = collections.firstIndex(where: { $0.name == name }) {
+            collections[index].archived = false
+        } else {
+            collections.append(UserCollection(name: name))
+        }
+        saveCollections()
+    }
+
+    func reload() {
+        guard let activeUser else { files = []; totalBytes = 0; return }
+        let folder = root.appendingPathComponent(activeUser, isDirectory: true)
         let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey]
-        guard let entries = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return }
-        let media = entries.compactMap { $0 as? URL }.filter {
+        guard let entries = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+            files = []; totalBytes = 0; return
+        }
+        let media = entries.filter {
             ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov"].contains($0.pathExtension.lowercased())
                 && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }
@@ -76,6 +153,9 @@ import MediaCore
     private func run() async throws {
         let name = try MediaExtractor.username(username)
         UserDefaults.standard.set(name, forKey: "lastUsername")
+        activeUser = name
+        upsertCollection(name)
+        reload()
         let folder = root.appendingPathComponent(name, isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         var after: String?
@@ -107,6 +187,10 @@ import MediaCore
             }
             guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }
             after = last
+        }
+        if let index = collections.firstIndex(where: { $0.name == name }) {
+            collections[index].lastRun = Date()
+            saveCollections()
         }
         status = skipped > 0 ? "\(count) reçus · \(skipped) à reprendre" : (count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés")
     }
