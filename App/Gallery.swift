@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import ImageIO
-import AVKit
 import WebKit
 
 func isVideo(_ url: URL) -> Bool { ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) }
@@ -95,7 +94,7 @@ struct MediaPreview: View {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                     .accessibilityLabel("Fermer")
                 Button {
-                    if index > 0 { index -= 1 }
+                    if index > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index -= 1 } }
                 } label: { Image(systemName: "chevron.backward").frame(width: 30, height: 44) }
                     .disabled(index == 0)
                     .accessibilityLabel("Média précédent")
@@ -105,7 +104,7 @@ struct MediaPreview: View {
                     Text("\(index + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 Button {
-                    if index < urls.count - 1 { index += 1 }
+                    if index < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index += 1 } }
                 } label: { Image(systemName: "chevron.forward").frame(width: 30, height: 44) }
                     .disabled(index == urls.count - 1)
                     .accessibilityLabel("Média suivant")
@@ -122,96 +121,66 @@ struct MediaPreview: View {
     }
 }
 
-private struct MediaPager: UIViewControllerRepresentable {
+private struct MediaPager: View {
     let urls: [URL]
     @Binding var index: Int
+    @State private var dragOffset: CGFloat = 0
+    @State private var zoomed: [Bool]
 
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
-    func makeUIViewController(context: Context) -> UIPageViewController {
-        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
-        pager.dataSource = context.coordinator
-        pager.delegate = context.coordinator
-        pager.view.backgroundColor = .black
-        context.coordinator.attach(to: pager)
-        return pager
+    init(urls: [URL], index: Binding<Int>) {
+        self.urls = urls
+        self._index = index
+        self._zoomed = State(initialValue: Array(repeating: false, count: urls.count))
     }
 
-    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.syncIfNeeded(pager: pager)
-    }
-
-    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
-        var parent: MediaPager
-        private var position: Int
-        private var hosts: [UIHostingController<MediaPage>?]
-
-        init(parent: MediaPager) {
-            self.parent = parent
-            self.position = min(max(parent.index, 0), max(parent.urls.count - 1, 0))
-            self.hosts = Array(repeating: nil, count: parent.urls.count)
-        }
-
-        private func host(for slot: Int) -> UIHostingController<MediaPage> {
-            if let existing = hosts[slot] { return existing }
-            let host = UIHostingController(rootView: MediaPage(url: parent.urls[slot], active: slot == position))
-            host.view.backgroundColor = .black
-            hosts[slot] = host
-            return host
-        }
-
-        private func slot(of controller: UIViewController) -> Int? {
-            hosts.firstIndex { $0 === controller }
-        }
-
-        private func refreshActiveStates() {
-            for slot in hosts.indices where hosts[slot] != nil {
-                hosts[slot]?.rootView = MediaPage(url: parent.urls[slot], active: slot == position)
+    var body: some View {
+        GeometryReader { proxy in
+            let width = max(proxy.size.width, 1)
+            HStack(spacing: 0) {
+                ForEach(urls.indices, id: \.self) { position in
+                    Group {
+                        if abs(position - index) <= 1 {
+                            MediaPage(url: urls[position], active: position == index, zoomed: $zoomed[position])
+                        } else {
+                            Color.black
+                        }
+                    }
+                    .frame(width: width, height: proxy.size.height)
+                }
             }
+            .frame(width: width * CGFloat(max(urls.count, 1)), alignment: .leading)
+            .offset(x: -CGFloat(index) * width + dragOffset)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                    .onChanged { value in
+                        dragOffset = zoomed[index] ? 0 : value.translation.width
+                    }
+                    .onEnded { value in
+                        let limit = max(60, width * 0.2)
+                        let dx = value.translation.width
+                        let predicted = value.predictedEndTranslation.width
+                        var target = index
+                        if (dx < -limit || predicted < -width * 0.6), index < urls.count - 1 { target += 1 }
+                        else if (dx > limit || predicted > width * 0.6), index > 0 { target -= 1 }
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                            index = target
+                            dragOffset = 0
+                        }
+                    },
+                including: zoomed[index] ? .none : .all
+            )
         }
-
-        private func trimDistantHosts() {
-            for slot in hosts.indices where abs(slot - position) > 1 { hosts[slot] = nil }
-        }
-
-        func attach(to pager: UIPageViewController) {
-            guard !parent.urls.isEmpty else { return }
-            pager.setViewControllers([host(for: position)], direction: .forward, animated: false)
-        }
-
-        func syncIfNeeded(pager: UIPageViewController) {
-            guard position != parent.index, parent.index >= 0, parent.index < parent.urls.count else { return }
-            let direction: UIPageViewController.NavigationDirection = parent.index > position ? .forward : .reverse
-            position = parent.index
-            pager.setViewControllers([host(for: position)], direction: direction, animated: true)
-            refreshActiveStates()
-            trimDistantHosts()
-        }
-
-        func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
-            guard let slot = slot(of: viewController), slot > 0 else { return nil }
-            return host(for: slot - 1)
-        }
-
-        func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
-            guard let slot = slot(of: viewController), slot < parent.urls.count - 1 else { return nil }
-            return host(for: slot + 1)
-        }
-
-        func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
-            guard completed, let current = pageViewController.viewControllers?.first, let slot = slot(of: current) else { return }
-            position = slot
-            parent.index = slot
-            refreshActiveStates()
-            trimDistantHosts()
-        }
+        .background(Color.black)
+        .clipped()
+        .onChange(of: zoomed[index]) { _ in dragOffset = 0 }
     }
 }
 
 struct MediaPage: View {
     let url: URL
     let active: Bool
+    @Binding var zoomed: Bool
     @State private var image: UIImage?
     @State private var player: AVPlayer?
     @State private var failed = false
@@ -224,7 +193,7 @@ struct MediaPage: View {
             } else if url.pathExtension.lowercased() == "gif" {
                 if active { AnimatedImage(url: url) }
             } else if let image {
-                ZoomImage(image: image)
+                ZoomImage(image: image, zoomed: $zoomed)
             } else if failed {
                 Image(systemName: "photo").foregroundStyle(.gray)
             } else { ProgressView().tint(.white) }
@@ -300,14 +269,21 @@ private struct AnimatedImage: UIViewRepresentable {
 
 private struct ZoomImage: UIViewRepresentable {
     let image: UIImage
+    @Binding var zoomed: Bool
     func makeUIView(context: Context) -> ImageScroll {
-        let view = ImageScroll(); view.imageView.image = image; return view
+        let view = ImageScroll()
+        view.imageView.image = image
+        view.onZoomChange = { [zoomed = $zoomed] value in
+            DispatchQueue.main.async { zoomed.wrappedValue = value }
+        }
+        return view
     }
     func updateUIView(_ view: ImageScroll, context: Context) { view.imageView.image = image }
 }
 
 private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
     let imageView = UIImageView()
+    var onZoomChange: ((Bool) -> Void)?
     private var previousSize = CGSize.zero
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -336,12 +312,11 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        // At zoom 1 the scroll view must not participate in horizontal panning at all,
-        // otherwise its bounce backing board competes with the pager swipe.
         let atMinimum = zoomScale <= minimumZoomScale + .leastNormalMagnitude
         panGestureRecognizer.isEnabled = !atMinimum
         bounces = !atMinimum
         isDirectionalLockEnabled = !atMinimum
+        onZoomChange?(!atMinimum)
     }
     @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
         if zoomScale > 1 { setZoomScale(1, animated: true) }
