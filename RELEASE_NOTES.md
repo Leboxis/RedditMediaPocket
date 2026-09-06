@@ -1,8 +1,9 @@
-Session visible et transferts sans pause ajoutée.
+Interface et visionneuse repensées.
 
-- Bandeau vert « Session Reddit détectée » dans la galerie, les réglages et la fenêtre de connexion.
-- Suppression des pauses artificielles de 1, 2 et 7 secondes et du lissage déduit des quotas.
-- Chaque emplacement disponible lance immédiatement le transfert suivant, jusqu’à la limite choisie.
-- Compteur des transferts réseau distinct de la préparation des médias.
+- Compteurs centrés : médias enregistrés, poids total et nouveaux médias reçus/repérés.
+- Connexion Reddit en plein écran avec barre compacte ; seul le site se redimensionne au-dessus du clavier.
+- Visionneuse plein écran sur fond noir, titre centré, fermeture par croix et partage du média courant.
+- Balayage entre images/vidéos, zoom par pincement ou double toucher et lecture vidéo.
+- Suppression des commandes Quick Look « Done » et liste.
 
-Les refus HTTP 429, Retry-After, quotas explicitement épuisés et délais déjà enregistrés restent respectés. Le nombre configuré est un maximum : il peut y avoir moins de transferts quand il reste peu de fichiers ou durant la découverte, la résolution et l’assemblage. La session détectée ne garantit pas son acceptation par Reddit.
+Le total repéré augmente pendant le parcours RSS ; il ne représente pas un maximum garanti de tous les posts. Le poids total correspond aux fichiers terminés de la galerie. Aucun délai de téléchargement n’a été ajouté.

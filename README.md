@@ -137,3 +137,13 @@ Les pauses artificielles de départ ont été supprimées, ainsi que le lissage 
 Le compteur affiche les appels de téléchargement réseau en cours, et non la totalité des tâches de résolution/assemblage. Le nombre choisi est un maximum de médias traités simultanément ; il peut être inférieur pendant la découverte RSS, les résolutions, l’assemblage ou à la fin d’une page.
 
 Un bandeau vert « Session Reddit détectée » est visible dans la galerie, les réglages et la connexion. Il reflète la présence du cookie attendu, sans prétendre confirmer la validité du compte côté serveur.
+
+## Interface et indicateurs
+
+La galerie affiche des compteurs de largeur égale et centrés : fichiers locaux tous profils confondus, somme des tailles des fichiers terminés, puis nouveaux fichiers reçus / repérés pendant le parcours en cours. Le dénominateur progresse à chaque page ; les fichiers déjà présents sont exclus de ce dénominateur. Il ne constitue pas un maximum exhaustif de l’historique Reddit. Les téléchargements échoués ou limités restent dans le total repéré.
+
+La connexion est présentée en plein écran. Une seule barre supérieure affiche reddit.com et une croix. La vue Web est contrainte au guide UIKit du clavier, et le déplacement automatique de l’ensemble par SwiftUI est désactivé pour cet écran.
+
+Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tronqué au milieu et centré entre commandes de même largeur, index centré, croix et partage. Les vidéos utilisent AVPlayer et s’arrêtent quand on quitte leur page. Les images disposent d’un zoom par pincement/double toucher. Seuls les médias voisins sont préparés ; les images d’affichage sont limitées à 4096 pixels, sans modifier les originaux téléchargés ou partagés. Les GIF sont affichés dans une vue Web locale non persistante sans JavaScript.
+
+À vérifier sur iPhone : connexion avec clavier visible, balayage des images et vidéos, fermeture du lecteur, zoom et partage. La compilation CI ne remplace pas ces essais d’interface.

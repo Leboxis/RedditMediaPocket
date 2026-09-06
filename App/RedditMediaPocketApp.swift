@@ -49,24 +49,33 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 10)
 
-                HStack(spacing: 8) {
-                    Text("\(model.files.count)").monospacedDigit()
-                    Spacer()
-                    if model.running {
-                        ProgressView().controlSize(.small)
-                        Text(model.transfers > 0 ? "\(model.transfers)/\(model.sessionLimit) transferts · \(model.count) reçus" : (model.active > 0 ? "Préparation · \(model.active) médias" : model.status))
-                            .monospacedDigit()
-                    } else {
-                        Text(model.status).lineLimit(2)
+                HStack(spacing: 0) {
+                    metric("\(model.files.count)", label: "Médias")
+                    Divider().frame(height: 30)
+                    metric(model.totalSize, label: "Au total")
+                    if model.running || model.discovered > 0 {
+                        Divider().frame(height: 30)
+                        metric("\(model.count)/\(model.discovered)", label: "Repérés à recevoir")
                     }
                 }
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.horizontal, 18).padding(.bottom, 12)
+                .padding(.vertical, 14)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                .padding(.horizontal, 16).padding(.bottom, 10)
+
+                if model.running || !model.status.isEmpty {
+                    HStack(spacing: 6) {
+                        if model.running { ProgressView().controlSize(.small) }
+                        Text(model.transfers > 0 ? "\(model.transfers)/\(model.sessionLimit) transferts" : (model.active > 0 ? "Préparation…" : model.status))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity).padding(.horizontal, 16).padding(.bottom, 10)
+                }
 
                 if !model.limitNotice.isEmpty {
                     Label(model.limitNotice, systemImage: "clock")
-                        .font(.caption).foregroundStyle(.orange).lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.horizontal, 18).padding(.bottom, 10)
                 }
 
@@ -80,7 +89,7 @@ struct ContentView: View {
                     ScrollView {
                         LazyVGrid(columns: columns, spacing: 3) {
                             ForEach(model.files, id: \.self) { url in
-                                Button { selection = Selection(url: url, files: model.files) } label: {
+                                Button { editing = false; selection = Selection(url: url, files: model.files) } label: {
                                     MediaThumbnail(url: url)
                                 }
                                 .buttonStyle(.plain)
@@ -109,14 +118,21 @@ struct ContentView: View {
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
             }
-            .sheet(item: $selection) { item in
-                MediaPreview(urls: item.files, selectedURL: item.url).ignoresSafeArea()
+            .fullScreenCover(item: $selection) { item in
+                MediaPreview(urls: item.files, selectedURL: item.url)
             }
             .sheet(item: $export) { item in
                 ExportSheet(files: item.files).ignoresSafeArea()
             }
             .tint(.orange)
         }
+    }
+
+    private func metric(_ value: String, label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value).font(.headline).monospacedDigit().lineLimit(1).minimumScaleFactor(0.65)
+            Text(label).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity).padding(.horizontal, 4)
     }
 
     private func start() {
@@ -157,7 +173,7 @@ private struct DownloadSettings: View {
                     Text(model.running ? "Arrête les transferts pour modifier la session." : "Session locale. Les limites Reddit restent applicables.")
                 }
             }
-            .sheet(isPresented: $loginPresented) { RedditLogin() }
+            .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .navigationTitle("Réglages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

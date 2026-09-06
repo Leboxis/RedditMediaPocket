@@ -10,6 +10,9 @@ import MediaCore
     @Published var status = ""
     @Published var files: [URL] = []
     @Published var count = 0
+    @Published private(set) var totalBytes: Int64 = 0
+    @Published private(set) var discovered = 0
+    var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
     @Published var concurrentLimit = max(1, min(6, UserDefaults.standard.object(forKey: "concurrentLimit") as? Int ?? 3)) {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
@@ -39,6 +42,7 @@ import MediaCore
             ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov"].contains($0.pathExtension.lowercased())
                 && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
         }
+        totalBytes = media.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
         files = media.sorted {
             let a = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
             let b = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
@@ -50,7 +54,7 @@ import MediaCore
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
-        running = true; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
+        running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
             do { try await run() }
@@ -93,6 +97,7 @@ import MediaCore
                     if !fm.fileExists(atPath: destination.path) { downloads.append(Download(media: item, destination: destination)) }
                 }
             }
+            discovered += downloads.count
             status = ""
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
                 try await self.saveUnlessLimited(item)
@@ -125,6 +130,7 @@ import MediaCore
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
         files.insert(item.destination, at: 0)
+        totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
     }
 

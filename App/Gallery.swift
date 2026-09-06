@@ -2,7 +2,8 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import ImageIO
-import QuickLook
+import AVKit
+import WebKit
 
 func isVideo(_ url: URL) -> Bool { ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) }
 
@@ -77,28 +78,144 @@ struct MediaThumbnail: View {
     }
 }
 
-// Quick Look owns navigation and sharing, so the shared item follows every swipe.
-struct MediaPreview: UIViewControllerRepresentable {
+struct MediaPreview: View {
     let urls: [URL]
-    let selectedURL: URL
+    @State private var index: Int
     @Environment(\.dismiss) private var dismiss
-    func makeCoordinator() -> Coordinator { Coordinator(urls: urls, close: { dismiss() }) }
-    func makeUIViewController(context: Context) -> UINavigationController {
-        let controller = QLPreviewController()
-        controller.dataSource = context.coordinator
-        controller.currentPreviewItemIndex = urls.firstIndex(of: selectedURL) ?? 0
-        controller.navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .done, target: context.coordinator, action: #selector(Coordinator.close))
-        return UINavigationController(rootViewController: controller)
+    init(urls: [URL], selectedURL: URL) {
+        self.urls = urls
+        _index = State(initialValue: urls.firstIndex(of: selectedURL) ?? 0)
     }
-    func updateUIViewController(_ controller: UINavigationController, context: Context) {}
-    final class Coordinator: NSObject, QLPreviewControllerDataSource {
-        let urls: [URL]
-        let onClose: () -> Void
-        init(urls: [URL], close: @escaping () -> Void) { self.urls = urls; self.onClose = close }
-        @objc func close() { onClose() }
-        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { urls.count }
-        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { urls[index] as NSURL }
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                    .accessibilityLabel("Fermer")
+                VStack(spacing: 3) {
+                    Text(urls[index].lastPathComponent).font(.subheadline.weight(.medium))
+                        .lineLimit(1).truncationMode(.middle)
+                    Text("\(index + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
+                }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
+                ShareLink(item: urls[index]) {
+                    Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
+                }.accessibilityLabel("Partager ce média")
+            }.padding(.horizontal, 8).padding(.vertical, 4)
+            TabView(selection: $index) {
+                ForEach(urls.indices, id: \.self) { position in
+                    Group {
+                        if abs(position - index) <= 1 {
+                            MediaPage(url: urls[position], active: position == index)
+                        } else { Color.black }
+                    }.tag(position)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea(edges: .bottom)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .foregroundStyle(.white).tint(.white)
+        .preferredColorScheme(.dark)
+    }
+}
+
+private struct MediaPage: View {
+    let url: URL
+    let active: Bool
+    @State private var image: UIImage?
+    @State private var player: AVPlayer?
+    @State private var failed = false
+    var body: some View {
+        ZStack {
+            Color.black
+            if isVideo(url) {
+                if let player { VideoPlayer(player: player) }
+            } else if url.pathExtension.lowercased() == "gif" {
+                if active { AnimatedImage(url: url) }
+            } else if let image {
+                ZoomImage(image: image)
+            } else if failed {
+                Image(systemName: "photo").foregroundStyle(.gray)
+            } else { ProgressView().tint(.white) }
+        }
+        .task(id: url) {
+            if isVideo(url) { updatePlayback() }
+            else if url.pathExtension.lowercased() != "gif" {
+                let value = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                          let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 4096
+                          ] as CFDictionary) else { return nil }
+                    return UIImage(cgImage: cg)
+                }.value
+                if !Task.isCancelled { image = value; failed = value == nil }
+            }
+        }
+        .onChange(of: active) { _ in updatePlayback() }
+        .onDisappear { player?.pause(); player = nil }
+    }
+    private func updatePlayback() {
+        guard isVideo(url) else { return }
+        if active {
+            if player == nil { player = AVPlayer(url: url) }
+            player?.play()
+        } else { player?.pause() }
+    }
+}
+
+private struct AnimatedImage: UIViewRepresentable {
+    let url: URL
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.isOpaque = false; view.backgroundColor = .black; view.scrollView.backgroundColor = .black
+        view.loadFileURL(url, allowingReadAccessTo: url)
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+    static func dismantleUIView(_ view: WKWebView, coordinator: ()) { view.stopLoading() }
+}
+
+private struct ZoomImage: UIViewRepresentable {
+    let image: UIImage
+    func makeUIView(context: Context) -> ImageScroll {
+        let view = ImageScroll(); view.imageView.image = image; return view
+    }
+    func updateUIView(_ view: ImageScroll, context: Context) { view.imageView.image = image }
+}
+
+private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
+    let imageView = UIImageView()
+    private var previousSize = CGSize.zero
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black; delegate = self
+        minimumZoomScale = 1; maximumZoomScale = 4
+        showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
+        imageView.contentMode = .scaleAspectFit
+        addSubview(imageView)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:)))
+        tap.numberOfTapsRequired = 2; addGestureRecognizer(tap)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if bounds.size != previousSize {
+            previousSize = bounds.size; setZoomScale(1, animated: false)
+            imageView.frame = CGRect(origin: .zero, size: bounds.size); contentSize = bounds.size
+        }
+    }
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+    @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
+        if zoomScale > 1 { setZoomScale(1, animated: true) }
+        else {
+            let point = gesture.location(in: imageView)
+            let width = bounds.width / 3, height = bounds.height / 3
+            zoom(to: CGRect(x: point.x - width / 2, y: point.y - height / 2, width: width, height: height), animated: true)
+        }
     }
 }
 

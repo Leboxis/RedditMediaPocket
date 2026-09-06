@@ -34,7 +34,7 @@ def build_source(repo, version, ipa):
             "versions": [{
                 "version": version,
                 "date": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
-                "localizedDescription": "Session visible, transferts immédiats et compteur réseau.",
+                "localizedDescription": "Nouvelle visionneuse, connexion plein écran et compteurs centrés avec poids total.",
                 "downloadURL": f"{base}/{ipa.name}",
                 "size": ipa.stat().st_size,
                 "minOSVersion": "16.0"

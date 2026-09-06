@@ -51,34 +51,48 @@ struct RedditLogin: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                RedditSessionIndicator().padding(12)
                 if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary).padding(10) }
-                RedditWebLogin(message: $message)
+                RedditWebLogin(message: $message).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .navigationTitle("reddit.com")
+            .navigationTitle(session.hasSession ? "Reddit · session détectée" : "reddit.com")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Terminé") { Task { await session.refresh(); dismiss() } }
+                    Button { Task { await session.refresh(); dismiss() } } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Fermer la connexion")
                 }
             }
         }
+        .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 
-private struct RedditWebLogin: UIViewRepresentable {
+private struct RedditWebLogin: UIViewControllerRepresentable {
     @Binding var message: String
     func makeCoordinator() -> Coordinator { Coordinator(message: $message) }
-    func makeUIView(context: Context) -> WKWebView {
+    func makeUIViewController(context: Context) -> UIViewController {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = RedditSession.shared.store
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
+        view.scrollView.keyboardDismissMode = .interactive
         view.load(URLRequest(url: URL(string: "https://www.reddit.com/login/")!))
-        return view
+        let controller = UIViewController()
+        controller.view.backgroundColor = .systemBackground
+        view.translatesAutoresizingMaskIntoConstraints = false
+        controller.view.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: controller.view.topAnchor),
+            view.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
+            view.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
+            view.bottomAnchor.constraint(equalTo: controller.view.keyboardLayoutGuide.topAnchor)
+        ])
+        return controller
     }
-    func updateUIView(_ view: WKWebView, context: Context) {}
-    static func dismantleUIView(_ view: WKWebView, coordinator: Coordinator) { view.stopLoading(); view.navigationDelegate = nil }
+    func updateUIViewController(_ controller: UIViewController, context: Context) {}
+    static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
+        for case let view as WKWebView in controller.view.subviews { view.stopLoading(); view.navigationDelegate = nil }
+    }
     final class Coordinator: NSObject, WKNavigationDelegate {
         @Binding var message: String
         init(message: Binding<String>) { _message = message }
@@ -130,8 +144,8 @@ struct RedditSessionIndicator: View {
                 .font(.title3)
             Text(session.hasSession ? "Session Reddit détectée" : "Reddit · sans session")
                 .font(.subheadline.weight(.semibold))
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .foregroundStyle(session.hasSession ? Color.green : Color.secondary)
         .padding(12)
         .background(session.hasSession ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
