@@ -21,6 +21,9 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                Button { settingsPresented = true } label: { RedditSessionIndicator() }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
                 HStack(spacing: 12) {
                     HStack(spacing: 4) {
                         Text("u/").foregroundStyle(.secondary)
@@ -51,7 +54,7 @@ struct ContentView: View {
                     Spacer()
                     if model.running {
                         ProgressView().controlSize(.small)
-                        Text(model.active > 0 ? "\(model.active)/\(model.sessionLimit) · \(model.count) reçus" : model.status)
+                        Text(model.transfers > 0 ? "\(model.transfers)/\(model.sessionLimit) transferts · \(model.count) reçus" : (model.active > 0 ? "Préparation · \(model.active) médias" : model.status))
                             .monospacedDigit()
                     } else {
                         Text(model.status).lineLimit(2)
@@ -143,6 +146,7 @@ private struct DownloadSettings: View {
                     Text(model.running ? "Appliqué au prochain lancement. En cours : \(model.sessionLimit)." : "1 à 6. Un nombre élevé peut augmenter les limitations du serveur.")
                 }
                 Section {
+                    RedditSessionIndicator()
                     Button(reddit.hasSession ? "Session détectée · ouvrir Reddit" : "Se connecter à Reddit") { loginPresented = true }
                         .disabled(model.running || reddit.clearing)
                     Button("Déconnexion", role: .destructive) { Task { await reddit.logout() } }

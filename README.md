@@ -129,3 +129,11 @@ Les requêtes HTTPS reddit.com peuvent recevoir les cookies correspondants à le
 Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Aucun délai de limitation n’est effacé. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
 
 Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit.
+
+## Transferts immédiats et état de session
+
+Les pauses artificielles de départ ont été supprimées, ainsi que le lissage du débit inféré des quotas encore disponibles. Aucun Task.sleep n’est utilisé par la couche réseau. Les tâches démarrent dès qu’un emplacement est libre. Les réponses HTTP 429 et quotas explicitement épuisés continuent de bloquer le service concerné jusqu’au délai requis.
+
+Le compteur affiche les appels de téléchargement réseau en cours, et non la totalité des tâches de résolution/assemblage. Le nombre choisi est un maximum de médias traités simultanément ; il peut être inférieur pendant la découverte RSS, les résolutions, l’assemblage ou à la fin d’une page.
+
+Un bandeau vert « Session Reddit détectée » est visible dans la galerie, les réglages et la connexion. Il reflète la présence du cookie attendu, sans prétendre confirmer la validité du compte côté serveur.

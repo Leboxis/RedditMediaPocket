@@ -51,6 +51,7 @@ struct RedditLogin: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                RedditSessionIndicator().padding(12)
                 if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary).padding(10) }
                 RedditWebLogin(message: $message)
             }
@@ -118,5 +119,22 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
             }
             completionHandler(redirected)
         }
+    }
+}
+
+struct RedditSessionIndicator: View {
+    @ObservedObject private var session = RedditSession.shared
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: session.hasSession ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
+                .font(.title3)
+            Text(session.hasSession ? "Session Reddit détectée" : "Reddit · sans session")
+                .font(.subheadline.weight(.semibold))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(session.hasSession ? Color.green : Color.secondary)
+        .padding(12)
+        .background(session.hasSession ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
     }
 }

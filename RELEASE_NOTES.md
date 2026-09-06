@@ -1,9 +1,8 @@
-Connexion Reddit locale.
+Session visible et transferts sans pause ajoutée.
 
-- Réglages → Se connecter à Reddit ouvre le site officiel dans une fenêtre intégrée.
-- Session WebKit conservée sur l’iPhone, appliquée aux requêtes HTTPS reddit.com uniquement.
-- Cookies filtrés par domaine, chemin et expiration, y compris lors des redirections.
-- Déconnexion : suppression des données WebKit ; cache RSS invalidé quand la session change.
-- Aucune suppression des délais ou limites serveur lors de la connexion.
+- Bandeau vert « Session Reddit détectée » dans la galerie, les réglages et la fenêtre de connexion.
+- Suppression des pauses artificielles de 1, 2 et 7 secondes et du lissage déduit des quotas.
+- Chaque emplacement disponible lance immédiatement le transfert suivant, jusqu’à la limite choisie.
+- Compteur des transferts réseau distinct de la préparation des médias.
 
-Se connecter avec son identifiant Reddit dans la fenêtre officielle, puis toucher Terminé. Les connexions Google/Apple externes ne sont pas intégrées. « Session détectée » indique la présence d’un cookie et ne garantit pas sa validité côté serveur. La connexion et son effet sur le RSS restent à tester sur l’iPhone ; aucun accès sans blocage n’est garanti.
+Les refus HTTP 429, Retry-After, quotas explicitement épuisés et délais déjà enregistrés restent respectés. Le nombre configuré est un maximum : il peut y avoir moins de transferts quand il reste peu de fichiers ou durant la découverte, la résolution et l’assemblage. La session détectée ne garantit pas son acceptation par Reddit.

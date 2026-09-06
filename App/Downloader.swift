@@ -15,6 +15,7 @@ import MediaCore
     }
     @Published private(set) var sessionLimit = 3
     @Published var active = 0
+    @Published private(set) var transfers = 0
     @Published var limitNotice = ""
     private var limitedServices: [String: Date] = [:]
     private var skipped = 0
@@ -26,7 +27,10 @@ import MediaCore
     private let fm = FileManager.default
     private var root: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
 
-    init() { loadGallery() }
+    init() {
+        network.$transfers.assign(to: &$transfers)
+        loadGallery()
+    }
 
     private func loadGallery() {
         let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey]
