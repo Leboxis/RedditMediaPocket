@@ -119,3 +119,13 @@ Références consultées :
 ## Réglage de la concurrence
 
 La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective, et les délais par service restent respectés. Choisir 1 ou 2 peut aider si les limitations sont fréquentes, sans garantie. La connexion par cookies n’est pas implémentée dans cette version.
+
+## Connexion Reddit locale
+
+Réglages → Se connecter à Reddit. Saisir ses identifiants directement sur le site Reddit dans la fenêtre intégrée, puis Terminé. WebKit conserve la session dans son stockage local à l’app. Aucun mot de passe n’est lu par le code Swift, aucun cookie n’est envoyé à GitHub et aucun formulaire natif ne collecte les identifiants. La connexion par fournisseurs externes n’est pas intégrée ; utiliser l’identifiant Reddit.
+
+Les requêtes HTTPS reddit.com peuvent recevoir les cookies correspondants à leur domaine, chemin et expiration. Les cookies ne sont jamais appliqués à redd.it, RedGIFs ou Imgur. Chaque redirection reconstruit les cookies pour sa destination et retire l’autorisation lors d’un changement d’hôte. Les navigations principales de la fenêtre de connexion sont limitées à HTTPS reddit.com et ses sous-domaines.
+
+Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Aucun délai de limitation n’est effacé. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
+
+Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit.

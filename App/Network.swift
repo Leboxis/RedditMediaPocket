@@ -15,6 +15,7 @@ enum NetworkError: LocalizedError {
 // Configurable bounded media pipelines; service-specific pacing and persistent limits.
 @MainActor final class Network {
     private let session: URLSession
+    private var sessionRevision = -1
     private var nextRequest: [String: Date] = [:]
     private var limits: ServiceLimits
     private var rssCache: [URL: (date: Date, data: Data)] = [:]
@@ -39,7 +40,7 @@ enum NetworkError: LocalizedError {
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 1800
         config.httpMaximumConnectionsPerHost = 6
-        session = URLSession(configuration: config)
+        session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }
     private func request(_ url: URL, bearer: String?) async throws -> URLRequest {
         guard url.scheme == "https" else { throw NetworkError.invalid("Seuls les liens HTTPS sont acceptés.") }
@@ -56,7 +57,8 @@ enum NetworkError: LocalizedError {
         try Task.checkCancellation()
         try checkLimit(service)
         var request = URLRequest(url: url)
-        request.setValue("RedditMediaPocket/0.1 (iOS; anonymous RSS reader)", forHTTPHeaderField: "User-Agent")
+        request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
+        if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
         return request
     }
@@ -83,6 +85,8 @@ enum NetworkError: LocalizedError {
         guard (200...299).contains(http.statusCode) else { throw NetworkError.refused(http.statusCode) }
     }
     func data(_ url: URL, bearer: String? = nil) async throws -> Data {
+        let revision = RedditSession.shared.revision
+        if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
         let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss")
         if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 { return cached.data }
         let req = try await request(url, bearer: bearer)

@@ -125,6 +125,8 @@ struct ContentView: View {
 
 private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
+    @ObservedObject private var reddit = RedditSession.shared
+    @State private var loginPresented = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -140,7 +142,16 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(model.running ? "Appliqué au prochain lancement. En cours : \(model.sessionLimit)." : "1 à 6. Un nombre élevé peut augmenter les limitations du serveur.")
                 }
+                Section("Reddit") {
+                    Button(reddit.hasSession ? "Session détectée · ouvrir Reddit" : "Se connecter à Reddit") { loginPresented = true }
+                        .disabled(model.running || reddit.clearing)
+                    Button("Déconnexion", role: .destructive) { Task { await reddit.logout() } }
+                        .disabled(model.running || reddit.clearing)
+                } footer: {
+                    Text(model.running ? "Arrête les transferts pour modifier la session." : "Session locale. Les limites Reddit restent applicables.")
+                }
             }
+            .sheet(isPresented: $loginPresented) { RedditLogin() }
             .navigationTitle("Réglages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
