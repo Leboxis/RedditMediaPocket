@@ -13,6 +13,7 @@ private struct Selection: Identifiable {
 
 struct ContentView: View {
     @StateObject private var model = Downloader()
+    @ObservedObject private var redditSession = RedditSession.shared
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var settingsPresented = false
@@ -25,6 +26,7 @@ struct ContentView: View {
                 sessionButton
                 inputRow
                 sortRow
+                savedHintRow
                 userChipsRow
                 metricsRow
                 if !model.limitNotice.isEmpty { limitBanner }
@@ -63,12 +65,13 @@ struct ContentView: View {
             Picker("Type de source", selection: $model.sourceKind) {
                 Text("u/").tag("u")
                 Text("r/").tag("r")
+                Text("♥").tag("saved")
             }
             .pickerStyle(.segmented)
-            .frame(width: 92)
+            .frame(width: 148)
             .disabled(model.running)
-            .accessibilityLabel("Profil utilisateur ou subreddit")
-            TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
+            .accessibilityLabel("Profil utilisateur, subreddit ou éléments sauvegardés")
+            TextField(model.sourceKind == "saved" ? "pseudo du compte" : (model.sourceKind == "r" ? "nom du sub" : "pseudo"), text: $model.username)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.go).focused($editing)
                 .disabled(model.running)
@@ -84,10 +87,16 @@ struct ContentView: View {
                     .foregroundStyle(.white)
                     .background(.orange, in: RoundedRectangle(cornerRadius: 14))
             }
-            .disabled(!model.running && model.username.trimmingCharacters(in: .whitespaces).isEmpty)
+            .disabled(cannotStart)
             .accessibilityLabel(model.running ? "Arrêter" : "Télécharger")
         }
         .padding(.horizontal, 16).padding(.bottom, 10)
+    }
+
+    private var cannotStart: Bool {
+        guard !model.running else { return false }
+        if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        return model.needsSession && !redditSession.hasSession
     }
 
     private var isSubredditInput: Bool {
@@ -106,6 +115,15 @@ struct ContentView: View {
             .disabled(model.running)
             .padding(.horizontal, 16).padding(.bottom, 10)
             .accessibilityLabel("Tri du subreddit")
+        }
+    }
+
+    @ViewBuilder private var savedHintRow: some View {
+        if model.needsSession && !redditSession.hasSession {
+            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages, puis saisis le pseudo du compte.", systemImage: "person.crop.circle.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 18).padding(.bottom, 10)
         }
     }
 
@@ -150,7 +168,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel("Galerie vide")
-            Text(model.activeUser.map { "Aucun média pour \($0)" } ?? "Choisis un utilisateur ou un subreddit")
+            Text(model.activeCollection.map { "Aucun média pour \($0.displayName)" } ?? "Choisis une source (u/, r/ ou ♥)")
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -201,7 +219,7 @@ struct ContentView: View {
         let active = model.activeUser == collection.id
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.archived ? "archivebox" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))
+                Image(systemName: collection.archived ? "archivebox" : (collection.isSaved ? "bookmark.fill" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))
                 Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }

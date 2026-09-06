@@ -7,19 +7,27 @@ import MediaCore
 struct UserCollection: Codable, Identifiable, Equatable {
     var name: String
     var isSubreddit = false
+    var isSaved = false
     var archived = false
     var lastRun: Date?
-    /// Clé canonique : `u/pseudo` ou `r/sub`.
-    var id: String { (isSubreddit ? "r/" : "u/") + name }
-    var displayName: String { id }
-    /// Dossier de stockage. Le point de `r.…` est interdit dans les pseudos :
-    /// aucun profil existant ne peut entrer en collision avec un subreddit.
-    var folderName: String { isSubreddit ? "r.\(name)" : name }
+    /// Clé canonique : `u/pseudo`, `r/sub` ou `saved/pseudo`.
+    var id: String {
+        if isSaved { return "saved/\(name)" }
+        return (isSubreddit ? "r/" : "u/") + name
+    }
+    var displayName: String { isSaved ? "♥ \(name)" : id }
+    /// Dossier de stockage. Les points de `r.…` et `saved.…` sont interdits
+    /// dans les pseudos : aucune collection existante ne peut entrer en collision.
+    var folderName: String {
+        if isSaved { return "saved.\(name)" }
+        return isSubreddit ? "r.\(name)" : name
+    }
 
-    enum CodingKeys: String, CodingKey { case name, isSubreddit, archived, lastRun }
-    init(name: String, isSubreddit: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, archived, lastRun }
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
+        self.isSaved = isSaved
         self.archived = archived
         self.lastRun = lastRun
     }
@@ -27,6 +35,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         isSubreddit = try container.decodeIfPresent(Bool.self, forKey: .isSubreddit) ?? false
+        isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
     }
@@ -48,14 +57,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
     @Published private(set) var sessionLimit = 3
-    /// Sélecteur de source : `u` profil, `r` subreddit. Ne s'applique qu'aux noms
-    /// nus ; un texte contenant déjà `/` (ex. `r/pics` collé) garde la priorité.
+    /// Sélecteur de source : `u` profil, `r` subreddit, `saved` éléments sauvegardés
+    /// du compte connecté. Ne s'applique qu'aux noms nus ; un texte contenant
+    /// déjà `/` (ex. `r/pics` collé) garde la priorité.
     @Published var sourceKind: String = {
         let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
-        return saved == "r" ? "r" : "u"
+        return ["u", "r", "saved"].contains(saved) ? saved : "u"
     }() {
         didSet {
-            let valid = sourceKind == "r" ? "r" : "u"
+            let valid = ["u", "r", "saved"].contains(sourceKind) ? sourceKind : "u"
             if valid != sourceKind { sourceKind = valid; return }
             UserDefaults.standard.set(valid, forKey: "sourceKind")
         }
@@ -64,6 +74,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var resolvedSource: FeedSource? {
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         return try? FeedSource.parse(text)
+    }
+
+    /// Vrai quand la source effective exige une session Reddit.
+    var needsSession: Bool {
+        if let source = resolvedSource, case .saved = source { return true }
+        return false
     }
     @Published var subSort: String = {
         let saved = UserDefaults.standard.string(forKey: "subSort") ?? "new"
@@ -103,7 +119,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
 
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
     private func display(_ collection: UserCollection) {
-        sourceKind = collection.isSubreddit ? "r" : "u"
+        sourceKind = collection.isSaved ? "saved" : (collection.isSubreddit ? "r" : "u")
         username = collection.name
     }
 
@@ -118,6 +134,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 switch source {
                 case .user(let name): sourceKind = "u"; username = name
                 case .subreddit(let name): sourceKind = "r"; username = name
+                case .saved(let name): sourceKind = "saved"; username = name
                 }
             } else {
                 username = last
@@ -140,9 +157,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
         for folder in fresh {
-            // Les dossiers `r.…` viennent des subreddits (le point est impossible dans un pseudo).
+            // Les dossiers `r.…` et `saved.…` viennent des subreddits et sauvegardés
+            // (le point est impossible dans un pseudo).
             if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
                 collections.append(UserCollection(name: sub, isSubreddit: true))
+            } else if folder.hasPrefix("saved."), let owner = try? MediaExtractor.username(String(folder.dropFirst(6))) {
+                collections.append(UserCollection(name: owner, isSaved: true))
             } else {
                 collections.append(UserCollection(name: folder))
             }
@@ -170,6 +190,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         guard !running else { return }
         if let collection = collections.first(where: { $0.id == id }) {
             display(collection)
+        } else if let source = try? FeedSource.parse(id) {
+            switch source {
+            case .user(let name): sourceKind = "u"; username = name
+            case .subreddit(let name): sourceKind = "r"; username = name
+            case .saved(let name): sourceKind = "saved"; username = name
+            }
         } else {
             username = id
         }
@@ -184,6 +210,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             switch source {
             case .user(let name): collections.append(UserCollection(name: name))
             case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
+            case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
             }
         }
         saveCollections()
@@ -248,6 +275,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // Même résolution que l'aperçu UI ; l'erreur exacte (pseudo ou sub) remonte.
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         let source = try FeedSource.parse(text)
+        if case .saved = source, !RedditSession.shared.hasSession {
+            throw FeedError.loginRequired
+        }
         let canonical = source.id
         UserDefaults.standard.set(canonical, forKey: "lastUsername")
         activeUser = canonical
@@ -263,7 +293,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for _ in 1...100 {
             try Task.checkCancellation()
             status = "Recherche…"
-            let posts = try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
+            let data = try await network.data(source.feedURL(sort: subSort, after: after))
+            let posts: [Post]
+            do {
+                posts = try FeedParser.parse(data)
+            } catch FeedError.invalidFeed {
+                // Session expirée en cours de route ou mauvais pseudo : message actionnable.
+                if case .saved = source {
+                    throw NetworkError.invalid("Sauvegardés inaccessibles : reconnecte-toi dans les Réglages et vérifie que le pseudo est celui du compte connecté.")
+                }
+                throw FeedError.invalidFeed
+            }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
             var downloads: [Download] = []

@@ -1,3 +1,10 @@
+Téléchargement des éléments sauvegardés du compte.
+
+- Troisième position du sélecteur (`♥`) : saisir le pseudo du compte connecté.
+- Exige une session Reddit active, sinon le lancement est bloqué avec un message.
+- Session expirée en cours de parcours : erreur explicite conseillant la reconnexion.
+- Dossiers `saved.…`, chips ♥, même plafond de 100 pages.
+
 Les médias inaccessibles n'arrêtent plus le parcours.
 
 - Un post supprimé (HTTP 404 et similaires) est ignoré et compté « inaccessible » ; le téléchargement continue avec les autres médias.

@@ -22,30 +22,38 @@ public enum Media: Hashable, Sendable {
 }
 
 public enum FeedError: LocalizedError {
-    case invalidFeed, invalidUsername, invalidSubreddit, unsupportedVideo
+    case invalidFeed, invalidUsername, invalidSubreddit, loginRequired, unsupportedVideo
     public var errorDescription: String? {
         switch self {
         case .unsupportedVideo: return "Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée."
         case .invalidFeed: return "Réponse RSS invalide : Reddit peut refuser cet accès anonyme."
         case .invalidUsername: return "Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo)."
         case .invalidSubreddit: return "Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics)."
+        case .loginRequired: return "Connecte-toi à Reddit dans les Réglages, puis relance : les éléments sauvegardés exigent une session."
         }
     }
 }
 
-/// Source d'un parcours RSS : profil utilisateur ou subreddit.
-/// Les deux exposent le même format Atom, donc le même `FeedParser` s'applique.
+/// Source d'un parcours RSS : profil utilisateur, subreddit ou éléments
+/// sauvegardés du compte connecté. Les trois exposent le même format Atom,
+/// donc le même `FeedParser` s'applique. `saved` exige une session Reddit :
+/// les cookies sont joints automatiquement aux requêtes `reddit.com`.
 public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)
+    case saved(String)
 
     /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
     public static let subredditSorts = ["new", "hot", "top"]
 
-    /// Accepte `u/pseudo`, `r/sub` ou un pseudo nu (compatibilité : profil utilisateur).
+    /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo` ou un pseudo nu
+    /// (compatibilité : profil utilisateur).
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
+        if lower.hasPrefix("saved/") {
+            return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
+        }
         if lower.hasPrefix("r/") {
             return try .subreddit(subredditName(String(trimmed.dropFirst(2))))
         }
@@ -63,22 +71,30 @@ public enum FeedSource: Hashable, Sendable {
         return name
     }
 
-    /// Identifiant canonique stable (`u/pseudo` ou `r/sub`), utilisé comme clé de collection.
+    /// Identifiant canonique stable (`u/pseudo`, `r/sub` ou `saved/pseudo`),
+    /// utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
         case .subreddit(let name): return "r/\(name)"
+        case .saved(let name): return "saved/\(name)"
         }
     }
 
-    public var displayName: String { id }
+    public var displayName: String {
+        switch self {
+        case .saved(let name): return "♥ \(name)"
+        default: return id
+        }
+    }
 
-    /// Dossier de stockage. Le préfixe `r.` (point interdit dans les pseudos)
-    /// évite toute collision entre le profil `u/pics` et le subreddit `r/pics`.
+    /// Dossier de stockage. Les préfixes `r.` et `saved.` (point interdit dans
+    /// les pseudos) évitent toute collision entre profil, subreddit et sauvegardés.
     public var folderName: String {
         switch self {
         case .user(let name): return name
         case .subreddit(let name): return "r.\(name)"
+        case .saved(let name): return "saved.\(name)"
         }
     }
 
@@ -90,6 +106,10 @@ public enum FeedSource: Hashable, Sendable {
         switch self {
         case .user(let name):
             var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
+            components.queryItems = items
+            return components.url!
+        case .saved(let name):
+            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/saved.rss")!
             components.queryItems = items
             return components.url!
         case .subreddit(let name):

@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil) ou `r/` (subreddit) puis on saisit le nom — coller `u/pseudo` ou `r/sub` en entier fonctionne aussi — et l'application enregistre les médias directs accessibles depuis son flux RSS public, sans compte ni API JSON Reddit.
+Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil), `r/` (subreddit) ou `♥` (sauvegardés du compte) puis on saisit le nom — coller `u/pseudo`, `r/sub` ou `saved/pseudo` en entier fonctionne aussi — et l'application enregistre les médias directs accessibles depuis son flux RSS public, sans compte ni API JSON Reddit.
 
 ## État réel
 
@@ -11,6 +11,8 @@ Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronque
 Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`) pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
+
+Sauvegardés (`♥`) : saisir le pseudo du compte connecté. Exige une session active (Réglages → Se connecter à Reddit) ; sans session, le lancement est bloqué avec un message explicite. Le flux `saved.rss` suit les mêmes règles (100 pages, troncature, session expirée = erreur avec conseil de reconnexion). Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
 
 ## Créer le dépôt et lancer la compilation
 
@@ -90,7 +92,7 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 ## Galerie et téléchargements simultanés
 
-Interface compacte : sélecteur `u/` ou `r/`, nom, bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
+Interface compacte : sélecteur `u/`, `r/` ou `♥`, nom, bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
 Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur autre qu’un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 
@@ -132,7 +134,7 @@ Les requêtes HTTPS reddit.com peuvent recevoir les cookies correspondants à le
 
 Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Aucun délai de limitation n’est effacé. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
 
-Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit.
+Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit. La session sert aussi à lire l’onglet Sauvegardés (`♥`) du compte.
 
 ## Transferts immédiats et état de session
 

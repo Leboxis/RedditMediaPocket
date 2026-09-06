@@ -62,6 +62,27 @@ final class SubredditFeedTests: XCTestCase {
         XCTAssertEqual(FeedSource.user("leboxis").folderName, "leboxis")
     }
 
+    func testParseSavedForm() throws {
+        XCTAssertEqual(try FeedSource.parse("saved/LeBoxis_1"), .saved("LeBoxis_1"))
+    }
+
+    func testSavedFeedURL() {
+        XCTAssertEqual(
+            FeedSource.saved("leboxis").feedURL().absoluteString,
+            "https://www.reddit.com/user/leboxis/saved.rss?limit=100"
+        )
+        XCTAssertEqual(
+            FeedSource.saved("leboxis").feedURL(after: "t3_abc").absoluteString,
+            "https://www.reddit.com/user/leboxis/saved.rss?limit=100&after=t3_abc"
+        )
+    }
+
+    func testSavedMapping() {
+        XCTAssertEqual(FeedSource.saved("leboxis").id, "saved/leboxis")
+        XCTAssertEqual(FeedSource.saved("leboxis").displayName, "♥ leboxis")
+        XCTAssertEqual(FeedSource.saved("leboxis").folderName, "saved.leboxis")
+    }
+
     func testSubredditFeedPaginationShape() throws {
         let xml = """
         <feed xmlns="http://www.w3.org/2005/Atom"><entry><id>t3_aaa</id><title>A</title><content type="html">&lt;a href="https://i.redd.it/a.jpg"&gt;i&lt;/a&gt;</content></entry><entry><id>t3_bbb</id><title>B</title><content type="html">&lt;a href="https://i.redd.it/b.jpg"&gt;i&lt;/a&gt;</content></entry></feed>
