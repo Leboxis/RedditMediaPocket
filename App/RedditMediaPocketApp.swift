@@ -64,13 +64,21 @@ struct ContentView: View {
         HStack(spacing: 12) {
             SourceKindToggle(kind: $model.sourceKind)
                 .disabled(model.running)
-            TextField(model.sourceKind == "saved" ? "pseudo du compte" : (model.sourceKind == "r" ? "nom du sub" : "pseudo"), text: $model.username)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .submitLabel(.go).focused($editing)
-                .disabled(model.running)
-                .onSubmit { start() }
-                .padding(13)
-                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            Group {
+                if model.sourceKind == "saved" {
+                    Text("Sauvegardés du compte connecté")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).focused($editing)
+                        .disabled(model.running)
+                        .onSubmit { start() }
+                }
+            }
+            .padding(13)
+            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
             Button {
                 if model.running { model.stop() } else { start() }
             } label: {
@@ -88,6 +96,7 @@ struct ContentView: View {
 
     private var cannotStart: Bool {
         guard !model.running else { return false }
+        if model.sourceKind == "saved" { return !redditSession.hasSession || redditSession.clearing }
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         return model.needsSession && !redditSession.hasSession
     }
@@ -113,7 +122,7 @@ struct ContentView: View {
 
     @ViewBuilder private var savedHintRow: some View {
         if model.needsSession && !redditSession.hasSession {
-            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages, puis saisis le pseudo du compte.", systemImage: "person.crop.circle.badge.questionmark")
+            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)

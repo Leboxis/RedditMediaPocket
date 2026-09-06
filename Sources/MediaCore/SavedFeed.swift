@@ -15,9 +15,10 @@ public enum SavedFeedError: LocalizedError {
 /// A private feed URL is a credential. Keep it in memory for this run only.
 public struct SavedFeed {
     private let url: URL
+    public let username: String
 
-    public init(preferencesHTML: String, username: String) throws {
-        let expected = try MediaExtractor.username(username)
+    public init(preferencesHTML: String, username: String? = nil) throws {
+        let expected = try username.map { try MediaExtractor.username($0) }
         let regex = try NSRegularExpression(pattern: #"(?i)\bhref\s*=\s*["']([^"']+)["']"#)
         let html = preferencesHTML as NSString
         var wrongAccount = false
@@ -38,12 +39,13 @@ public struct SavedFeed {
                   (try? MediaExtractor.username(owner)) != nil,
                   tokens.count == 1, let token = tokens.first?.value, !token.isEmpty else { continue }
             guard Self.isSavedPath(parts.path, owner: owner) else { continue }
-            guard owner.caseInsensitiveCompare(expected) == .orderedSame else { wrongAccount = true; continue }
+            if let expected, owner.caseInsensitiveCompare(expected) != .orderedSame { wrongAccount = true; continue }
             // Preserve Reddit's saved endpoint and credential; discard unrelated query parameters.
             var clean = URLComponents()
             clean.scheme = "https"; clean.host = host; clean.path = parts.path
             clean.queryItems = [URLQueryItem(name: "feed", value: token), URLQueryItem(name: "user", value: owner)]
             guard let url = clean.url else { continue }
+            self.username = try MediaExtractor.username(owner)
             self.url = url
             return
         }

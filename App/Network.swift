@@ -89,7 +89,7 @@ enum NetworkError: LocalizedError {
         return data
     }
 
-    func savedFeed(username: String) async throws -> SavedFeed {
+    func savedFeed(username: String? = nil) async throws -> SavedFeed {
         await RedditSession.shared.refresh()
         guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
         do {
