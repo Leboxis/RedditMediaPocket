@@ -34,10 +34,8 @@ public enum FeedError: LocalizedError {
     }
 }
 
-/// Source d'un parcours RSS : profil utilisateur, subreddit ou éléments
-/// sauvegardés du compte connecté. Les trois exposent le même format Atom,
-/// donc le même `FeedParser` s'applique. `saved` exige une session Reddit :
-/// les cookies sont joints automatiquement aux requêtes `reddit.com`.
+/// Source de collection. Les profils et subreddits utilisent Atom ;
+/// les sauvegardés utilisent SavedPage et la session WebKit du compte connecté.
 public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)

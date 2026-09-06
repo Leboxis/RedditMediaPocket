@@ -64,7 +64,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             SourceKindToggle(kind: $model.sourceKind)
                 .disabled(model.running)
-            TextField(model.sourceKind == "saved" ? "pseudo du compte" : (model.sourceKind == "r" ? "nom du sub" : "pseudo"), text: $model.username)
+            TextField(model.sourceKind == "saved" ? "compte connecté (automatique)" : (model.sourceKind == "r" ? "nom du sub" : "pseudo"), text: $model.username)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.go).focused($editing)
                 .disabled(model.running)
@@ -88,7 +88,7 @@ struct ContentView: View {
 
     private var cannotStart: Bool {
         guard !model.running else { return false }
-        if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        if !model.needsSession && model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         return model.needsSession && !redditSession.hasSession
     }
 
@@ -113,7 +113,7 @@ struct ContentView: View {
 
     @ViewBuilder private var savedHintRow: some View {
         if model.needsSession && !redditSession.hasSession {
-            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages, puis saisis le pseudo du compte.", systemImage: "person.crop.circle.badge.questionmark")
+            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages, le compte sera détecté automatiquement.", systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)

@@ -88,6 +88,19 @@ enum NetworkError: LocalizedError {
         }
         return data
     }
+    func savedData(_ url: URL) async throws -> Data {
+        try checkLimit(RatePolicy.service(for: url.host ?? "Reddit"))
+        guard !RedditSession.shared.clearing, RedditSession.shared.hasSession else { throw FeedError.loginRequired }
+        let request = RedditWebRequest()
+        let (data, response) = try await request.data(url)
+        try Task.checkCancellation()
+        do { try check(response, requestedURL: url) }
+        catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            throw NetworkError.invalid("Sauvegardés : Reddit refuse l’accès (HTTP \(code)). Ouvre Reddit dans les Réglages, vérifie la connexion au compte puis relance.")
+        }
+        return data
+    }
+
     func download(_ url: URL) async throws -> URL {
         let req = try await request(url, bearer: nil)
         transfers += 1

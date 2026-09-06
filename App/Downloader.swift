@@ -78,6 +78,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
 
     /// Vrai quand la source effective exige une session Reddit.
     var needsSession: Bool {
+        if sourceKind == "saved" && !username.contains("/") { return true }
         if let source = resolvedSource, case .saved = source { return true }
         return false
     }
@@ -274,10 +275,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func run() async throws {
         // Même résolution que l'aperçu UI ; l'erreur exacte (pseudo ou sub) remonte.
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
-        let source = try FeedSource.parse(text)
-        if case .saved = source, !RedditSession.shared.hasSession {
-            throw FeedError.loginRequired
-        }
+        let source: FeedSource
+        if needsSession {
+            guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
+            status = "Vérification du compte Reddit…"
+            let data = try await network.savedData(URL(string: "https://www.reddit.com/api/me.json?raw_json=1")!)
+            let account = try SavedPage.account(data)
+            source = .saved(account)
+            sourceKind = "saved"; username = account
+        } else { source = try FeedSource.parse(text) }
         let canonical = source.id
         UserDefaults.standard.set(canonical, forKey: "lastUsername")
         activeUser = canonical
@@ -293,22 +299,26 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for _ in 1...100 {
             try Task.checkCancellation()
             status = "Recherche…"
-            let data = try await network.data(source.feedURL(sort: subSort, after: after))
-            let posts: [Post]
-            do {
-                posts = try FeedParser.parse(data)
-            } catch FeedError.invalidFeed {
-                // Session expirée en cours de route ou mauvais pseudo : message actionnable.
-                if case .saved = source {
-                    throw NetworkError.invalid("Sauvegardés inaccessibles : reconnecte-toi dans les Réglages et vérifie que le pseudo est celui du compte connecté.")
-                }
-                throw FeedError.invalidFeed
+            let entries: [(id: String, media: [Media])]
+            let next: String?
+            if case .saved(let account) = source {
+                let data = try await network.savedData(SavedPage.url(username: account, after: after))
+                let page: SavedPage
+                do { page = try SavedPage.parse(data) }
+                catch { throw NetworkError.invalid("Réponse des sauvegardés invalide. Vérifie la connexion Reddit dans les Réglages.") }
+                entries = page.entries.map { ($0.id, $0.media) }
+                next = page.after
+            } else {
+                let data = try await network.data(source.feedURL(sort: subSort, after: after))
+                let posts = try FeedParser.parse(data)
+                entries = posts.map { ($0.id, MediaExtractor.extract($0.html)) }
+                next = posts.last?.id
             }
-            let fresh = posts.filter { visited.insert($0.id).inserted }
+            let fresh = entries.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
             var downloads: [Download] = []
             for post in fresh {
-                for item in MediaExtractor.extract(post.html) where seenMedia.insert(item).inserted {
+                for item in post.media where seenMedia.insert(item).inserted {
                     let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
                     let ext: String
                     if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
@@ -321,8 +331,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
                 try await self.saveUnlessLimited(item)
             }
-            guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }
-            after = last
+            guard let next, next != after else { break }
+            after = next
         }
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
