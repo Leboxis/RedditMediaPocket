@@ -6,9 +6,30 @@ import MediaCore
 
 struct UserCollection: Codable, Identifiable, Equatable {
     var name: String
+    var isSubreddit = false
     var archived = false
     var lastRun: Date?
-    var id: String { name }
+    /// Clé canonique : `u/pseudo` ou `r/sub`.
+    var id: String { (isSubreddit ? "r/" : "u/") + name }
+    var displayName: String { id }
+    /// Dossier de stockage. Le point de `r.…` est interdit dans les pseudos :
+    /// aucun profil existant ne peut entrer en collision avec un subreddit.
+    var folderName: String { isSubreddit ? "r.\(name)" : name }
+
+    enum CodingKeys: String, CodingKey { case name, isSubreddit, archived, lastRun }
+    init(name: String, isSubreddit: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+        self.name = name
+        self.isSubreddit = isSubreddit
+        self.archived = archived
+        self.lastRun = lastRun
+    }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        isSubreddit = try container.decodeIfPresent(Bool.self, forKey: .isSubreddit) ?? false
+        archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
+        lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
+    }
 }
 
 @MainActor final class Downloader: ObservableObject {
@@ -27,6 +48,33 @@ struct UserCollection: Codable, Identifiable, Equatable {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
     @Published private(set) var sessionLimit = 3
+    /// Sélecteur de source : `u` profil, `r` subreddit. Ne s'applique qu'aux noms
+    /// nus ; un texte contenant déjà `/` (ex. `r/pics` collé) garde la priorité.
+    @Published var sourceKind: String = {
+        let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
+        return saved == "r" ? "r" : "u"
+    }() {
+        didSet {
+            let valid = sourceKind == "r" ? "r" : "u"
+            if valid != sourceKind { sourceKind = valid; return }
+            UserDefaults.standard.set(valid, forKey: "sourceKind")
+        }
+    }
+    /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
+    var resolvedSource: FeedSource? {
+        let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
+        return try? FeedSource.parse(text)
+    }
+    @Published var subSort: String = {
+        let saved = UserDefaults.standard.string(forKey: "subSort") ?? "new"
+        return FeedSource.subredditSorts.contains(saved) ? saved : "new"
+    }() {
+        didSet {
+            let valid = FeedSource.subredditSorts.contains(subSort) ? subSort : "new"
+            if valid != subSort { subSort = valid; return }
+            UserDefaults.standard.set(valid, forKey: "subSort")
+        }
+    }
     @Published var active = 0
     @Published private(set) var transfers = 0
     @Published var limitNotice = ""
@@ -41,15 +89,21 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private var root: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     var archivedCollections: [UserCollection] { collections.filter(\.archived) }
     var liveCollections: [UserCollection] { collections.filter { !$0.archived } }
-    var activeCollection: UserCollection? { collections.first { $0.name == activeUser } }
+    var activeCollection: UserCollection? { collections.first { $0.id == activeUser } }
 
     init() {
         network.$transfers.assign(to: &$transfers)
         loadCollections()
         migrateFolders()
-        if activeUser == nil { activeUser = liveCollections.first?.name ?? collections.first?.name }
-        if let activeUser { username = activeUser }
+        if activeUser == nil { activeUser = liveCollections.first?.id ?? collections.first?.id }
+        if let current = collections.first(where: { $0.id == activeUser }) { display(current) }
         reload()
+    }
+
+    /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
+    private func display(_ collection: UserCollection) {
+        sourceKind = collection.isSubreddit ? "r" : "u"
+        username = collection.name
     }
 
     private func loadCollections() {
@@ -58,8 +112,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
             collections = saved
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
-            username = last
-            if collections.contains(where: { $0.name == last }) { activeUser = last }
+            // Anciennes versions : pseudo nu sans préfixe ; versions récentes : `u/…` ou `r/…`.
+            if let source = try? FeedSource.parse(last.contains("/") ? last : "u/\(last)") {
+                switch source {
+                case .user(let name): sourceKind = "u"; username = name
+                case .subreddit(let name): sourceKind = "r"; username = name
+                }
+            } else {
+                username = last
+            }
+            let canonical = last.contains("/") ? last : "u/\(last)"
+            if collections.contains(where: { $0.id == canonical }) { activeUser = canonical }
         }
     }
 
@@ -70,41 +133,57 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func migrateFolders() {
-        let known = Set(collections.map(\.name))
+        let known = Set(collections.map(\.folderName))
         let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true } ?? []
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
-        collections.append(contentsOf: fresh.map { UserCollection(name: $0) })
+        for folder in fresh {
+            // Les dossiers `r.…` viennent des subreddits (le point est impossible dans un pseudo).
+            if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
+                collections.append(UserCollection(name: sub, isSubreddit: true))
+            } else {
+                collections.append(UserCollection(name: folder))
+            }
+        }
         saveCollections()
     }
 
-    func selectUser(_ name: String) {
+    func selectUser(_ id: String) {
         guard !running else { return }
-        activeUser = name
-        username = name
-        UserDefaults.standard.set(name, forKey: "lastUsername")
+        guard let collection = collections.first(where: { $0.id == id }) else { return }
+        activeUser = collection.id
+        display(collection)
+        UserDefaults.standard.set(collection.id, forKey: "lastUsername")
         reload()
     }
 
-    func setArchived(_ name: String, _ archived: Bool) {
-        guard !running, let index = collections.firstIndex(where: { $0.name == name }) else { return }
+    func setArchived(_ id: String, _ archived: Bool) {
+        guard !running, let index = collections.firstIndex(where: { $0.id == id }) else { return }
         collections[index].archived = archived
         saveCollections()
-        if name == activeUser { reload() }
+        if collections[index].id == activeUser { reload() }
     }
 
-    func download(user name: String) {
+    func download(user id: String) {
         guard !running else { return }
-        username = name
+        if let collection = collections.first(where: { $0.id == id }) {
+            display(collection)
+        } else {
+            username = id
+        }
         start()
     }
 
-    private func upsertCollection(_ name: String) {
-        if let index = collections.firstIndex(where: { $0.name == name }) {
+    private func upsertCollection(_ source: FeedSource) {
+        let id = source.id
+        if let index = collections.firstIndex(where: { $0.id == id }) {
             collections[index].archived = false
         } else {
-            collections.append(UserCollection(name: name))
+            switch source {
+            case .user(let name): collections.append(UserCollection(name: name))
+            case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
+            }
         }
         saveCollections()
     }
@@ -124,8 +203,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     func reload() {
-        guard let activeUser else { files = []; totalBytes = 0; return }
-        let folder = root.appendingPathComponent(activeUser, isDirectory: true)
+        guard let activeUser, let collection = collections.first(where: { $0.id == activeUser }) else { files = []; totalBytes = 0; return }
+        let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
         let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey]
         guard let entries = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
             files = []; totalBytes = 0; return
@@ -165,23 +244,25 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func run() async throws {
-        let name = try MediaExtractor.username(username)
-        UserDefaults.standard.set(name, forKey: "lastUsername")
-        activeUser = name
-        upsertCollection(name)
+        // Même résolution que l'aperçu UI ; l'erreur exacte (pseudo ou sub) remonte.
+        let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
+        let source = try FeedSource.parse(text)
+        let canonical = source.id
+        UserDefaults.standard.set(canonical, forKey: "lastUsername")
+        activeUser = canonical
+        upsertCollection(source)
         reload()
-        let folder = root.appendingPathComponent(name, isDirectory: true)
+        let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         var after: String?
         var visited = Set<String>()
         var seenMedia = Set<Media>()
+        // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
+        // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
         for _ in 1...100 {
             try Task.checkCancellation()
             status = "Recherche…"
-            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
-            components.queryItems = [URLQueryItem(name: "limit", value: "100")]
-            if let after { components.queryItems?.append(URLQueryItem(name: "after", value: after)) }
-            let posts = try FeedParser.parse(try await network.data(components.url!))
+            let posts = try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
             var downloads: [Download] = []
@@ -202,7 +283,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }
             after = last
         }
-        if let index = collections.firstIndex(where: { $0.name == name }) {
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
             saveCollections()
         }

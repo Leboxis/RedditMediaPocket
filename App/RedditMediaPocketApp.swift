@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 
 @main struct RedditMediaPocketApp: App {
     var body: some Scene { WindowGroup { ContentView() } }
@@ -23,6 +24,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 sessionButton
                 inputRow
+                sortRow
                 userChipsRow
                 metricsRow
                 if !model.limitNotice.isEmpty { limitBanner }
@@ -58,16 +60,21 @@ struct ContentView: View {
 
     private var inputRow: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 4) {
-                Text("u/").foregroundStyle(.secondary)
-                TextField("Pseudo Reddit", text: $model.username)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.go).focused($editing)
-                    .disabled(model.running)
-                    .onSubmit { start() }
+            Picker("Type de source", selection: $model.sourceKind) {
+                Text("u/").tag("u")
+                Text("r/").tag("r")
             }
-            .padding(13)
-            .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            .pickerStyle(.segmented)
+            .frame(width: 92)
+            .disabled(model.running)
+            .accessibilityLabel("Profil utilisateur ou subreddit")
+            TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.go).focused($editing)
+                .disabled(model.running)
+                .onSubmit { start() }
+                .padding(13)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
             Button {
                 if model.running { model.stop() } else { start() }
             } label: {
@@ -83,12 +90,31 @@ struct ContentView: View {
         .padding(.horizontal, 16).padding(.bottom, 10)
     }
 
+    private var isSubredditInput: Bool {
+        if let source = model.resolvedSource, case .subreddit = source { return true }
+        return false
+    }
+
+    @ViewBuilder private var sortRow: some View {
+        if isSubredditInput {
+            Picker("Tri du subreddit", selection: $model.subSort) {
+                Text("Nouveaux").tag("new")
+                Text("Chauds").tag("hot")
+                Text("Top du mois").tag("top")
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.running)
+            .padding(.horizontal, 16).padding(.bottom, 10)
+            .accessibilityLabel("Tri du subreddit")
+        }
+    }
+
     private var userChipsRow: some View {
         Group {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(model.collections.sorted { $0.archived != $1.archived ? !$0.archived : $0.name < $1.name }) { collection in
+                        ForEach(model.collections.sorted { $0.archived != $1.archived ? !$0.archived : $0.displayName < $1.displayName }) { collection in
                             userChip(collection)
                         }
                     }
@@ -124,7 +150,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel("Galerie vide")
-            Text(model.activeUser.map { "Aucun média pour u/\($0)" } ?? "Choisis un utilisateur")
+            Text(model.activeUser.map { "Aucun média pour \($0)" } ?? "Choisis un utilisateur ou un subreddit")
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -172,11 +198,11 @@ struct ContentView: View {
     }
 
     private func userChip(_ collection: UserCollection) -> some View {
-        let active = model.activeUser == collection.name
-        return Button { model.selectUser(collection.name) } label: {
+        let active = model.activeUser == collection.id
+        return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.archived ? "archivebox" : "person.crop.circle")
-                Text("u/\(collection.name)").lineLimit(1)
+                Image(systemName: collection.archived ? "archivebox" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))
+                Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }
             .font(.caption.weight(.medium))
@@ -187,15 +213,15 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .contextMenu {
             if collection.archived {
-                Button { model.setArchived(collection.name, false) } label: {
+                Button { model.setArchived(collection.id, false) } label: {
                     Label("Retirer des archives", systemImage: "tray.and.arrow.up")
                 }
             } else {
-                Button { model.setArchived(collection.name, true) } label: {
+                Button { model.setArchived(collection.id, true) } label: {
                     Label("Archiver", systemImage: "archivebox")
                 }
             }
-            Button { model.download(user: collection.name) } label: {
+            Button { model.download(user: collection.id) } label: {
                 Label("Reprendre le téléchargement", systemImage: "arrow.clockwise")
             }
         }

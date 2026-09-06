@@ -22,12 +22,91 @@ public enum Media: Hashable, Sendable {
 }
 
 public enum FeedError: LocalizedError {
-    case invalidFeed, invalidUsername, unsupportedVideo
+    case invalidFeed, invalidUsername, invalidSubreddit, unsupportedVideo
     public var errorDescription: String? {
         switch self {
         case .unsupportedVideo: return "Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée."
         case .invalidFeed: return "Réponse RSS invalide : Reddit peut refuser cet accès anonyme."
-        case .invalidUsername: return "Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores)."
+        case .invalidUsername: return "Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo)."
+        case .invalidSubreddit: return "Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics)."
+        }
+    }
+}
+
+/// Source d'un parcours RSS : profil utilisateur ou subreddit.
+/// Les deux exposent le même format Atom, donc le même `FeedParser` s'applique.
+public enum FeedSource: Hashable, Sendable {
+    case user(String)
+    case subreddit(String)
+
+    /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
+    public static let subredditSorts = ["new", "hot", "top"]
+
+    /// Accepte `u/pseudo`, `r/sub` ou un pseudo nu (compatibilité : profil utilisateur).
+    public static func parse(_ text: String) throws -> FeedSource {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("r/") {
+            return try .subreddit(subredditName(String(trimmed.dropFirst(2))))
+        }
+        if lower.hasPrefix("u/") {
+            return try .user(MediaExtractor.username(String(trimmed.dropFirst(2))))
+        }
+        return try .user(MediaExtractor.username(trimmed))
+    }
+
+    public static func subredditName(_ text: String) throws -> String {
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard name.range(of: "^[A-Za-z0-9_]{2,21}$", options: .regularExpression) != nil else {
+            throw FeedError.invalidSubreddit
+        }
+        return name
+    }
+
+    /// Identifiant canonique stable (`u/pseudo` ou `r/sub`), utilisé comme clé de collection.
+    public var id: String {
+        switch self {
+        case .user(let name): return "u/\(name)"
+        case .subreddit(let name): return "r/\(name)"
+        }
+    }
+
+    public var displayName: String { id }
+
+    /// Dossier de stockage. Le préfixe `r.` (point interdit dans les pseudos)
+    /// évite toute collision entre le profil `u/pics` et le subreddit `r/pics`.
+    public var folderName: String {
+        switch self {
+        case .user(let name): return name
+        case .subreddit(let name): return "r.\(name)"
+        }
+    }
+
+    /// URL RSS d'une page. `after` est le curseur `t3_…` du dernier post vu.
+    /// `sort` ne s'applique qu'aux subreddits (`new`, `hot`, `top` + `t=month`).
+    public func feedURL(sort: String = "new", after: String? = nil) -> URL {
+        var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
+        if let after { items.append(URLQueryItem(name: "after", value: after)) }
+        switch self {
+        case .user(let name):
+            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
+            components.queryItems = items
+            return components.url!
+        case .subreddit(let name):
+            let acknowledged = Self.subredditSorts.contains(sort) ? sort : "new"
+            let path: String
+            switch acknowledged {
+            case "hot": path = "hot"
+            case "top": path = "top"
+            default: path = "new"
+            }
+            var components = URLComponents(string: "https://www.reddit.com/r/\(name)/\(path).rss")!
+            if acknowledged == "top" {
+                components.queryItems = [URLQueryItem(name: "t", value: "month")] + items
+            } else {
+                components.queryItems = items
+            }
+            return components.url!
         }
     }
 }
