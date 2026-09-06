@@ -142,11 +142,13 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(model.running ? "Appliqué au prochain lancement. En cours : \(model.sessionLimit)." : "1 à 6. Un nombre élevé peut augmenter les limitations du serveur.")
                 }
-                Section("Reddit") {
+                Section {
                     Button(reddit.hasSession ? "Session détectée · ouvrir Reddit" : "Se connecter à Reddit") { loginPresented = true }
                         .disabled(model.running || reddit.clearing)
                     Button("Déconnexion", role: .destructive) { Task { await reddit.logout() } }
                         .disabled(model.running || reddit.clearing)
+                } header: {
+                    Text("Reddit")
                 } footer: {
                     Text(model.running ? "Arrête les transferts pour modifier la session." : "Session locale. Les limites Reddit restent applicables.")
                 }
