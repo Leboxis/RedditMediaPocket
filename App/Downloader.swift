@@ -58,8 +58,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     @Published private(set) var sessionLimit = 3
     /// Sélecteur de source : `u` profil, `r` subreddit, `saved` éléments sauvegardés
-    /// du compte connecté. Ne s'applique qu'aux noms nus ; un texte contenant
-    /// déjà `/` (ex. `r/pics` collé) garde la priorité.
+    /// du compte connecté. Le cœur ignore la saisie ; pour u/ et r/,
+    /// un texte contenant déjà `/` garde la priorité.
     @Published var sourceKind: String = {
         let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
         return ["u", "r", "saved"].contains(saved) ? saved : "u"
@@ -72,12 +72,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
     var resolvedSource: FeedSource? {
+        if sourceKind == "saved" { return nil }
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         return try? FeedSource.parse(text)
     }
 
     /// Vrai quand la source effective exige une session Reddit.
     var needsSession: Bool {
+        if sourceKind == "saved" { return true }
         if let source = resolvedSource, case .saved = source { return true }
         return false
     }
@@ -272,14 +274,22 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func run() async throws {
-        // Même résolution que l'aperçu UI ; l'erreur exacte (pseudo ou sub) remonte.
-        let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
-        let source = try FeedSource.parse(text)
+        let source: FeedSource
         let privateFeed: SavedFeed?
-        if case .saved(let name) = source {
-            status = "Vérification du compte et du flux privé…"
-            privateFeed = try await network.savedFeed(username: name)
-        } else { privateFeed = nil }
+        if sourceKind == "saved" {
+            status = "Recherche des sauvegardés du compte connecté…"
+            let feed = try await network.savedFeed()
+            try Task.checkCancellation()
+            source = .saved(feed.username)
+            privateFeed = feed
+        } else {
+            let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
+            source = try FeedSource.parse(text)
+            if case .saved(let name) = source {
+                status = "Vérification du compte et du flux privé…"
+                privateFeed = try await network.savedFeed(username: name)
+            } else { privateFeed = nil }
+        }
         let canonical = source.id
         UserDefaults.standard.set(canonical, forKey: "lastUsername")
         activeUser = canonical

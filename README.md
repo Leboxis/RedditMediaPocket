@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil), `r/` (subreddit) ou `♥` (sauvegardés du compte) puis on saisit le nom — coller `u/pseudo`, `r/sub` ou `saved/pseudo` en entier fonctionne aussi — et l'application enregistre les médias directs accessibles depuis son flux RSS public, sans compte ni API JSON Reddit.
+Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil) ou `r/` (subreddit), puis on saisit le nom ; `♥` sélectionne les sauvegardés du compte Reddit connecté sans demander de pseudo. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## État réel
 
@@ -12,7 +12,7 @@ Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouve
 
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
 
-Sauvegardés (`♥`) : saisir le pseudo du compte connecté. Exige une session active (Réglages → Se connecter à Reddit) et les flux RSS privés activés dans Reddit. Le bouton « Flux privés » de la fenêtre de connexion ouvre ces préférences. À chaque lancement, l’app lit le lien privé des sauvegardés dans `https://old.reddit.com/prefs/feeds/` avec les cookies du compte connecté, vérifie le pseudo, puis conserve les paramètres d’authentification `feed` et `user` sur chaque page. Le lien reste en mémoire pour ce parcours, sans cache RSS ni stockage du jeton. Les redirections HTTPS du flux privé entre `old.reddit.com`, `www.reddit.com` et `reddit.com` sont suivies uniquement vers un chemin de sauvegardés du même compte, avec conservation du jeton et de la pagination. Les autres destinations sont refusées. Un mauvais compte, un lien absent ou un refus HTTP produit un message explicite, sans nouvelle tentative automatique. Même plafond de 100 pages, sans exhaustivité garantie ; les commentaires sauvegardés n’interrompent plus la pagination. Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
+Sauvegardés (`♥`) : le compte connecté est sélectionné automatiquement, sans saisie de pseudo. La saisie précédente de profil ou de subreddit est ignorée dans ce mode. Exige une session active (Réglages → Se connecter à Reddit) et les flux RSS privés activés dans Reddit. Le bouton « Flux privés » de la fenêtre de connexion ouvre ces préférences. À chaque lancement, l’app lit le lien privé des sauvegardés dans `https://old.reddit.com/prefs/feeds/` avec les cookies du compte connecté, en déduit le pseudo pour choisir le dossier du compte, puis conserve les paramètres d’authentification `feed` et `user` sur chaque page. Le lien reste en mémoire pour ce parcours, sans cache RSS ni stockage du jeton. Les redirections HTTPS du flux privé entre `old.reddit.com`, `www.reddit.com` et `reddit.com` sont suivies uniquement vers un chemin de sauvegardés du même compte, avec conservation du jeton et de la pagination. Les autres destinations sont refusées. Un lien absent ou un refus HTTP produit un message explicite, sans nouvelle tentative automatique. Même plafond de 100 pages, sans exhaustivité garantie ; les commentaires sauvegardés n’interrompent plus la pagination. Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
 
 ## Créer le dépôt et lancer la compilation
 
@@ -92,7 +92,7 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 ## Galerie et téléchargements simultanés
 
-Interface compacte : sélecteur `u/`, `r/` ou `♥`, nom, bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
+Interface compacte : sélecteur `u/`, `r/` ou `♥`, nom (ou « Sauvegardés du compte connecté » pour le cœur), bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
 Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur autre qu’un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 

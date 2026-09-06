@@ -1,3 +1,9 @@
+Sélection automatique du compte pour les sauvegardés.
+
+- Le cœur utilise la session Reddit connectée sans demander de pseudo.
+- Le compte est identifié depuis le flux privé à chaque lancement du téléchargement.
+- Une ancienne saisie de profil ou de subreddit ne remplace plus la sélection du cœur.
+
 Correction des redirections HTTP 301 des sauvegardés.
 
 - Suit les redirections HTTPS du flux sauvegardé entre `old.reddit.com`, `www.reddit.com` et `reddit.com`, y compris les variantes de chemin du même compte.
@@ -13,7 +19,7 @@ Correction de l’authentification des sauvegardés.
 
 Téléchargement des éléments sauvegardés du compte.
 
-- Troisième position du sélecteur (`♥`) : saisir le pseudo du compte connecté.
+- Troisième position du sélecteur (`♥`) : sauvegardés du compte connecté.
 - Exige une session Reddit active, sinon le lancement est bloqué avec un message.
 - Session expirée en cours de parcours : erreur explicite conseillant la reconnexion.
 - Dossiers `saved.…`, chips ♥, même plafond de 100 pages.

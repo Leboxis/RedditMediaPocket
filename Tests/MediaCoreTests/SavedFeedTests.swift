@@ -2,6 +2,32 @@ import XCTest
 @testable import MediaCore
 
 final class SavedFeedTests: XCTestCase {
+    func testDiscoversConnectedAccountWithoutUsername() throws {
+        let html = """
+        <a href="/.rss?feed=front&amp;user=Other">Front page</a>
+        <a href="https://evil.example/saved.rss?feed=bad&amp;user=Other">Untrusted</a>
+        <a href="/user/Alice/saved/.rss?feed=private&amp;user=Alice">Saved</a>
+        """
+        let feed = try SavedFeed(preferencesHTML: html)
+        XCTAssertEqual(feed.username, "alice")
+        XCTAssertEqual(feed.pageURL().path, "/user/Alice/saved/.rss")
+    }
+
+    func testDiscoveryUsesNewAccountOnEachRun() throws {
+        for owner in ["Alice", "Bob"] {
+            let feed = try SavedFeed(preferencesHTML: "<a href='/saved.rss?feed=private&amp;user=\(owner)'>Saved</a>")
+            XCTAssertEqual(feed.username, owner.lowercased())
+        }
+    }
+
+    func testDiscoveryRequiresPrivateSavedFeed() {
+        for html in ["<html>Log in</html>",
+                     "<a href='/.rss?feed=private&amp;user=Alice'>Front</a>",
+                     "<a href='/saved.rss?user=Alice'>Missing credential</a>"] {
+            XCTAssertThrowsError(try SavedFeed(preferencesHTML: html))
+        }
+    }
+
     func testPrivateSavedLinkAndPaginationPreserveCredential() throws {
         let html = """
         <a href="https://old.reddit.com/.rss?feed=front&amp;user=Alice">RSS</a>
@@ -46,6 +72,7 @@ final class SavedFeedTests: XCTestCase {
             "/saved.json?feed=secret&user=Alice"
         ]
         for link in links {
+            XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<a href='\(link)'>RSS</a>"), link)
             XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<a href='\(link)'>RSS</a>", username: "Alice"), link)
         }
         XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<html>Log in</html>", username: "Alice"))
