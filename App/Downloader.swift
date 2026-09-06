@@ -218,6 +218,28 @@ struct UserCollection: Codable, Identifiable, Equatable {
         saveCollections()
     }
 
+    func deleteDownloads(for id: String) {
+        guard !running, let collection = collections.first(where: { $0.id == id }) else { return }
+
+        let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
+        try? fm.removeItem(at: folder)
+        collections.removeAll { $0.id == id }
+        saveCollections()
+
+        guard activeUser == id else { return }
+        if let next = liveCollections.first ?? collections.first {
+            activeUser = next.id
+            display(next)
+            UserDefaults.standard.set(next.id, forKey: "lastUsername")
+        } else {
+            activeUser = nil
+            username = ""
+            UserDefaults.standard.removeObject(forKey: "lastUsername")
+        }
+        status = ""
+        reload()
+    }
+
     func deleteAllDownloads() {
         guard !running else { return }
         let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?

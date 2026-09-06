@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var settingsPresented = false
+    @State private var collectionPendingDeletion: UserCollection?
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -43,6 +44,19 @@ struct ContentView: View {
             }
             .sheet(item: $export) { item in
                 ExportSheet(files: item.files).ignoresSafeArea()
+            }
+            .confirmationDialog("Supprimer les médias téléchargés ?", isPresented: Binding(
+                get: { collectionPendingDeletion != nil },
+                set: { if !$0 { collectionPendingDeletion = nil } }
+            ), titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    guard let collection = collectionPendingDeletion else { return }
+                    model.deleteDownloads(for: collection.id)
+                    collectionPendingDeletion = nil
+                }
+                Button("Annuler", role: .cancel) { collectionPendingDeletion = nil }
+            } message: {
+                Text("Tous les médias de \(collectionPendingDeletion?.displayName ?? "cette source") seront définitivement effacés.")
             }
             .alert("Téléchargement interrompu", isPresented: Binding(
                 get: { model.errorMessage != nil },
@@ -243,6 +257,9 @@ struct ContentView: View {
             }
             Button { model.download(user: collection.id) } label: {
                 Label("Reprendre le téléchargement", systemImage: "arrow.clockwise")
+            }
+            Button(role: .destructive) { collectionPendingDeletion = collection } label: {
+                Label("Delete", systemImage: "trash")
             }
         }
     }
