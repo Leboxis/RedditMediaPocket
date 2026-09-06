@@ -76,7 +76,7 @@ enum NetworkError: LocalizedError {
     func data(_ url: URL, bearer: String? = nil) async throws -> Data {
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
-        let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss")
+        let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
         if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 { return cached.data }
         let req = try await request(url, bearer: bearer)
         let (data, response) = try await session.data(for: req)
@@ -87,6 +87,35 @@ enum NetworkError: LocalizedError {
             rssCache[url] = (Date(), data)
         }
         return data
+    }
+
+    func savedFeed(username: String) async throws -> SavedFeed {
+        await RedditSession.shared.refresh()
+        guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
+        do {
+            let html = try await data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
+            try Task.checkCancellation()
+            return try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            throw NetworkError.invalid("Reddit refuse l’accès aux flux privés (HTTP \(code)). Ouvre la connexion dans les Réglages, vérifie le compte et les flux RSS privés dans prefs/feeds, puis relance.")
+        }
+    }
+
+    func savedPosts(_ feed: SavedFeed, after: String?) async throws -> [Post] {
+        do {
+            let body = try await data(feed.pageURL(after: after))
+            try Task.checkCancellation()
+            return try FeedParser.parse(body)
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            if case NetworkError.limited = error { throw error }
+            if case NetworkError.refused(let code) = error {
+                throw NetworkError.invalid("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)). Vérifie la session et l’activation des flux RSS privés dans prefs/feeds. Aucune nouvelle tentative automatique.")
+            }
+            // URLSession errors can contain the private URL: never expose its token.
+            throw NetworkError.invalid("Impossible de lire le flux privé des sauvegardés. Vérifie la connexion et les flux RSS privés dans les préférences Reddit, puis relance.")
+        }
     }
     func download(_ url: URL) async throws -> URL {
         let req = try await request(url, bearer: nil)

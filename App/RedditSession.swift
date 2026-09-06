@@ -48,15 +48,24 @@ struct RedditLogin: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = RedditSession.shared
     @State private var message = ""
+    @State private var showsFeedPreferences = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary).padding(10) }
-                RedditWebLogin(message: $message).frame(maxWidth: .infinity, maxHeight: .infinity)
+                RedditWebLogin(message: $message, showsFeedPreferences: showsFeedPreferences)
+                    .id(showsFeedPreferences)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .navigationTitle(session.hasSession ? "Reddit · session détectée" : "reddit.com")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(showsFeedPreferences ? "Connexion" : "Flux privés") {
+                        showsFeedPreferences.toggle()
+                        message = showsFeedPreferences ? "Active les flux RSS privés dans Reddit pour télécharger tes sauvegardés, puis ferme cette fenêtre." : ""
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await session.refresh(); dismiss() } } label: { Image(systemName: "xmark") }
                         .accessibilityLabel("Fermer la connexion")
@@ -69,6 +78,7 @@ struct RedditLogin: View {
 
 private struct RedditWebLogin: UIViewControllerRepresentable {
     @Binding var message: String
+    let showsFeedPreferences: Bool
     func makeCoordinator() -> Coordinator { Coordinator(message: $message) }
     func makeUIViewController(context: Context) -> UIViewController {
         let configuration = WKWebViewConfiguration()
@@ -76,7 +86,8 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
-        view.load(URLRequest(url: URL(string: "https://www.reddit.com/login/")!))
+        let address = showsFeedPreferences ? "https://old.reddit.com/prefs/feeds/" : "https://www.reddit.com/login/"
+        view.load(URLRequest(url: URL(string: address)!))
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -124,6 +135,9 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let url = request.url, url.scheme == "https" else { completionHandler(nil); return }
+        if let source = response.url, !SavedFeed.allowsRedirect(from: source, to: url) {
+            completionHandler(nil); return
+        }
         Task { @MainActor in
             var redirected = request
             redirected.setValue(nil, forHTTPHeaderField: "Cookie")

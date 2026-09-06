@@ -1,0 +1,63 @@
+import XCTest
+@testable import MediaCore
+
+final class SavedFeedTests: XCTestCase {
+    func testPrivateSavedLinkAndPaginationPreserveCredential() throws {
+        let html = """
+        <a href="https://old.reddit.com/.rss?feed=front&amp;user=Alice">RSS</a>
+        <a class="feedlink rss-link"
+           href="https://old.reddit.com/saved.rss?feed=a%2Bb%26c&amp;user=Alice">RSS</a>
+        """
+        let feed = try SavedFeed(preferencesHTML: html, username: "alice")
+        let first = URLComponents(url: feed.pageURL(), resolvingAgainstBaseURL: false)!
+        XCTAssertEqual(first.path, "/saved.rss")
+        XCTAssertEqual(first.queryItems?.first { $0.name == "feed" }?.value, "a+b&c")
+        XCTAssertEqual(first.queryItems?.first { $0.name == "user" }?.value, "Alice")
+        XCTAssertEqual(first.queryItems?.first { $0.name == "limit" }?.value, "100")
+        XCTAssertNil(first.queryItems?.first { $0.name == "after" })
+        let next = URLComponents(url: feed.pageURL(after: "t1_comment"), resolvingAgainstBaseURL: false)!
+        XCTAssertEqual(next.queryItems?.first { $0.name == "feed" }?.value, "a+b&c")
+        XCTAssertEqual(next.queryItems?.first { $0.name == "after" }?.value, "t1_comment")
+    }
+
+    func testUserScopedAndRelativeLinks() throws {
+        for link in ["/user/Alice/saved.rss", "https://www.reddit.com/user/Alice/saved.rss"] {
+            let feed = try SavedFeed(preferencesHTML: "<a href='\(link)?feed=secret&#38;user=Alice'>RSS</a>", username: "Alice")
+            XCTAssertEqual(feed.pageURL().path, "/user/Alice/saved.rss")
+        }
+    }
+
+    func testWrongAccountHasActionableError() {
+        XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<a href='/saved.rss?feed=secret&amp;user=Bob'>RSS</a>", username: "Alice")) {
+            guard case SavedFeedError.wrongAccount = $0 else { return XCTFail("Expected wrong account") }
+        }
+    }
+
+    func testRejectsMissingAmbiguousAndUntrustedCredentials() {
+        let links = [
+            "https://evil.example/saved.rss?feed=secret&user=Alice",
+            "https://reddit.com.evil.example/saved.rss?feed=secret&user=Alice",
+            "http://old.reddit.com/saved.rss?feed=secret&user=Alice",
+            "https://evil@old.reddit.com/saved.rss?feed=secret&user=Alice",
+            "/saved.rss?user=Alice", "/saved.rss?feed=&user=Alice",
+            "/saved.rss?feed=secret&user=Alice&user=Bob",
+            "/saved.rss?feed=secret&feed=other&user=Alice",
+            "/user/Bob/saved.rss?feed=secret&user=Alice",
+            "/saved.json?feed=secret&user=Alice"
+        ]
+        for link in links {
+            XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<a href='\(link)'>RSS</a>", username: "Alice"), link)
+        }
+        XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<html>Log in</html>", username: "Alice"))
+    }
+
+    func testPrivateFeedRedirectsCannotLeakToken() {
+        let source = URL(string: "https://old.reddit.com/saved.rss?feed=secret&user=Alice")!
+        XCTAssertTrue(SavedFeed.containsCredential(source))
+        XCTAssertTrue(SavedFeed.allowsRedirect(from: source, to: source))
+        for target in ["https://evil.example/saved.rss?feed=secret", "https://old.reddit.com/login?feed=secret", "http://old.reddit.com/saved.rss?feed=secret"] {
+            XCTAssertFalse(SavedFeed.allowsRedirect(from: source, to: URL(string: target)!))
+        }
+        XCTAssertTrue(SavedFeed.allowsRedirect(from: URL(string: "https://www.reddit.com/")!, to: URL(string: "https://old.reddit.com/")!))
+    }
+}

@@ -275,9 +275,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // Même résolution que l'aperçu UI ; l'erreur exacte (pseudo ou sub) remonte.
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         let source = try FeedSource.parse(text)
-        if case .saved = source, !RedditSession.shared.hasSession {
-            throw FeedError.loginRequired
-        }
+        let privateFeed: SavedFeed?
+        if case .saved(let name) = source {
+            status = "Vérification du compte et du flux privé…"
+            privateFeed = try await network.savedFeed(username: name)
+        } else { privateFeed = nil }
         let canonical = source.id
         UserDefaults.standard.set(canonical, forKey: "lastUsername")
         activeUser = canonical
@@ -293,16 +295,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for _ in 1...100 {
             try Task.checkCancellation()
             status = "Recherche…"
-            let data = try await network.data(source.feedURL(sort: subSort, after: after))
             let posts: [Post]
-            do {
-                posts = try FeedParser.parse(data)
-            } catch FeedError.invalidFeed {
-                // Session expirée en cours de route ou mauvais pseudo : message actionnable.
-                if case .saved = source {
-                    throw NetworkError.invalid("Sauvegardés inaccessibles : reconnecte-toi dans les Réglages et vérifie que le pseudo est celui du compte connecté.")
-                }
-                throw FeedError.invalidFeed
+            if let privateFeed {
+                posts = try await network.savedPosts(privateFeed, after: after)
+            } else {
+                posts = try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
             }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
@@ -321,7 +318,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
                 try await self.saveUnlessLimited(item)
             }
-            guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }
+            // Saved listings can contain comments as well as posts.
+            guard let last = posts.last?.id,
+                  last.hasPrefix("t3_") || (privateFeed != nil && last.hasPrefix("t1_")) else { break }
             after = last
         }
         if let index = collections.firstIndex(where: { $0.id == canonical }) {

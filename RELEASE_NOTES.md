@@ -1,3 +1,10 @@
+Correction de l’authentification des sauvegardés.
+
+- Récupération du lien RSS privé du compte connecté au lieu d’un simple `saved.rss` avec cookies.
+- Vérification du pseudo, conservation du jeton sur chaque page et pagination après les commentaires sauvegardés.
+- Bouton « Flux privés » dans la connexion Reddit pour activer cette option si nécessaire.
+- Messages explicites pour les refus HTTP et les flux privés indisponibles ; aucun jeton conservé sur disque ou affiché dans les erreurs.
+
 Téléchargement des éléments sauvegardés du compte.
 
 - Troisième position du sélecteur (`♥`) : saisir le pseudo du compte connecté.

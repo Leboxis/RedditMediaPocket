@@ -36,8 +36,8 @@ public enum FeedError: LocalizedError {
 
 /// Source d'un parcours RSS : profil utilisateur, subreddit ou éléments
 /// sauvegardés du compte connecté. Les trois exposent le même format Atom,
-/// donc le même `FeedParser` s'applique. `saved` exige une session Reddit :
-/// les cookies sont joints automatiquement aux requêtes `reddit.com`.
+/// donc le même `FeedParser` s'applique. Pour `saved`, résoudre le lien privé
+/// avec `SavedFeed` depuis les préférences du compte connecté avant le parcours.
 public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)
@@ -98,7 +98,8 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// URL RSS d'une page. `after` est le curseur `t3_…` du dernier post vu.
+    /// URL RSS publique (non authentifiée pour saved ; utiliser SavedFeed).
+    /// `after` est le curseur `t3_…` du dernier post vu.
     /// `sort` ne s'applique qu'aux subreddits (`new`, `hot`, `top` + `t=month`).
     public func feedURL(sort: String = "new", after: String? = nil) -> URL {
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
