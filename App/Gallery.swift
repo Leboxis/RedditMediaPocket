@@ -94,11 +94,21 @@ struct MediaPreview: View {
             HStack(spacing: 8) {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                     .accessibilityLabel("Fermer")
+                Button {
+                    if index > 0 { index -= 1 }
+                } label: { Image(systemName: "chevron.backward").frame(width: 30, height: 44) }
+                    .disabled(index == 0)
+                    .accessibilityLabel("Média précédent")
                 VStack(spacing: 3) {
                     Text(urls[index].lastPathComponent).font(.subheadline.weight(.medium))
                         .lineLimit(1).truncationMode(.middle)
                     Text("\(index + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
+                Button {
+                    if index < urls.count - 1 { index += 1 }
+                } label: { Image(systemName: "chevron.forward").frame(width: 30, height: 44) }
+                    .disabled(index == urls.count - 1)
+                    .accessibilityLabel("Média suivant")
                 ShareLink(item: urls[index]) {
                     Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
                 }.accessibilityLabel("Partager ce média")
@@ -174,7 +184,7 @@ private struct MediaPager: UIViewControllerRepresentable {
             guard position != parent.index, parent.index >= 0, parent.index < parent.urls.count else { return }
             let direction: UIPageViewController.NavigationDirection = parent.index > position ? .forward : .reverse
             position = parent.index
-            pager.setViewControllers([host(for: position)], direction: direction, animated: false)
+            pager.setViewControllers([host(for: position)], direction: direction, animated: true)
             refreshActiveStates()
             trimDistantHosts()
         }
@@ -209,7 +219,8 @@ struct MediaPage: View {
         ZStack {
             Color.black
             if isVideo(url) {
-                if let player { VideoPlayer(player: player) }
+                if let player { VideoLayer(player: player).ignoresSafeArea() }
+                else { ProgressView().tint(.white) }
             } else if url.pathExtension.lowercased() == "gif" {
                 if active { AnimatedImage(url: url) }
             } else if let image {
@@ -243,6 +254,24 @@ struct MediaPage: View {
             player?.play()
         } else { player?.pause() }
     }
+}
+
+private struct VideoLayer: UIViewRepresentable {
+    let player: AVPlayer
+    func makeUIView(context: Context) -> PlayerContainer {
+        let container = PlayerContainer()
+        container.playerLayer.player = player
+        return container
+    }
+    func updateUIView(_ view: PlayerContainer, context: Context) { view.playerLayer.player = player }
+    static func dismantleUIView(_ view: PlayerContainer, coordinator: ()) { view.playerLayer.player = nil }
+}
+
+private final class PlayerContainer: UIView {
+    let playerLayer = AVPlayerLayer()
+    override init(frame: CGRect) { super.init(frame: frame); layer.addSublayer(playerLayer) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+    override func layoutSubviews() { super.layoutSubviews(); playerLayer.frame = bounds }
 }
 
 private struct AnimatedImage: UIViewRepresentable {
@@ -284,6 +313,7 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
         backgroundColor = .black; delegate = self
         minimumZoomScale = 1; maximumZoomScale = 4
         showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
+        panGestureRecognizer.isEnabled = false
         imageView.contentMode = .scaleAspectFit
         addSubview(imageView)
         let tap = UITapGestureRecognizer(target: self, action: #selector(doubleTap(_:)))
@@ -303,6 +333,14 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
             return false
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
+    }
+    func scrollViewDidZoom() {
+        // At zoom 1 the scroll view must not participate in horizontal panning at all,
+        // otherwise its bounce backing board competes with the pager swipe.
+        let atMinimum = zoomScale <= minimumZoomScale + .leastNormalMagnitude
+        panGestureRecognizer.isEnabled = !atMinimum
+        bounces = !atMinimum
+        isDirectionalLockEnabled = !atMinimum
     }
     @objc private func doubleTap(_ gesture: UITapGestureRecognizer) {
         if zoomScale > 1 { setZoomScale(1, animated: true) }
