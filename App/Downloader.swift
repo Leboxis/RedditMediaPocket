@@ -128,7 +128,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func loadCollections() {
         if let data = UserDefaults.standard.data(forKey: "collections"),
            let saved = try? JSONDecoder().decode([UserCollection].self, from: data) {
-            collections = saved
+            collections = saved.map {
+                var collection = $0
+                collection.archived = false
+                return collection
+            }
+            if saved.contains(where: \.archived) { saveCollections() }
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
             // Anciennes versions : pseudo nu sans préfixe ; versions récentes : `u/…` ou `r/…`.
@@ -179,13 +184,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
         display(collection)
         UserDefaults.standard.set(collection.id, forKey: "lastUsername")
         reload()
-    }
-
-    func setArchived(_ id: String, _ archived: Bool) {
-        guard !running, let index = collections.firstIndex(where: { $0.id == id }) else { return }
-        collections[index].archived = archived
-        saveCollections()
-        if collections[index].id == activeUser { reload() }
     }
 
     func download(user id: String) {

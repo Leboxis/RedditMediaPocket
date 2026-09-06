@@ -144,7 +144,7 @@ struct ContentView: View {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(model.collections.sorted { $0.archived != $1.archived ? !$0.archived : $0.displayName < $1.displayName }) { collection in
+                        ForEach(model.collections.sorted { $0.displayName < $1.displayName }) { collection in
                             userChip(collection)
                         }
                     }
@@ -234,27 +234,18 @@ struct ContentView: View {
         let active = model.activeUser == collection.id
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.archived ? "archivebox" : (collection.isSaved ? "bookmark.fill" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))
                 Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 11).padding(.vertical, 7)
             .frame(minHeight: 44)
-            .foregroundStyle(active ? Color.white : (collection.archived ? Color.secondary : Color.primary))
+            .foregroundStyle(active ? Color.white : Color.primary)
             .background(active ? Color.orange : Color(uiColor: .secondarySystemBackground), in: Capsule())
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if collection.archived {
-                Button { model.setArchived(collection.id, false) } label: {
-                    Label("Retirer des archives", systemImage: "tray.and.arrow.up")
-                }
-            } else {
-                Button { model.setArchived(collection.id, true) } label: {
-                    Label("Archiver", systemImage: "archivebox")
-                }
-            }
             Button { model.download(user: collection.id) } label: {
                 Label("Reprendre le téléchargement", systemImage: "arrow.clockwise")
             }
