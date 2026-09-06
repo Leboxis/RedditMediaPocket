@@ -103,17 +103,8 @@ struct MediaPreview: View {
                     Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
                 }.accessibilityLabel("Partager ce média")
             }.padding(.horizontal, 8).padding(.vertical, 4)
-            TabView(selection: $index) {
-                ForEach(urls.indices, id: \.self) { position in
-                    Group {
-                        if abs(position - index) <= 1 {
-                            MediaPage(url: urls[position], active: position == index)
-                        } else { Color.black }
-                    }.tag(position)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea(edges: .bottom)
+            MediaPager(urls: urls, index: $index)
+                .ignoresSafeArea(edges: .bottom)
         }
         .background(Color.black.ignoresSafeArea())
         .foregroundStyle(.white).tint(.white)
@@ -121,7 +112,94 @@ struct MediaPreview: View {
     }
 }
 
-private struct MediaPage: View {
+private struct MediaPager: UIViewControllerRepresentable {
+    let urls: [URL]
+    @Binding var index: Int
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIViewController(context: Context) -> UIPageViewController {
+        let pager = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal)
+        pager.dataSource = context.coordinator
+        pager.delegate = context.coordinator
+        pager.view.backgroundColor = .black
+        context.coordinator.attach(to: pager)
+        return pager
+    }
+
+    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.syncIfNeeded(pager: pager)
+    }
+
+    final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
+        var parent: MediaPager
+        private var position: Int
+        private var hosts: [UIHostingController<MediaPage>?]
+
+        init(parent: MediaPager) {
+            self.parent = parent
+            self.position = min(max(parent.index, 0), max(parent.urls.count - 1, 0))
+            self.hosts = Array(repeating: nil, count: parent.urls.count)
+        }
+
+        private func host(for slot: Int) -> UIHostingController<MediaPage> {
+            if let existing = hosts[slot] { return existing }
+            let host = UIHostingController(rootView: MediaPage(url: parent.urls[slot], active: slot == position))
+            host.view.backgroundColor = .black
+            hosts[slot] = host
+            return host
+        }
+
+        private func slot(of controller: UIViewController) -> Int? {
+            hosts.firstIndex { $0 === controller }
+        }
+
+        private func refreshActiveStates() {
+            for slot in hosts.indices where hosts[slot] != nil {
+                hosts[slot]?.rootView = MediaPage(url: parent.urls[slot], active: slot == position)
+            }
+        }
+
+        private func trimDistantHosts() {
+            for slot in hosts.indices where abs(slot - position) > 1 { hosts[slot] = nil }
+        }
+
+        func attach(to pager: UIPageViewController) {
+            guard !parent.urls.isEmpty else { return }
+            pager.setViewControllers([host(for: position)], direction: .forward, animated: false)
+        }
+
+        func syncIfNeeded(pager: UIPageViewController) {
+            guard position != parent.index, parent.index >= 0, parent.index < parent.urls.count else { return }
+            let direction: UIPageViewController.NavigationDirection = parent.index > position ? .forward : .reverse
+            position = parent.index
+            pager.setViewControllers([host(for: position)], direction: direction, animated: false)
+            refreshActiveStates()
+            trimDistantHosts()
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController, viewControllerBefore viewController: UIViewController) -> UIViewController? {
+            guard let slot = slot(of: viewController), slot > 0 else { return nil }
+            return host(for: slot - 1)
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController, viewControllerAfter viewController: UIViewController) -> UIViewController? {
+            guard let slot = slot(of: viewController), slot < parent.urls.count - 1 else { return nil }
+            return host(for: slot + 1)
+        }
+
+        func pageViewController(_ pageViewController: UIPageViewController, didFinishAnimating finished: Bool, previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+            guard completed, let current = pageViewController.viewControllers?.first, let slot = slot(of: current) else { return }
+            position = slot
+            parent.index = slot
+            refreshActiveStates()
+            trimDistantHosts()
+        }
+    }
+}
+
+struct MediaPage: View {
     let url: URL
     let active: Bool
     @State private var image: UIImage?

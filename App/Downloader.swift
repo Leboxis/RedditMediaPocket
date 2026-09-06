@@ -109,6 +109,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
         saveCollections()
     }
 
+    func deleteAllDownloads() {
+        guard !running else { return }
+        let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && $0.lastPathComponent != "Inbox" } ?? []
+        folders.forEach { try? fm.removeItem(at: $0) }
+        collections = []
+        saveCollections()
+        activeUser = nil
+        username = ""
+        UserDefaults.standard.removeObject(forKey: "lastUsername")
+        status = ""
+        reload()
+    }
+
     func reload() {
         guard let activeUser else { files = []; totalBytes = 0; return }
         let folder = root.appendingPathComponent(activeUser, isDirectory: true)

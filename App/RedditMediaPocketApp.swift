@@ -212,6 +212,7 @@ private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
     @ObservedObject private var reddit = RedditSession.shared
     @State private var loginPresented = false
+    @State private var confirmDeleteAll = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -238,8 +239,21 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(model.running ? "Arrête les transferts pour modifier la session." : "Session locale. Les limites Reddit restent applicables.")
                 }
+                Section {
+                    Button("Supprimer tous les téléchargements", role: .destructive) { confirmDeleteAll = true }
+                        .disabled(model.running)
+                        .foregroundStyle(.red)
+                } footer: {
+                    Text("Efface les médias et les archives de tous les utilisateurs. Irréversible.")
+                }
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
+            .confirmationDialog("Supprimer tous les téléchargements ?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+                Button("Tout supprimer", role: .destructive) { model.deleteAllDownloads() }
+                Button("Annuler", role: .cancel) { }
+            } message: {
+                Text("Tous les médias téléchargés seront définitivement effacés.")
+            }
             .navigationTitle("Réglages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
