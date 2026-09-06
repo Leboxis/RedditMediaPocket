@@ -9,14 +9,14 @@ final class SavedFeedTests: XCTestCase {
         <a href="/user/Alice/saved/.rss?feed=private&amp;user=Alice">Saved</a>
         """
         let feed = try SavedFeed(preferencesHTML: html)
-        XCTAssertEqual(feed.username, "alice")
+        XCTAssertEqual(feed.username, "Alice")
         XCTAssertEqual(feed.pageURL().path, "/user/Alice/saved/.rss")
     }
 
     func testDiscoveryUsesNewAccountOnEachRun() throws {
         for owner in ["Alice", "Bob"] {
             let feed = try SavedFeed(preferencesHTML: "<a href='/saved.rss?feed=private&amp;user=\(owner)'>Saved</a>")
-            XCTAssertEqual(feed.username, owner.lowercased())
+            XCTAssertEqual(feed.username, owner)
         }
     }
 
