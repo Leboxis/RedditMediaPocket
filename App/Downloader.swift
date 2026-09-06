@@ -80,6 +80,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published var limitNotice = ""
     private var limitedServices: [String: Date] = [:]
     private var skipped = 0
+    private var failed = 0
     private let network = Network()
     private var task: Task<Void, Never>?
     private var tokenTask: Task<String, Error>?
@@ -226,7 +227,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
         errorMessage = nil
-        running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
+        running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; failed = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
             do { try await run() }
@@ -287,7 +288,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
             collections[index].lastRun = Date()
             saveCollections()
         }
-        status = skipped > 0 ? "\(count) reçus · \(skipped) à reprendre" : (count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés")
+        if failed == 0 {
+            status = skipped > 0 ? "\(count) reçus · \(skipped) à reprendre" : (count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés")
+        } else {
+            var summary = count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés"
+            if skipped > 0 { summary += " · \(skipped) à reprendre" }
+            summary += " · \(failed) inaccessible\(failed > 1 ? "s" : "")"
+            status = summary
+        }
     }
 
     private func saveUnlessLimited(_ item: Download) async throws {
@@ -300,6 +308,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 "\($0.key) · \($0.value.formatted(date: .numeric, time: .shortened))"
             }.joined(separator: " — ")
             // Keep processing the other services. Blocked requests fail locally without contacting them.
+        } catch {
+            // Un média supprimé ou inaccessible (ex. HTTP 404) ne doit pas annuler
+            // tout le parcours : on le comptabilise et on continue avec les autres.
+            // Seules l'annulation et les erreurs de flux RSS restent fatales.
+            if error is CancellationError { throw error }
+            try Task.checkCancellation()
+            failed += 1
+            print("Pocket: média inaccessible ignoré (\(item.media.key)) : \(error.localizedDescription)")
         }
     }
 

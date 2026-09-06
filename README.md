@@ -59,13 +59,13 @@ Si le dépôt porte un autre nom, adapter cette URL ; le workflow utilise automa
 | Autres hébergeurs / galeries Imgur | Non pris en charge |
 | Privé, supprimé, accès soumis à connexion | Non accessible |
 
-RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Les échecs de résolution arrêtent la session et restent visibles ; aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué.
+RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS et l'annulation arrêtent la session et restent visibles.
 
 ## Comportement réseau et stockage
 
 - Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Les départs sont espacés par service : 7 secondes pour le RSS, 2 secondes pour les métadonnées RedGIFs, 1 seconde pour les médias. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
-- Un HTTP 429 conserve le délai `Retry-After` par service entre lancements (15 minutes par défaut). Les médias des autres services déjà découverts continuent. Une limite sur le flux RSS arrête la découverte des pages suivantes. Les autres erreurs arrêtent la session.
+- Un HTTP 429 conserve le délai `Retry-After` par service entre lancements (15 minutes par défaut). Les médias des autres services déjà découverts continuent. Une limite sur le flux RSS arrête la découverte des pages suivantes. Les erreurs du flux RSS arrêtent la session ; les erreurs portant sur un seul média l'ignorent et continuent le parcours.
 - Reprise par fichiers complets : relancer le pseudo saute les URLs déjà enregistrées. Un transfert interrompu recommence depuis le début. Le parcours RSS repart de la première page.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
 - Garder l'application au premier plan. Le prototype n'implémente pas de service de téléchargement en arrière-plan.

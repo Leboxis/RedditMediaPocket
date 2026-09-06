@@ -1,3 +1,9 @@
+Les médias inaccessibles n'arrêtent plus le parcours.
+
+- Un post supprimé (HTTP 404 et similaires) est ignoré et compté « inaccessible » ; le téléchargement continue avec les autres médias.
+- Seules les erreurs du flux RSS et l'annulation interrompent la session.
+- Indispensable sur les subreddits volumineux, où un contenu supprimé est quasi garanti.
+
 Téléchargement depuis les subreddits.
 
 - Saisie `u/pseudo` ou `r/sub` ; les archives existantes restent des profils.
