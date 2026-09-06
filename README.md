@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil), `r/` (subreddit) ou `♥` (sauvegardés du compte) puis on saisit le nom — coller `u/pseudo`, `r/sub` ou `saved/pseudo` en entier fonctionne aussi — et l'application enregistre les médias directs accessibles depuis son flux RSS public, sans compte ni API JSON Reddit.
+Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil), `r/` (subreddit) ou `♥` (sauvegardés du compte) puis on saisit le nom — coller `u/pseudo`, `r/sub` ou `saved/pseudo` en entier fonctionne aussi — et l'application enregistre les médias directs accessibles depuis les flux RSS publics pour les profils et subreddits, ou le flux JSON privé pour les sauvegardés du compte connecté.
 
 ## État réel
 
@@ -12,7 +12,7 @@ Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouve
 
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
 
-Sauvegardés (`♥`) : saisir le pseudo du compte connecté. Exige une session active (Réglages → Se connecter à Reddit) ; sans session, le lancement est bloqué avec un message explicite. Le flux `saved.rss` suit les mêmes règles (100 pages, troncature, session expirée = erreur avec conseil de reconnexion). Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
+Sauvegardés (`♥`) : connecte-toi à Reddit dans les Réglages, sélectionne ♥ puis lance le téléchargement ; le champ peut rester vide. Le compte est détecté via `api/me.json` dans la session WebKit de connexion, puis ses éléments sont lus via `saved.json` dans cette même session (aucun accès à `saved.rss`). Le pseudo saisi précédemment est remplacé par le compte réellement connecté. Les publications, commentaires contenant des liens, galeries et crossposts sont pris en charge avec le curseur `after` fourni par Reddit, jusqu’à 100 pages et dans les limites de visibilité de Reddit. Une réponse 401/403 affiche un conseil de reconnexion ; une réponse 429 conserve le délai serveur, sans nouvelle tentative automatique. Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
 
 ## Créer le dépôt et lancer la compilation
 
