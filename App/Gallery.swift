@@ -283,6 +283,7 @@ private struct AnimatedImage: UIViewRepresentable {
         let view = WKWebView(frame: .zero, configuration: config)
         view.isOpaque = false; view.backgroundColor = .black; view.scrollView.backgroundColor = .black
         view.scrollView.isScrollEnabled = false
+        view.scrollView.panGestureRecognizer.isEnabled = false
         view.scrollView.bounces = false
         let html = """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
@@ -334,7 +335,7 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
-    func scrollViewDidZoom() {
+    func scrollViewDidZoom(_ scrollView: UIScrollView) {
         // At zoom 1 the scroll view must not participate in horizontal panning at all,
         // otherwise its bounce backing board competes with the pager swipe.
         let atMinimum = zoomScale <= minimumZoomScale + .leastNormalMagnitude
