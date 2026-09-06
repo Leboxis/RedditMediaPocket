@@ -95,7 +95,7 @@ struct MediaPreview: View {
                     .accessibilityLabel("Fermer")
                 Button {
                     if index > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index -= 1 } }
-                } label: { Image(systemName: "chevron.backward").frame(width: 30, height: 44) }
+                } label: { Image(systemName: "chevron.backward").frame(width: 44, height: 44) }
                     .disabled(index == 0)
                     .accessibilityLabel("Média précédent")
                 VStack(spacing: 3) {
@@ -105,7 +105,7 @@ struct MediaPreview: View {
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 Button {
                     if index < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index += 1 } }
-                } label: { Image(systemName: "chevron.forward").frame(width: 30, height: 44) }
+                } label: { Image(systemName: "chevron.forward").frame(width: 44, height: 44) }
                     .disabled(index == urls.count - 1)
                     .accessibilityLabel("Média suivant")
                 ShareLink(item: urls[index]) {

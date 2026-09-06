@@ -62,15 +62,8 @@ struct ContentView: View {
 
     private var inputRow: some View {
         HStack(spacing: 12) {
-            Picker("Type de source", selection: $model.sourceKind) {
-                Text("u/").tag("u")
-                Text("r/").tag("r")
-                Text("♥").tag("saved")
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 148)
-            .disabled(model.running)
-            .accessibilityLabel("Profil utilisateur, subreddit ou éléments sauvegardés")
+            SourceKindToggle(kind: $model.sourceKind)
+                .disabled(model.running)
             TextField(model.sourceKind == "saved" ? "pseudo du compte" : (model.sourceKind == "r" ? "nom du sub" : "pseudo"), text: $model.username)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.go).focused($editing)
@@ -145,12 +138,15 @@ struct ContentView: View {
     }
 
     private var metricsRow: some View {
-        HStack(spacing: 0) {
+        // Les 3 slots sont toujours rendus (opacity) pour ne pas redistribuer
+        // les largeurs quand « repérés » apparaît en cours de run.
+        let showProgress = model.running || model.discovered > 0
+        return HStack(spacing: 0) {
             metric("\(model.files.count)", label: "médias")
             metric(model.totalSize, label: "")
-            if model.running || model.discovered > 0 {
-                metric("\(model.count)/\(model.discovered)", label: "repérés")
-            }
+            metric("\(model.count)/\(model.discovered)", label: "repérés")
+                .opacity(showProgress ? 1 : 0)
+                .accessibilityHidden(!showProgress)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
     }
@@ -200,7 +196,7 @@ struct ContentView: View {
                     Image(systemName: "square.and.arrow.up")
                 }
                 .disabled(model.files.isEmpty)
-                .accessibilityLabel("Exporter les médias de l’utilisateur")
+                .accessibilityLabel("Exporter les médias affichés")
             }
         }
     }
@@ -225,6 +221,7 @@ struct ContentView: View {
             }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 11).padding(.vertical, 7)
+            .frame(minHeight: 44)
             .foregroundStyle(active ? Color.white : (collection.archived ? Color.secondary : Color.primary))
             .background(active ? Color.orange : Color(uiColor: .secondarySystemBackground), in: Capsule())
         }
@@ -249,6 +246,43 @@ struct ContentView: View {
         guard !model.running else { return }
         editing = false
         model.start()
+    }
+}
+
+/// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
+/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → ♥.
+private struct SourceKindToggle: View {
+    @Binding var kind: String
+    @State private var halfFlip = false
+
+    private func next(_ current: String) -> String {
+        current == "u" ? "r" : (current == "r" ? "saved" : "u")
+    }
+    private func face(_ current: String) -> String {
+        current == "r" ? "r/" : (current == "saved" ? "♥" : "u/")
+    }
+    private func spoken(_ current: String) -> String {
+        current == "r" ? "subreddit" : (current == "saved" ? "sauvegardés" : "profil")
+    }
+
+    var body: some View {
+        Button {
+            guard !halfFlip else { return }
+            withAnimation(.easeInOut(duration: 0.16)) { halfFlip = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+                kind = next(kind)
+                withAnimation(.easeInOut(duration: 0.16)) { halfFlip = false }
+            }
+        } label: {
+            Text(face(kind))
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 52, height: 48)
+                .foregroundStyle(.orange)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .rotation3DEffect(.degrees(halfFlip ? 90 : 0), axis: (x: 0, y: 1, z: 0))
+        .accessibilityLabel("Source : \(spoken(kind)). Touchez pour changer.")
     }
 }
 
