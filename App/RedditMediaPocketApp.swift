@@ -88,7 +88,7 @@ struct ContentView: View {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(model.collections.sorted { ($0.archived, $0.name) < ($1.archived, $1.name) }) { collection in
+                        ForEach(model.collections.sorted { $0.archived != $1.archived ? !$0.archived : $0.name < $1.name }) { collection in
                             userChip(collection)
                         }
                     }
