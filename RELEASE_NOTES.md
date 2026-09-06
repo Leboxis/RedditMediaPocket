@@ -1,10 +1,8 @@
-Qualité maximale exposée et reprises plus efficaces.
+Réglages des téléchargements.
 
-- Reddit : sélection par résolution, fréquence d’images puis débit ; meilleure piste audio par débit.
-- Assemblage audio/vidéo sans recompression.
-- RedGIFs : HD prioritaire, aucun repli en SD après un échec HD.
-- Images originales conservées sans recompression ; normalisation des suffixes de miniatures Imgur reconnus.
-- Réutilisation des pages RSS pendant 2 minutes dans la session pour réduire les requêtes de reprise.
-- Respect des en-têtes de quota quand présents, en plus de Retry-After.
+- Bouton Réglages dans la galerie.
+- Nombre de médias simultanés réglable de 1 à 6, mémorisé (3 par défaut).
+- Le compteur indique la limite effective de la session.
+- Un changement pendant les transferts s’applique au prochain lancement.
 
-Trois transferts conservés. Aucun débit anonyme garanti sans limitation. Les anciens fichiers restent conservés ; ils ne sont pas automatiquement remplacés. Les manifests segmentés non pris en charge produisent une erreur plutôt qu’un téléchargement en qualité inférieure.
+La qualité maximale et les délais imposés par les serveurs sont conservés. La connexion Reddit par cookies n’est pas intégrée à cette version.

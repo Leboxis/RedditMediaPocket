@@ -115,3 +115,7 @@ Références consultées :
 - Apple : https://developer.apple.com/documentation/avfoundation/avassetexportpresetpassthrough
 - Sélection des formats RedGIFs dans yt-dlp : https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/redgifs.py
 - Modèle d’images et miniatures Imgur : https://api.imgur.com/models/image
+
+## Réglage de la concurrence
+
+La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective, et les délais par service restent respectés. Choisir 1 ou 2 peut aider si les limitations sont fréquentes, sans garantie. La connexion par cookies n’est pas implémentée dans cette version.

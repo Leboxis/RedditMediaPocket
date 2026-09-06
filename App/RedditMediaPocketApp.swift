@@ -14,6 +14,7 @@ struct ContentView: View {
     @StateObject private var model = Downloader()
     @State private var selection: Selection?
     @State private var export: ExportSelection?
+    @State private var settingsPresented = false
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -50,7 +51,7 @@ struct ContentView: View {
                     Spacer()
                     if model.running {
                         ProgressView().controlSize(.small)
-                        Text(model.active > 0 ? "\(model.active)/3 · \(model.count) reçus" : model.status)
+                        Text(model.active > 0 ? "\(model.active)/\(model.sessionLimit) · \(model.count) reçus" : model.status)
                             .monospacedDigit()
                     } else {
                         Text(model.status).lineLimit(2)
@@ -90,6 +91,10 @@ struct ContentView: View {
             .navigationTitle("Pocket")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { settingsPresented = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Réglages")
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { export = ExportSelection(files: model.files) } label: {
                         Image(systemName: "square.and.arrow.up")
@@ -97,6 +102,9 @@ struct ContentView: View {
                     .disabled(model.files.isEmpty)
                     .accessibilityLabel("Exporter tous les médias")
                 }
+            }
+            .sheet(isPresented: $settingsPresented) {
+                DownloadSettings(model: model)
             }
             .sheet(item: $selection) { item in
                 MediaPreview(urls: item.files, selectedURL: item.url).ignoresSafeArea()
@@ -112,5 +120,33 @@ struct ContentView: View {
         guard !model.running else { return }
         editing = false
         model.start()
+    }
+}
+
+private struct DownloadSettings: View {
+    @ObservedObject var model: Downloader
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Stepper(value: $model.concurrentLimit, in: 1...6) {
+                        HStack {
+                            Text("Téléchargements simultanés")
+                            Spacer()
+                            Text("\(model.concurrentLimit)").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                } footer: {
+                    Text(model.running ? "Appliqué au prochain lancement. En cours : \(model.sessionLimit)." : "1 à 6. Un nombre élevé peut augmenter les limitations du serveur.")
+                }
+            }
+            .navigationTitle("Réglages")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("OK") { dismiss() } }
+            }
+        }
+        .tint(.orange)
     }
 }

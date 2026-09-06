@@ -12,7 +12,7 @@ enum NetworkError: LocalizedError {
     }
 }
 
-// Three concurrent media pipelines; service-specific pacing and persistent limits.
+// Configurable bounded media pipelines; service-specific pacing and persistent limits.
 @MainActor final class Network {
     private let session: URLSession
     private var nextRequest: [String: Date] = [:]
@@ -38,7 +38,7 @@ enum NetworkError: LocalizedError {
         config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 1800
-        config.httpMaximumConnectionsPerHost = 3
+        config.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: config)
     }
     private func request(_ url: URL, bearer: String?) async throws -> URLRequest {

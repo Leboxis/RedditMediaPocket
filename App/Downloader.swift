@@ -10,6 +10,10 @@ import MediaCore
     @Published var status = ""
     @Published var files: [URL] = []
     @Published var count = 0
+    @Published var concurrentLimit = max(1, min(6, UserDefaults.standard.object(forKey: "concurrentLimit") as? Int ?? 3)) {
+        didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
+    }
+    @Published private(set) var sessionLimit = 3
     @Published var active = 0
     @Published var limitNotice = ""
     private var limitedServices: [String: Date] = [:]
@@ -41,6 +45,7 @@ import MediaCore
     func stop() { task?.cancel(); tokenTask?.cancel() }
     func start() {
         guard !running else { return }
+        sessionLimit = max(1, min(6, concurrentLimit))
         running = true; count = 0; status = ""; limitNotice = ""; skipped = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
@@ -85,7 +90,7 @@ import MediaCore
                 }
             }
             status = ""
-            try await ConcurrentDownloads.run(downloads, limit: 3) { item in
+            try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
                 try await self.saveUnlessLimited(item)
             }
             guard let last = posts.last?.id, last.hasPrefix("t3_") else { break }

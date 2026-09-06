@@ -11,6 +11,21 @@ private actor TransferProbe {
 }
 
 final class ConcurrentDownloadsTests: XCTestCase {
+    func testConfiguredLimitsOneAndSix() async throws {
+        for limit in [1, 6] {
+            let probe = TransferProbe()
+            try await ConcurrentDownloads.run(Array(0..<12), limit: limit) { id in
+                await probe.start(id)
+                try await Task.sleep(nanoseconds: 20_000_000)
+                await probe.end(id)
+            }
+            let (active, peak, events) = await probe.snapshot()
+            XCTAssertEqual(active, 0)
+            XCTAssertEqual(peak, limit)
+            XCTAssertEqual(events.filter { $0.hasPrefix("end") }.count, 12)
+        }
+    }
+
     func testThreeTransfersRefillWithoutWaitingForSlowest() async throws {
         let probe = TransferProbe()
         try await ConcurrentDownloads.run(Array(0..<9)) { id in
