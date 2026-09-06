@@ -1,7 +1,9 @@
 import SwiftUI
 import MediaCore
 
-@main struct RedditMediaPocketApp: App {
+@main @MainActor struct RedditMediaPocketApp: App {
+    @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate
+    init() { BackgroundDownloads.shared.reconnect() }
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
@@ -18,6 +20,8 @@ struct ContentView: View {
     @State private var export: ExportSelection?
     @State private var settingsPresented = false
     @State private var collectionPendingDeletion: UserCollection?
+    @State private var mediaPendingDeletion: URL?
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -36,6 +40,9 @@ struct ContentView: View {
             .navigationTitle("Pocket")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { model.reload() }
+            }
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
             }
@@ -58,7 +65,20 @@ struct ContentView: View {
             } message: {
                 Text("Tous les médias de \(collectionPendingDeletion?.displayName ?? "cette source") seront définitivement effacés.")
             }
-            .alert("Téléchargement interrompu", isPresented: Binding(
+            .confirmationDialog("Supprimer ce média ?", isPresented: Binding(
+                get: { mediaPendingDeletion != nil },
+                set: { if !$0 { mediaPendingDeletion = nil } }
+            ), titleVisibility: .visible, presenting: mediaPendingDeletion) { url in
+                Button("Delete", role: .destructive) {
+                    model.deleteMedia(url)
+                    mediaPendingDeletion = nil
+                }
+                .disabled(model.running)
+                Button("Annuler", role: .cancel) { mediaPendingDeletion = nil }
+            } message: { url in
+                Text("\(url.lastPathComponent) sera définitivement supprimé. Les autres médias seront conservés.")
+            }
+            .alert("Pocket", isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
             )) {
@@ -197,6 +217,12 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .contentShape(Rectangle())
                         .accessibilityLabel(isVideo(url) ? "Ouvrir la vidéo" : "Ouvrir l’image")
+                        .contextMenu {
+                            Button(role: .destructive) { mediaPendingDeletion = url } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .disabled(model.running)
+                        }
                     }
                 }
             }
@@ -308,6 +334,11 @@ private struct DownloadSettings: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Arrière-plan") {
+                    Text("Les transferts de médias publics déjà démarrés peuvent continuer lorsque Pocket est réduit. iOS décide de leur exécution.")
+                    Text("La recherche de posts et l’assemblage vidéo/audio peuvent attendre le retour dans Pocket. Après une interruption, relance le téléchargement pour récupérer les transferts terminés. Ne force pas la fermeture de l’application.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     Stepper(value: $model.concurrentLimit, in: 1...6) {
                         HStack {

@@ -124,8 +124,17 @@ enum NetworkError: LocalizedError {
         let req = try await request(url, bearer: nil)
         transfers += 1
         defer { transfers -= 1 }
-        let (temp, response) = try await session.download(for: req)
+        let temp: URL
+        let response: URLResponse
+        if req.value(forHTTPHeaderField: "Cookie") == nil,
+           !SavedFeed.containsCredential(url), !RedditCookiePolicy.allows(url) {
+            (temp, response) = try await BackgroundDownloads.shared.download(req)
+        } else {
+            (temp, response) = try await session.download(for: req)
+        }
         do {
+            try Task.checkCancellation()
+            guard response.url?.scheme == "https" else { throw NetworkError.invalid("Redirection non HTTPS refusée.") }
             try check(response, requestedURL: url)
             let mime = response.mimeType ?? ""
             guard mime.hasPrefix("image/") || mime.hasPrefix("video/") || mime.hasPrefix("audio/") || mime == "application/octet-stream" else {
