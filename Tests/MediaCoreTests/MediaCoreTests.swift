@@ -38,8 +38,8 @@ final class MediaCoreTests: XCTestCase {
         let name = FilenamePolicy.kDriveFileName(original)
         XCTAssertLessThanOrEqual(name.utf8.count, 150)
         XCTAssertTrue(name.hasSuffix(".mp4"))
-        let fallback = FilenamePolicy.kDriveFallbackName(for: original)
-        XCTAssertTrue(name.hasSuffix(String(fallback.dropFirst("media".count))))
+        XCTAssertTrue(name.hasSuffix("-43fe3b.mp4"))
+        XCTAssertEqual(FilenamePolicy.kDriveFallbackName(for: original), "media-43fe3b13.mp4")
         XCTAssertNotEqual(name, FilenamePolicy.kDriveFileName(String(repeating: "é", count: 119) + "a.mp4"))
         XCTAssertEqual(FilenamePolicy.kDriveFileName("photo.jpg"), "photo.jpg")
     }
