@@ -49,6 +49,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published var status = ""
     @Published var errorMessage: String?
     @Published var files: [URL] = []
+    @Published private(set) var loadingFiles = false
     @Published var count = 0
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var discovered = 0
@@ -100,7 +101,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private var skipped = 0
     private var failed = 0
     private let network = Network()
+    private let previewCache: NSCache<NSURL, NSData> = {
+        let cache = NSCache<NSURL, NSData>()
+        cache.totalCostLimit = 32 * 1024 * 1024
+        cache.countLimit = 100
+        return cache
+    }()
+    private var previewSessionRevision = -1
     private var task: Task<Void, Never>?
+    private var reloadTask: Task<Void, Never>?
+    private var reloadRevision = 0
+    private var displayedCollectionID: String?
     private var tokenTask: Task<String, Error>?
     private var token: String?
     private var tokenDate = Date.distantPast
@@ -269,21 +280,36 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     func reload() {
-        guard let activeUser, let collection = collections.first(where: { $0.id == activeUser }) else { files = []; totalBytes = 0; return }
+        reloadTask?.cancel()
+        reloadRevision += 1
+        let revision = reloadRevision
+        if displayedCollectionID != activeUser {
+            files = []
+            totalBytes = 0
+            displayedCollectionID = activeUser
+        }
+        guard let collection = activeCollection else {
+            files = []; totalBytes = 0; reloadTask = nil
+            loadingFiles = false
+            return
+        }
+        loadingFiles = true
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
-        let keys: [URLResourceKey] = [.isRegularFileKey, .creationDateKey]
-        guard let entries = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
-            files = []; totalBytes = 0; return
-        }
-        let media = entries.filter {
-            ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov"].contains($0.pathExtension.lowercased())
-                && (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-        }
-        totalBytes = media.reduce(0) { $0 + Int64((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
-        files = media.sorted {
-            let a = (try? $0.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            let b = (try? $1.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            return a > b
+        reloadTask = Task { [weak self] in
+            let worker = Task.detached(priority: .userInitiated) {
+                try CollectionFiles.scan(folder)
+            }
+            let snapshot = try? await withTaskCancellationHandler {
+                try await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
+            self.reloadTask = nil
+            self.loadingFiles = false
+            guard let snapshot else { return }
+            self.files = snapshot.files
+            self.totalBytes = snapshot.totalBytes
         }
     }
 
@@ -334,7 +360,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     func previewImageData(_ url: URL) async throws -> Data {
-        try await network.data(url)
+        try Task.checkCancellation()
+        let revision = RedditSession.shared.revision
+        if previewSessionRevision != revision {
+            previewCache.removeAllObjects()
+            previewSessionRevision = revision
+        }
+        if let cached = previewCache.object(forKey: url as NSURL) { return cached as Data }
+        let data = try await network.data(url)
+        try Task.checkCancellation()
+        // Do not let a response from an earlier session populate the current cache.
+        if RedditSession.shared.revision == revision, data.count <= 4 * 1024 * 1024 {
+            previewCache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
+        }
+        return data
     }
 
     /// Temporary original for the viewer, without adding it to a collection.
@@ -394,46 +433,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
-            var downloads: [Download] = []
-            var renamedExisting = false
-            for post in fresh {
-                let media = MediaExtractor.extract(post.html)
-                for (index, item) in media.enumerated() where seenMedia.insert(item).inserted {
-                    let ext: String
-                    if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
-
-                    let title = FilenamePolicy.postTitle(post.title, fallback: post.id)
-                    let numberedTitle = media.count > 1 ? "\(title) - \(index + 1)" : title
-                    var filename = "\(numberedTitle).\(ext)"
-                    if !usedFilenames.insert(filename.lowercased()).inserted {
-                        let postID = post.id.replacingOccurrences(of: "t3_", with: "")
-                        filename = "\(numberedTitle) - \(postID).\(ext)"
-                        var duplicate = 2
-                        while !usedFilenames.insert(filename.lowercased()).inserted {
-                            filename = "\(numberedTitle) - \(postID)-\(duplicate).\(ext)"
-                            duplicate += 1
-                        }
-                    }
-
-                    let destination = folder.appendingPathComponent(filename)
-                    let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
-                    let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
-
-                    if fm.fileExists(atPath: destination.path) {
-                        if fm.fileExists(atPath: legacyDestination.path) {
-                            try? fm.removeItem(at: legacyDestination)
-                            renamedExisting = true
-                        }
-                    } else if fm.fileExists(atPath: legacyDestination.path) {
-                        try? fm.moveItem(at: legacyDestination, to: destination)
-                        MediaMetadata.move(from: legacyDestination, to: destination)
-                        renamedExisting = true
-                    } else {
-                        downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt))
-                    }
-                }
-            }
-            if renamedExisting { reload() }
+            let downloads = prepareDownloads(fresh, folder: folder,
+                                             seenMedia: &seenMedia, usedFilenames: &usedFilenames)
             discovered += downloads.count
             status = ""
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
@@ -456,6 +457,53 @@ struct UserCollection: Codable, Identifiable, Equatable {
             summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
             status = summary
         }
+    }
+
+    /// Keeps naming, deduplication and legacy migration identical across feed pages.
+    private func prepareDownloads(_ posts: [Post], folder: URL,
+                                  seenMedia: inout Set<Media>,
+                                  usedFilenames: inout Set<String>) -> [Download] {
+        var downloads: [Download] = []
+        var renamedExisting = false
+        for post in posts {
+            let media = MediaExtractor.extract(post.html)
+            for (index, item) in media.enumerated() where seenMedia.insert(item).inserted {
+                let ext: String
+                if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
+
+                let title = FilenamePolicy.postTitle(post.title, fallback: post.id)
+                let numberedTitle = media.count > 1 ? "\(title) - \(index + 1)" : title
+                var filename = "\(numberedTitle).\(ext)"
+                if !usedFilenames.insert(filename.lowercased()).inserted {
+                    let postID = post.id.replacingOccurrences(of: "t3_", with: "")
+                    filename = "\(numberedTitle) - \(postID).\(ext)"
+                    var duplicate = 2
+                    while !usedFilenames.insert(filename.lowercased()).inserted {
+                        filename = "\(numberedTitle) - \(postID)-\(duplicate).\(ext)"
+                        duplicate += 1
+                    }
+                }
+
+                let destination = folder.appendingPathComponent(filename)
+                let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
+                let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
+
+                if fm.fileExists(atPath: destination.path) {
+                    if fm.fileExists(atPath: legacyDestination.path) {
+                        try? fm.removeItem(at: legacyDestination)
+                        renamedExisting = true
+                    }
+                } else if fm.fileExists(atPath: legacyDestination.path) {
+                    try? fm.moveItem(at: legacyDestination, to: destination)
+                    MediaMetadata.move(from: legacyDestination, to: destination)
+                    renamedExisting = true
+                } else {
+                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt))
+                }
+            }
+        }
+        if renamedExisting { reload() }
+        return downloads
     }
 
     private func saveUnlessLimited(_ item: Download) async throws {
@@ -491,6 +539,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
+        // A scan started before this save must not overwrite the newly inserted file.
+        if reloadTask != nil { reload() }
     }
 
     private func redgifsToken() async throws -> String {

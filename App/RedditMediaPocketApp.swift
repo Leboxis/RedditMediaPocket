@@ -205,7 +205,11 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var gallerySection: some View {
-        if model.files.isEmpty {
+        if model.files.isEmpty && model.loadingFiles {
+            Spacer()
+            ProgressView(L("Chargement de la galerie…", "Loading gallery…"))
+            Spacer()
+        } else if model.files.isEmpty {
             Spacer()
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
