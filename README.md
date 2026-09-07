@@ -75,6 +75,8 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les 
 
 ## Développement et validation
 
+Dans Suivis, toucher un compte ouvre ses posts avec les images et les miniatures RSS disponibles. Toucher une image ou le bouton de lecture d’une vidéo ouvre l’original dans la visionneuse. Les vidéos Reddit utilisent l’assemblage audio/vidéo existant ; RedGIFs utilise la résolution existante. Le média est récupéré dans un fichier temporaire supprimé à la fermeture de la visionneuse, sans ajout à la collection. Les miniatures servent uniquement à l’affichage et ne remplacent jamais les originaux téléchargés. Les galeries et hébergeurs non pris en charge peuvent afficher une miniature « Aperçu uniquement ». Une miniature absente n’empêche pas d’ouvrir un original pris en charge. L’aperçu liste la première page RSS disponible.
+
 Sur macOS avec Xcode :
 
 ```bash

@@ -333,6 +333,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return try FeedParser.parse(body)
     }
 
+    func previewImageData(_ url: URL) async throws -> Data {
+        try await network.data(url)
+    }
+
+    /// Temporary original for the viewer, without adding it to a collection.
+    func previewMedia(_ media: Media) async throws -> URL {
+        let url = try await resolveAndDownload(media)
+        if Task.isCancelled {
+            try? fm.removeItem(at: url)
+            throw CancellationError()
+        }
+        return url
+    }
+
     private struct Download: Sendable {
         let media: Media
         let destination: URL

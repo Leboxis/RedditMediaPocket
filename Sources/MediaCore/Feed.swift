@@ -173,6 +173,19 @@ public final class FeedParser: NSObject, XMLParserDelegate {
 }
 
 public enum MediaExtractor {
+    /// RSS thumbnails are for display only; never substitute them for originals.
+    public static func previewImage(_ html: String) -> URL? {
+        let regex = try! NSRegularExpression(pattern: #"(?i)<img\b[^>]*?\s+src\s*=\s*["']([^"']+)["']"#)
+        let ns = html as NSString
+        for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            let raw = ns.substring(with: match.range(at: 1)).replacingOccurrences(of: "&amp;", with: "&")
+            guard let url = URL(string: raw), url.scheme == "https", let host = url.host?.lowercased(),
+                  ["preview.redd.it", "external-preview.redd.it", "i.redd.it", "i.imgur.com", "a.thumbs.redditmedia.com", "b.thumbs.redditmedia.com"].contains(host) else { continue }
+            return url
+        }
+        return nil
+    }
+
     public static func username(_ text: String) throws -> String {
         var name = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if name.hasPrefix("u/") { name.removeFirst(2) }

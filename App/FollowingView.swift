@@ -1,5 +1,7 @@
 import SwiftUI
 import MediaCore
+import UIKit
+import ImageIO
 
 struct FollowingView: View {
     @ObservedObject var model: Downloader
@@ -183,6 +185,12 @@ struct FollowingUserPosts: View {
     private func postRow(_ post: Post) -> some View {
         let media = MediaExtractor.extract(post.html)
         return VStack(alignment: .leading, spacing: 4) {
+            if media.isEmpty, let thumbnail = MediaExtractor.previewImage(post.html) {
+                FollowingMediaCard(media: nil, thumbnail: thumbnail, model: model)
+            }
+            ForEach(media, id: \.self) { item in
+                FollowingMediaCard(media: item, thumbnail: MediaExtractor.previewImage(post.html), model: model)
+            }
             Text(post.title).font(.subheadline.weight(.medium)).lineLimit(2)
             HStack(spacing: 8) {
                 if let date = post.publishedAt {
@@ -190,7 +198,9 @@ struct FollowingUserPosts: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if media.isEmpty {
-                    Label(L("Sans média", "No media"), systemImage: "slash.circle")
+                    Label(MediaExtractor.previewImage(post.html) == nil
+                          ? L("Sans média pris en charge", "No supported media")
+                          : L("Aperçu uniquement", "Preview only"), systemImage: "slash.circle")
                         .font(.caption2).foregroundStyle(.tertiary)
                 } else {
                     Label(L("\(media.count) média\(media.count > 1 ? "s" : "")",
@@ -222,5 +232,114 @@ struct FollowingUserPosts: View {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+private struct FollowingPreviewSelection: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+private struct FollowingMediaCard: View {
+    let media: Media?
+    let thumbnail: URL?
+    @ObservedObject var model: Downloader
+    @State private var image: UIImage?
+    @State private var imageLoaded = false
+    @State private var opening = false
+    @State private var openRequest = 0
+    @State private var errorMessage: String?
+    @State private var selection: FollowingPreviewSelection?
+    @State private var temporaryURL: URL?
+
+    private var imageURL: URL? {
+        if case .direct(let url)? = media, !isVideo(url) { return url }
+        return thumbnail
+    }
+
+    private var video: Bool {
+        switch media {
+        case .redditVideo?, .redgifs?: return true
+        case .direct(let url)?: return isVideo(url)
+        case nil: return false
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Button {
+                opening = true
+                openRequest += 1
+            } label: {
+                ZStack {
+                    Color(uiColor: .secondarySystemBackground)
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else if !imageLoaded {
+                        ProgressView()
+                    } else {
+                        Label(L("Aperçu indisponible", "Preview unavailable"), systemImage: video ? "video" : "photo")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if opening {
+                        ProgressView().padding(12).background(.regularMaterial, in: Circle())
+                    } else if video {
+                        Image(systemName: "play.circle.fill").font(.system(size: 44))
+                            .foregroundStyle(.white).shadow(radius: 3)
+                    }
+                }
+                .frame(maxWidth: .infinity).frame(height: 240)
+                .clipped().contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(media == nil || opening)
+            .accessibilityLabel(video ? L("Lire la vidéo", "Play video") : L("Agrandir l’image", "Enlarge image"))
+            if let errorMessage {
+                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .task(id: imageURL) {
+            image = nil
+            imageLoaded = false
+            defer { imageLoaded = true }
+            guard let imageURL else { return }
+            do {
+                let data = try await model.previewImageData(imageURL)
+                try Task.checkCancellation()
+                if let source = CGImageSourceCreateWithData(data as CFData, nil),
+                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 960
+                   ] as CFDictionary) {
+                    image = UIImage(cgImage: thumbnail)
+                }
+            } catch {
+                // A missing thumbnail does not prevent opening the original.
+            }
+        }
+        .task(id: openRequest) {
+            guard openRequest > 0, opening, let media else { return }
+            defer { opening = false }
+            errorMessage = nil
+            do {
+                let url = try await model.previewMedia(media)
+                temporaryURL = url
+                selection = FollowingPreviewSelection(url: url)
+            } catch {
+                if !Task.isCancelled { errorMessage = error.localizedDescription }
+            }
+        }
+        .fullScreenCover(item: $selection, onDismiss: clearTemporaryFile) { item in
+            MediaPreview(urls: [item.url], selectedURL: item.url)
+        }
+        .onDisappear {
+            if selection == nil { clearTemporaryFile() }
+        }
+    }
+
+    private func clearTemporaryFile() {
+        if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL) }
+        temporaryURL = nil
     }
 }
