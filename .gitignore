@@ -5,3 +5,5 @@ dist/
 *.xcodeproj/
 __pycache__/
 *.ipa
+
+Generated/

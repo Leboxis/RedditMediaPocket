@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil) ou `r/` (subreddit), puis on saisit le nom ; `♥` sélectionne les sauvegardés du compte Reddit connecté sans demander de pseudo. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil) ou `r/` (subreddit), puis on saisit le nom ; `♥` sélectionne les sauvegardés du compte Reddit connecté sans demander de pseudo. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## État réel
 
@@ -142,7 +142,7 @@ Les pauses artificielles de départ ont été supprimées, ainsi que le lissage 
 
 Le compteur affiche les appels de téléchargement réseau en cours, et non la totalité des tâches de résolution/assemblage. Le nombre choisi est un maximum de médias traités simultanément ; il peut être inférieur pendant la découverte RSS, les résolutions, l’assemblage ou à la fin d’une page.
 
-Un bandeau vert « Session Reddit détectée » est visible dans la galerie, les réglages et la connexion. Il reflète la présence du cookie attendu, sans prétendre confirmer la validité du compte côté serveur.
+L’état de session est visible dans les réglages et la connexion ; le bandeau est retiré de la galerie. Il reflète la présence du cookie attendu, sans prétendre confirmer la validité du compte côté serveur.
 
 ## Interface et indicateurs
 
@@ -159,3 +159,14 @@ Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tro
 Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs fatales apparaissent dans une alerte ponctuelle ; les limites de service gardent leur message conditionnel.
 
 Chaque bouton de galerie définit une zone tactile rectangulaire et les overlays décoratifs ne participent pas au hit-testing. Le découpage visuel seul de scaledToFill ne suffisait pas à borner la zone tactile. Vérifier sur iPhone les touchers près du bord supérieur d’une vidéo et du bord inférieur de la carte qui la précède.
+
+
+## Langues et informations des médias
+
+Au premier lancement, la langue principale de l’appareil sélectionne le français si elle est française, sinon l’anglais. Le choix est mémorisé et modifiable dans Réglages → Langue, lorsque les téléchargements sont arrêtés. Les commandes, confirmations, libellés d’accessibilité et erreurs de l’app sont bilingues ; le site Reddit conserve sa propre langue.
+
+Une pastille de 7 points près du titre Pocket est verte pendant un parcours de téléchargement (recherche, transfert et assemblage compris), rouge au repos, après arrêt ou erreur. VoiceOver annonce son état. Les collections de sauvegardés portent uniquement le libellé « Saved » ; leurs identifiants et dossiers restent distincts pour chaque compte.
+
+Un appui long sur une vignette propose Informations du média. La fiche présente le nom complet copiable, le poids, le format, la résolution, la durée vidéo, la fréquence d’images, le débit estimé et les dates de téléchargement/publication. Les caractéristiques sont lues dans le fichier local, sans requête réseau. Les dates sont enregistrées avec les nouveaux téléchargements dans un sous-dossier caché `.metadata`, exclu de la galerie et du partage. Elles suivent le renommage hérité et la suppression du média. Les anciennes dates non enregistrées ou absentes du flux affichent « Indisponible » ; la date de modification du post ne remplace pas sa date de publication.
+
+Vérification sur iPhone : premier lancement en fr-FR, fr-CA et en-US, changement manuel de langue, appui long sur image/vidéo et ancien fichier, nom long et grande taille de texte, état de la pastille au démarrage/arrêt/erreur et passage en arrière-plan.

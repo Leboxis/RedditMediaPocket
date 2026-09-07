@@ -57,18 +57,18 @@ struct RedditLogin: View {
                     .id(showsFeedPreferences)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .navigationTitle(session.hasSession ? "Reddit · session détectée" : "reddit.com")
+            .navigationTitle(session.hasSession ? L("Reddit · session détectée", "Reddit · session detected") : "reddit.com")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(showsFeedPreferences ? "Connexion" : "Flux privés") {
+                    Button(showsFeedPreferences ? L("Connexion", "Sign in") : L("Flux privés", "Private feeds")) {
                         showsFeedPreferences.toggle()
-                        message = showsFeedPreferences ? "Active les flux RSS privés dans Reddit pour télécharger tes sauvegardés, puis ferme cette fenêtre." : ""
+                        message = showsFeedPreferences ? L("Active les flux RSS privés dans Reddit pour télécharger tes sauvegardés, puis ferme cette fenêtre.", "Enable private RSS feeds in Reddit to download your saved posts, then close this window.") : ""
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await session.refresh(); dismiss() } } label: { Image(systemName: "xmark") }
-                        .accessibilityLabel("Fermer la connexion")
+                        .accessibilityLabel(L("Fermer la connexion", "Close sign-in"))
                 }
             }
         }
@@ -110,7 +110,7 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.targetFrame?.isMainFrame != false else { decisionHandler(.allow); return }
             guard let url = navigationAction.request.url, RedditCookiePolicy.allows(url) else {
-                message = "Utilise la connexion Reddit par identifiant et mot de passe."
+                message = L("Utilise la connexion Reddit par identifiant et mot de passe.", "Sign in to Reddit with your username and password.")
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow)
@@ -125,7 +125,7 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
             Task { @MainActor in await RedditSession.shared.refresh() }
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            message = "Connexion indisponible. Ferme puis réessaie."
+            message = L("Connexion indisponible. Ferme puis réessaie.", "Sign-in unavailable. Close and try again.")
         }
     }
 }
@@ -155,7 +155,7 @@ struct RedditSessionIndicator: View {
         HStack(spacing: 10) {
             Image(systemName: session.hasSession ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
                 .font(.title3)
-            Text(session.hasSession ? "Session Reddit détectée" : "Reddit · sans session")
+            Text(session.hasSession ? L("Session Reddit détectée", "Reddit session detected") : L("Reddit · sans session", "Reddit · signed out"))
                 .font(.subheadline.weight(.semibold))
         }
         .frame(maxWidth: .infinity, alignment: .center)

@@ -1,5 +1,6 @@
 name: RedditMediaPocket
 options:
+  developmentLanguage: en
   bundleIdPrefix: com.leboxis
   deploymentTarget:
     iOS: '16.0'
@@ -11,6 +12,11 @@ targets:
     type: application
     platform: iOS
     sources: [App]
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, fr]
     dependencies:
       - package: MediaCore
     settings:

@@ -3,8 +3,9 @@ import MediaCore
 
 @main @MainActor struct RedditMediaPocketApp: App {
     @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate
-    init() { LegacyBackgroundCleanup.shared.runIfNeeded() }
-    var body: some Scene { WindowGroup { ContentView() } }
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
+    init() { AppLanguage.initialize(); LegacyBackgroundCleanup.shared.runIfNeeded() }
+    var body: some Scene { WindowGroup { ContentView().environment(\.locale, Locale(identifier: language)) } }
 }
 
 private struct Selection: Identifiable {
@@ -18,6 +19,8 @@ struct ContentView: View {
     @ObservedObject private var redditSession = RedditSession.shared
     @State private var selection: Selection?
     @State private var export: ExportSelection?
+    @State private var info: MediaInfoSelection?
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @State private var settingsPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
@@ -28,7 +31,6 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                sessionButton
                 inputRow
                 sortRow
                 savedHintRow
@@ -50,34 +52,37 @@ struct ContentView: View {
             .fullScreenCover(item: $selection) { item in
                 MediaPreview(urls: item.files, selectedURL: item.url)
             }
+            .sheet(item: $info) { item in
+                MediaInfoView(url: item.url)
+            }
             .sheet(item: $export) { item in
                 ExportSheet(files: item.files).ignoresSafeArea()
             }
-            .confirmationDialog("Supprimer les médias téléchargés ?", isPresented: Binding(
+            .confirmationDialog(L("Supprimer les médias téléchargés ?", "Delete downloaded media?"), isPresented: Binding(
                 get: { collectionPendingDeletion != nil },
                 set: { if !$0 { collectionPendingDeletion = nil } }
             ), titleVisibility: .visible) {
-                Button("Delete", role: .destructive) {
+                Button(L("Supprimer", "Delete"), role: .destructive) {
                     guard let collection = collectionPendingDeletion else { return }
                     model.deleteDownloads(for: collection.id)
                     collectionPendingDeletion = nil
                 }
-                Button("Annuler", role: .cancel) { collectionPendingDeletion = nil }
+                Button(L("Annuler", "Cancel"), role: .cancel) { collectionPendingDeletion = nil }
             } message: {
-                Text("Tous les médias de \(collectionPendingDeletion?.displayName ?? "cette source") seront définitivement effacés.")
+                Text(L("Tous les médias de \(collectionPendingDeletion?.displayName ?? "cette source") seront définitivement effacés.", "All media from \(collectionPendingDeletion?.displayName ?? "this source") will be permanently deleted."))
             }
-            .confirmationDialog("Supprimer ce média ?", isPresented: Binding(
+            .confirmationDialog(L("Supprimer ce média ?", "Delete this media?"), isPresented: Binding(
                 get: { mediaPendingDeletion != nil },
                 set: { if !$0 { mediaPendingDeletion = nil } }
             ), titleVisibility: .visible, presenting: mediaPendingDeletion) { url in
-                Button("Delete", role: .destructive) {
+                Button(L("Supprimer", "Delete"), role: .destructive) {
                     model.deleteMedia(url)
                     mediaPendingDeletion = nil
                 }
                 .disabled(model.running)
-                Button("Annuler", role: .cancel) { mediaPendingDeletion = nil }
+                Button(L("Annuler", "Cancel"), role: .cancel) { mediaPendingDeletion = nil }
             } message: { url in
-                Text("\(url.lastPathComponent) sera définitivement supprimé. Les autres médias seront conservés.")
+                Text(L("\(url.lastPathComponent) sera définitivement supprimé. Les autres médias seront conservés.", "\(url.lastPathComponent) will be permanently deleted. Other media will be kept."))
             }
             .alert("Pocket", isPresented: Binding(
                 get: { model.errorMessage != nil },
@@ -89,12 +94,6 @@ struct ContentView: View {
         }
     }
 
-    private var sessionButton: some View {
-        Button { settingsPresented = true } label: { RedditSessionIndicator() }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16).padding(.bottom, 12)
-    }
-
     private var inputRow: some View {
         HStack(spacing: 12) {
             SourceKindToggle(kind: $model.sourceKind)
@@ -102,7 +101,7 @@ struct ContentView: View {
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
-                TextField(model.sourceKind == "r" ? "nom du sub" : "pseudo", text: $model.username)
+                TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") : L("pseudo", "username"), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -120,7 +119,7 @@ struct ContentView: View {
                     .background(.orange, in: RoundedRectangle(cornerRadius: 14))
             }
             .disabled(cannotStart)
-            .accessibilityLabel(model.running ? "Arrêter" : "Télécharger")
+            .accessibilityLabel(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
         }
         .padding(.horizontal, 16).padding(.bottom, 10)
     }
@@ -139,21 +138,21 @@ struct ContentView: View {
 
     @ViewBuilder private var sortRow: some View {
         if isSubredditInput {
-            Picker("Tri du subreddit", selection: $model.subSort) {
-                Text("Nouveaux").tag("new")
-                Text("Chauds").tag("hot")
-                Text("Top du mois").tag("top")
+            Picker(L("Tri du subreddit", "Subreddit sort"), selection: $model.subSort) {
+                Text(L("Nouveaux", "New")).tag("new")
+                Text(L("Chauds", "Hot")).tag("hot")
+                Text(L("Top du mois", "Top this month")).tag("top")
             }
             .pickerStyle(.segmented)
             .disabled(model.running)
             .padding(.horizontal, 16).padding(.bottom, 10)
-            .accessibilityLabel("Tri du subreddit")
+            .accessibilityLabel(L("Tri du subreddit", "Subreddit sort"))
         }
     }
 
     @ViewBuilder private var savedHintRow: some View {
         if model.needsSession && !redditSession.hasSession {
-            Label("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", systemImage: "person.crop.circle.badge.questionmark")
+            Label(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."), systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)
@@ -182,9 +181,9 @@ struct ContentView: View {
         // les largeurs quand « repérés » apparaît en cours de run.
         let showProgress = model.running || model.discovered > 0
         return HStack(spacing: 0) {
-            metric("\(model.files.count)", label: "médias")
+            metric("\(model.files.count)", label: L("médias", "media"))
             metric(model.totalSize, label: "")
-            metric("\(model.count)/\(model.discovered)", label: "repérés")
+            metric("\(model.count)/\(model.discovered)", label: L("repérés", "found"))
                 .opacity(showProgress ? 1 : 0)
                 .accessibilityHidden(!showProgress)
         }
@@ -203,8 +202,8 @@ struct ContentView: View {
             Spacer()
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
-                .accessibilityLabel("Galerie vide")
-            Text(model.activeCollection.map { "Aucun média pour \($0.displayName)" } ?? "Choisis une source (u/, r/ ou ♥)")
+                .accessibilityLabel(L("Galerie vide", "Empty gallery"))
+            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/ ou ♥)", "Choose a source (u/, r/ or ♥)"))
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -217,10 +216,13 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .contentShape(Rectangle())
-                        .accessibilityLabel(isVideo(url) ? "Ouvrir la vidéo" : "Ouvrir l’image")
+                        .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l’image", "Open image"))
                         .contextMenu {
+                            Button { info = MediaInfoSelection(url: url) } label: {
+                                Label(L("Informations du média", "Media information"), systemImage: "info.circle")
+                            }
                             Button(role: .destructive) { mediaPendingDeletion = url } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label(L("Supprimer", "Delete"), systemImage: "trash")
                             }
                             .disabled(model.running)
                         }
@@ -233,16 +235,26 @@ struct ContentView: View {
 
     private var toolbarContent: some ToolbarContent {
         Group {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 7) {
+                    Text("Pocket").font(.headline)
+                    Circle()
+                        .fill(model.running ? Color.green : Color.red)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel(L("Téléchargement", "Download"))
+                        .accessibilityValue(model.running ? L("En cours", "In progress") : L("Inactif", "Inactive"))
+                }
+            }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { settingsPresented = true } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("Réglages")
+                    .accessibilityLabel(L("Réglages", "Settings"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button { export = ExportSelection(files: model.files) } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
                 .disabled(model.files.isEmpty)
-                .accessibilityLabel("Exporter les médias affichés")
+                .accessibilityLabel(L("Exporter les médias affichés", "Export displayed media"))
             }
         }
     }
@@ -274,10 +286,10 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button { model.download(user: collection.id) } label: {
-                Label("Reprendre le téléchargement", systemImage: "arrow.clockwise")
+                Label(L("Reprendre le téléchargement", "Resume download"), systemImage: "arrow.clockwise")
             }
             Button(role: .destructive) { collectionPendingDeletion = collection } label: {
-                Label("Delete", systemImage: "trash")
+                Label(L("Supprimer", "Delete"), systemImage: "trash")
             }
         }
     }
@@ -302,7 +314,7 @@ private struct SourceKindToggle: View {
         current == "r" ? "r/" : (current == "saved" ? "♥" : "u/")
     }
     private func spoken(_ current: String) -> String {
-        current == "r" ? "subreddit" : (current == "saved" ? "sauvegardés" : "profil")
+        current == "r" ? "subreddit" : (current == "saved" ? L("sauvegardés", "saved") : L("profil", "profile"))
     }
 
     var body: some View {
@@ -322,12 +334,13 @@ private struct SourceKindToggle: View {
         }
         .buttonStyle(.plain)
         .rotation3DEffect(.degrees(halfFlip ? 90 : 0), axis: (x: 0, y: 1, z: 0))
-        .accessibilityLabel("Source : \(spoken(kind)). Touchez pour changer.")
+        .accessibilityLabel(L("Source : \(spoken(kind)). Touchez pour changer.", "Source: \(spoken(kind)). Tap to change."))
     }
 }
 
 private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @ObservedObject private var reddit = RedditSession.shared
     @State private var loginPresented = false
     @State private var confirmDeleteAll = false
@@ -336,43 +349,52 @@ private struct DownloadSettings: View {
         NavigationStack {
             Form {
                 Section {
+                    Picker(L("Langue", "Language"), selection: $language) {
+                        Text("Français").tag("fr")
+                        Text("English").tag("en")
+                    }
+                    .disabled(model.running)
+                } footer: {
+                    Text(L("Détectée automatiquement au premier lancement. Modifiable ici.", "Detected automatically on first launch. You can change it here."))
+                }
+                Section {
                     Stepper(value: $model.concurrentLimit, in: 1...6) {
                         HStack {
-                            Text("Téléchargements simultanés")
+                            Text(L("Téléchargements simultanés", "Concurrent downloads"))
                             Spacer()
                             Text("\(model.concurrentLimit)").monospacedDigit().foregroundStyle(.secondary)
                         }
                     }
                 } footer: {
-                    Text(model.running ? "Appliqué au prochain lancement. En cours : \(model.sessionLimit)." : "1 à 6. Un nombre élevé peut augmenter les limitations du serveur.")
+                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 6. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 6. Higher values may increase server rate limiting."))
                 }
                 Section {
                     RedditSessionIndicator()
-                    Button(reddit.hasSession ? "Session détectée · ouvrir Reddit" : "Se connecter à Reddit") { loginPresented = true }
+                    Button(reddit.hasSession ? L("Session détectée · ouvrir Reddit", "Session detected · open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit")) { loginPresented = true }
                         .disabled(model.running || reddit.clearing)
-                    Button("Déconnexion", role: .destructive) { Task { await reddit.logout() } }
+                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await reddit.logout() } }
                         .disabled(model.running || reddit.clearing)
                 } header: {
                     Text("Reddit")
                 } footer: {
-                    Text(model.running ? "Arrête les transferts pour modifier la session." : "Session locale. Les limites Reddit restent applicables.")
+                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.") : L("Session locale. Les limites Reddit restent applicables.", "Local session. Reddit rate limits still apply."))
                 }
                 Section {
-                    Button("Supprimer tous les téléchargements", role: .destructive) { confirmDeleteAll = true }
+                    Button(L("Supprimer tous les téléchargements", "Delete all downloads"), role: .destructive) { confirmDeleteAll = true }
                         .disabled(model.running)
                         .foregroundStyle(.red)
                 } footer: {
-                    Text("Efface les médias et les archives de tous les utilisateurs. Irréversible.")
+                    Text(L("Efface les médias et les archives de tous les utilisateurs. Irréversible.", "Deletes media and archives for all users. Cannot be undone."))
                 }
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
-            .confirmationDialog("Supprimer tous les téléchargements ?", isPresented: $confirmDeleteAll, titleVisibility: .visible) {
-                Button("Tout supprimer", role: .destructive) { model.deleteAllDownloads() }
-                Button("Annuler", role: .cancel) { }
+            .confirmationDialog(L("Supprimer tous les téléchargements ?", "Delete all downloads?"), isPresented: $confirmDeleteAll, titleVisibility: .visible) {
+                Button(L("Tout supprimer", "Delete all"), role: .destructive) { model.deleteAllDownloads() }
+                Button(L("Annuler", "Cancel"), role: .cancel) { }
             } message: {
-                Text("Tous les médias téléchargés seront définitivement effacés.")
+                Text(L("Tous les médias téléchargés seront définitivement effacés.", "All downloaded media will be permanently deleted."))
             }
-            .navigationTitle("Réglages")
+            .navigationTitle(L("Réglages", "Settings"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("OK") { dismiss() } }
