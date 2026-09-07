@@ -58,9 +58,16 @@ private struct KDriveAPIError: Codable {
     let description: String?
 }
 
+private struct KDriveUploadOutcome {
+    let fileName: String
+    let succeeded: Bool
+    let errorMessage: String?
+}
+
 @MainActor
 final class KDriveService: ObservableObject {
     static let shared = KDriveService()
+    static let concurrentUploadLimit = 4
 
     @Published var isUploading = false
     @Published var currentProgress = 0.0
@@ -179,6 +186,10 @@ final class KDriveService: ObservableObject {
     }
 
     func uploadFile(fileURL: URL, token: String, driveId: String, directoryId: String) async throws {
+        try await Self.performUpload(fileURL: fileURL, token: token, driveId: driveId, directoryId: directoryId)
+    }
+
+    nonisolated private static func performUpload(fileURL: URL, token: String, driveId: String, directoryId: String) async throws {
         let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDriveId = driveId.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDirectory = directoryId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -244,29 +255,66 @@ final class KDriveService: ObservableObject {
         activeTask = Task {
             var success = 0
             var failed = 0
+            var completed = 0
             var lastErrorMessage: String?
 
-            for (index, fileURL) in files.enumerated() {
+            let batchSize = Self.concurrentUploadLimit
+            var batchStart = 0
+
+            while batchStart < files.count && !Task.isCancelled {
+                let batchEnd = min(batchStart + batchSize, files.count)
+                let batch = Array(files[batchStart..<batchEnd])
+
+                let outcomes = await withTaskGroup(of: KDriveUploadOutcome.self, returning: [KDriveUploadOutcome].self) { group in
+                    for fileURL in batch {
+                        group.addTask {
+                            if Task.isCancelled {
+                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
+                            }
+                            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                                return KDriveUploadOutcome(
+                                    fileName: fileURL.lastPathComponent,
+                                    succeeded: false,
+                                    errorMessage: L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
+                                )
+                            }
+                            do {
+                                try await KDriveService.performUpload(
+                                    fileURL: fileURL,
+                                    token: token,
+                                    driveId: driveId,
+                                    directoryId: directoryId
+                                )
+                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
+                            } catch {
+                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
+                            }
+                        }
+                    }
+
+                    var results: [KDriveUploadOutcome] = []
+                    for await outcome in group {
+                        results.append(outcome)
+                    }
+                    return results
+                }
+
                 if Task.isCancelled { break }
-                currentFileIndex = index + 1
-                currentFileName = fileURL.lastPathComponent
-                currentProgress = Double(index) / Double(max(1, files.count))
 
-                guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                    failed += 1
-                    lastErrorMessage = L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
-                    continue
+                for outcome in outcomes {
+                    completed += 1
+                    currentFileIndex = completed
+                    currentFileName = outcome.fileName
+                    currentProgress = Double(completed) / Double(max(1, files.count))
+                    if outcome.succeeded {
+                        success += 1
+                    } else {
+                        failed += 1
+                        lastErrorMessage = outcome.errorMessage
+                    }
                 }
 
-                do {
-                    try await uploadFile(fileURL: fileURL, token: token, driveId: driveId, directoryId: directoryId)
-                    success += 1
-                } catch {
-                    if Task.isCancelled { break }
-                    failed += 1
-                    lastErrorMessage = error.localizedDescription
-                }
-                currentProgress = Double(index + 1) / Double(max(1, files.count))
+                batchStart = batchEnd
             }
 
             isUploading = false
@@ -293,8 +341,6 @@ struct KDriveUploadButton: View {
 
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
-    @AppStorage("kDriveDirectoryId") private var directoryId = "1"
-    @AppStorage("kDriveDirectoryName") private var directoryName = "Racine (kDrive)"
     @State private var showUpload = false
     @State private var showNotConfigured = false
 
@@ -312,13 +358,7 @@ struct KDriveUploadButton: View {
         .disabled(files.isEmpty)
         .accessibilityLabel(L("Envoyer les médias affichés vers kDrive", "Upload displayed media to kDrive"))
         .sheet(isPresented: $showUpload) {
-            KDriveUploadSheet(
-                files: files,
-                token: token,
-                driveId: driveId,
-                directoryId: directoryId,
-                directoryName: directoryName
-            )
+            KDriveUploadFlowSheet(files: files, token: token, driveId: driveId)
         }
         .alert(L("kDrive non configuré", "kDrive is not configured"), isPresented: $showNotConfigured) {
             Button("OK", role: .cancel) { }
@@ -419,7 +459,7 @@ struct KDriveSettingsSection: View {
         } header: {
             Text("Infomaniak kDrive")
         } footer: {
-            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Les fichiers sont envoyés directement à l’API Infomaniak.", "The token and ID remain stored locally on this device. Files are uploaded directly to the Infomaniak API."))
+            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier configuré ici reste disponible comme préférence, mais le dossier d’envoi est choisi à chaque upload.", "The token and ID remain stored locally on this device. The folder configured here remains available as a preference, but the upload destination is chosen for every upload."))
         }
         .sheet(isPresented: $showFolderPicker) {
             KDriveFolderPickerView(
@@ -458,6 +498,8 @@ struct KDriveFolderPickerView: View {
     let driveId: String
     @Binding var directoryId: String
     @Binding var directoryName: String
+    let dismissOnSelection: Bool
+    let onChoose: ((String, String) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     @State private var pathStack: [KDrivePathNode] = []
@@ -466,6 +508,22 @@ struct KDriveFolderPickerView: View {
     @State private var errorMessage: String?
     @State private var showCreateFolder = false
     @State private var newFolderName = ""
+
+    init(
+        token: String,
+        driveId: String,
+        directoryId: Binding<String>,
+        directoryName: Binding<String>,
+        dismissOnSelection: Bool = true,
+        onChoose: ((String, String) -> Void)? = nil
+    ) {
+        self.token = token
+        self.driveId = driveId
+        self._directoryId = directoryId
+        self._directoryName = directoryName
+        self.dismissOnSelection = dismissOnSelection
+        self.onChoose = onChoose
+    }
 
     private var currentFolder: KDrivePathNode {
         pathStack.last ?? KDrivePathNode(id: "1", name: L("Racine", "Root"))
@@ -523,7 +581,7 @@ struct KDriveFolderPickerView: View {
                     }
                 }
             }
-            .navigationTitle(L("Dossier kDrive", "kDrive folder"))
+            .navigationTitle(dismissOnSelection ? L("Dossier kDrive", "kDrive folder") : L("Choisir le dossier", "Choose folder"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -542,11 +600,16 @@ struct KDriveFolderPickerView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 Button {
-                    directoryId = currentFolder.id
-                    directoryName = currentFolder.name
-                    dismiss()
+                    let chosenId = currentFolder.id
+                    let chosenName = currentFolder.name
+                    directoryId = chosenId
+                    directoryName = chosenName
+                    onChoose?(chosenId, chosenName)
+                    if dismissOnSelection { dismiss() }
                 } label: {
-                    Text(L("Choisir « \(currentFolder.name) »", "Choose “\(currentFolder.name)”"))
+                    Text(dismissOnSelection
+                         ? L("Choisir « \(currentFolder.name) »", "Choose “\(currentFolder.name)”")
+                         : L("Envoyer ici : « \(currentFolder.name) »", "Upload here: “\(currentFolder.name)”"))
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
@@ -567,7 +630,7 @@ struct KDriveFolderPickerView: View {
         }
         .onAppear {
             if pathStack.isEmpty {
-                if directoryId != "1" && !directoryName.isEmpty {
+                if dismissOnSelection && directoryId != "1" && !directoryName.isEmpty {
                     pathStack = [
                         KDrivePathNode(id: "1", name: L("Racine", "Root")),
                         KDrivePathNode(id: directoryId, name: directoryName)
@@ -638,6 +701,39 @@ struct KDriveFolderPickerView: View {
     }
 }
 
+private struct KDriveUploadFlowSheet: View {
+    let files: [URL]
+    let token: String
+    let driveId: String
+
+    @State private var directoryId = "1"
+    @State private var directoryName = L("Racine", "Root")
+    @State private var destinationChosen = false
+
+    var body: some View {
+        Group {
+            if destinationChosen {
+                KDriveUploadSheet(
+                    files: files,
+                    token: token,
+                    driveId: driveId,
+                    directoryId: directoryId,
+                    directoryName: directoryName
+                )
+            } else {
+                KDriveFolderPickerView(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: $directoryId,
+                    directoryName: $directoryName,
+                    dismissOnSelection: false,
+                    onChoose: { _, _ in destinationChosen = true }
+                )
+            }
+        }
+    }
+}
+
 struct KDriveUploadSheet: View {
     let files: [URL]
     let token: String
@@ -693,9 +789,13 @@ struct KDriveUploadSheet: View {
 
                     Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
                         .font(.headline)
-                    Text(L("Fichier \(service.currentFileIndex) sur \(max(1, service.totalFilesCount))", "File \(service.currentFileIndex) of \(max(1, service.totalFilesCount))"))
+                    Text(L("\(service.currentFileIndex) sur \(max(1, service.totalFilesCount)) terminé(s)", "\(service.currentFileIndex) of \(max(1, service.totalFilesCount)) completed"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    Text(L("Jusqu’à \(KDriveService.concurrentUploadLimit) fichiers sont envoyés simultanément.", "Up to \(KDriveService.concurrentUploadLimit) files are uploaded simultaneously."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                     if !service.currentFileName.isEmpty {
                         Text(service.currentFileName)
                             .font(.caption.monospaced())
