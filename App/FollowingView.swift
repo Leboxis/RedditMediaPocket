@@ -267,33 +267,23 @@ private struct FollowingMediaCard: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            Button {
-                opening = true
-                openRequest += 1
-            } label: {
-                ZStack {
-                    Color(uiColor: .secondarySystemBackground)
-                    if let image {
-                        Image(uiImage: image).resizable().scaledToFit()
-                    } else if !imageLoaded {
-                        ProgressView()
-                    } else {
-                        Label(L("Aperçu indisponible", "Preview unavailable"), systemImage: video ? "video" : "photo")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if opening {
-                        ProgressView().padding(12).background(.regularMaterial, in: Circle())
-                    } else if video {
-                        Image(systemName: "play.circle.fill").font(.system(size: 44))
-                            .foregroundStyle(.white).shadow(radius: 3)
-                    }
+            if media == nil {
+                // A display-only thumbnail is not a disabled control: keep its colors.
+                artwork
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(L("Aperçu uniquement", "Preview only"))
+                    .accessibilityAddTraits(.isImage)
+            } else {
+                Button {
+                    opening = true
+                    openRequest += 1
+                } label: {
+                    artwork
                 }
-                .frame(maxWidth: .infinity).frame(height: 240)
-                .clipped().contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .disabled(opening)
+                .accessibilityLabel(video ? L("Lire la vidéo", "Play video") : L("Agrandir l’image", "Enlarge image"))
             }
-            .buttonStyle(.plain)
-            .disabled(media == nil || opening)
-            .accessibilityLabel(video ? L("Lire la vidéo", "Play video") : L("Agrandir l’image", "Enlarge image"))
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.secondary)
             }
@@ -336,6 +326,28 @@ private struct FollowingMediaCard: View {
         .onDisappear {
             if selection == nil { clearTemporaryFile() }
         }
+    }
+
+    private var artwork: some View {
+        ZStack {
+            Color(uiColor: .secondarySystemBackground)
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else if !imageLoaded {
+                ProgressView()
+            } else {
+                Label(L("Aperçu indisponible", "Preview unavailable"), systemImage: video ? "video" : "photo")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if opening {
+                ProgressView().padding(12).background(.regularMaterial, in: Circle())
+            } else if video {
+                Image(systemName: "play.circle.fill").font(.system(size: 44))
+                    .foregroundStyle(.white).shadow(radius: 3)
+            }
+        }
+        .frame(maxWidth: .infinity).frame(height: 240)
+        .clipped().contentShape(Rectangle())
     }
 
     private func clearTemporaryFile() {
