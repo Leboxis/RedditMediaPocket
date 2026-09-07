@@ -140,3 +140,4 @@ public enum FilenamePolicy {
         truncated = truncated.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
         return truncated.isEmpty ? fallback : truncated
     }
+}
