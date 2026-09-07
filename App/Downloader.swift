@@ -3,7 +3,6 @@ import Combine
 import AVFoundation
 import CryptoKit
 import MediaCore
-import UIKit
 
 struct UserCollection: Codable, Identifiable, Equatable {
     var name: String
@@ -102,7 +101,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private var failed = 0
     private let network = Network()
     private var task: Task<Void, Never>?
-    private var backgroundTime: UIBackgroundTaskIdentifier = .invalid
     private var tokenTask: Task<String, Error>?
     private var token: String?
     private var tokenDate = Date.distantPast
@@ -289,23 +287,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     func stop() { task?.cancel(); tokenTask?.cancel() }
-    private func endBackgroundTime() {
-        guard backgroundTime != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTime)
-        backgroundTime = .invalid
-    }
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
         errorMessage = nil
         running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; failed = 0; limitedServices = [:]
-        // Extra execution time for feed discovery and video assembly. Expiration
-        // releases CPU time without cancelling system-owned media transfers.
-        backgroundTime = UIApplication.shared.beginBackgroundTask(withName: "Pocket downloads") { [weak self] in
-            Task { @MainActor in self?.endBackgroundTime() }
-        }
         task = Task {
-            defer { running = false; active = 0; task = nil; endBackgroundTime() }
+            defer { running = false; active = 0; task = nil }
             do { try await run() }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil

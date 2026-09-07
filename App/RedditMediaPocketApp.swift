@@ -3,7 +3,7 @@ import MediaCore
 
 @main @MainActor struct RedditMediaPocketApp: App {
     @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate
-    init() { BackgroundDownloads.shared.reconnect() }
+    init() { LegacyBackgroundCleanup.shared.runIfNeeded() }
     var body: some Scene { WindowGroup { ContentView() } }
 }
 
@@ -42,6 +42,7 @@ struct ContentView: View {
             .toolbar { toolbarContent }
             .onChange(of: scenePhase) { phase in
                 if phase == .active { model.reload() }
+                if phase == .background { model.stop() }
             }
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
@@ -334,11 +335,6 @@ private struct DownloadSettings: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Arrière-plan") {
-                    Text("Les transferts de médias publics déjà démarrés peuvent continuer lorsque Pocket est réduit. iOS décide de leur exécution.")
-                    Text("La recherche de posts et l’assemblage vidéo/audio peuvent attendre le retour dans Pocket. Après une interruption, relance le téléchargement pour récupérer les transferts terminés. Ne force pas la fermeture de l’application.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
                 Section {
                     Stepper(value: $model.concurrentLimit, in: 1...6) {
                         HStack {
