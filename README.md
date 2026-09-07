@@ -16,6 +16,10 @@ Sauvegardés (`♥`) : le compte connecté est sélectionné automatiquement, sa
 
 ## Créer le dépôt et lancer la compilation
 
+Dans Suivis, toucher le cercle à côté d’un utilisateur affiche une coche verte « Déjà téléchargé » ; toucher à nouveau retire la marque. Ce repère manuel est enregistré localement dans les préférences de l’app et reste présent après fermeture et relancement. Il est associé au pseudo sans distinction de majuscules, partagé entre les sessions Reddit sur cette installation et indépendant des fichiers de la galerie. Il ne change pas automatiquement lors d’un téléchargement ou d’une suppression de fichiers.
+
+À vérifier sur iPhone : cocher deux comptes, en décocher un, fermer complètement puis relancer l’app et rouvrir Suivis ; seule la coche conservée doit apparaître. Vérifier aussi que la coche ne déclenche ni l’ouverture du profil ni un téléchargement.
+
 Nom proposé : `Leboxis/RedditMediaPocket`.
 
 Depuis un ordinateur équipé de Git et GitHub CLI, après `gh auth login`, lancer dans ce dossier :

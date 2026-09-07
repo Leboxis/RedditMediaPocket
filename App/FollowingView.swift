@@ -13,8 +13,26 @@ struct FollowingView: View {
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
+    @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
+
+    private var downloadedUsernames: Set<String> {
+        Set((try? JSONDecoder().decode([String].self, from: downloadedUsernamesData)) ?? [])
+    }
+
+    private func toggleDownloaded(_ username: String) {
+        let key = username.lowercased()
+        var names = downloadedUsernames
+        if names.contains(key) {
+            names.remove(key)
+        } else {
+            names.insert(key)
+        }
+        guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
+        downloadedUsernamesData = data
+    }
 
     var body: some View {
+        let markedNames = downloadedUsernames
         NavigationStack {
             VStack(spacing: 0) {
                 if !session.hasSession {
@@ -59,6 +77,7 @@ struct FollowingView: View {
                     } else {
                         List {
                             ForEach(friends, id: \.self) { name in
+                                let isDownloaded = markedNames.contains(name.lowercased())
                                 HStack(spacing: 10) {
                                     NavigationLink {
                                         FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
@@ -69,6 +88,23 @@ struct FollowingView: View {
                                             Text(name).fontWeight(.medium).lineLimit(1)
                                         }
                                     }
+                                    Button {
+                                        toggleDownloaded(name)
+                                    } label: {
+                                        Image(systemName: isDownloaded ? "checkmark.circle.fill" : "circle")
+                                            .font(.title3)
+                                            .foregroundStyle(isDownloaded ? Color.green : Color.secondary)
+                                            .frame(minWidth: 44, minHeight: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityLabel(L("État de téléchargement de \(name)", "Download status for \(name)"))
+                                    .accessibilityValue(isDownloaded
+                                        ? L("Déjà téléchargé", "Already downloaded")
+                                        : L("Non marqué", "Not marked"))
+                                    .accessibilityHint(isDownloaded
+                                        ? L("Retirer la marque", "Remove the mark")
+                                        : L("Marquer comme déjà téléchargé", "Mark as already downloaded"))
                                     Button {
                                         onDownloadAll(name)
                                     } label: {
