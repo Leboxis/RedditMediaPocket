@@ -114,7 +114,6 @@ struct MediaPreview: View {
                 }.accessibilityLabel("Partager ce média")
             }.padding(.horizontal, 8).padding(.vertical, 4)
             MediaPager(urls: urls, index: $index)
-                .ignoresSafeArea(edges: isVideo(urls[index]) ? [] : .bottom)
         }
         .background(Color.black.ignoresSafeArea())
         .foregroundStyle(.white).tint(.white)
@@ -152,14 +151,14 @@ private struct MediaPager: View {
             .frame(width: width * CGFloat(max(urls.count, 1)), alignment: .leading)
             .offset(x: -CGFloat(index) * width + dragOffset)
             .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 12, coordinateSpace: .local)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 18, coordinateSpace: .named("mediaPager"))
                     .onChanged { value in
-                        guard !isVideo(urls[index]), !zoomed[index] else { dragOffset = 0; return }
-                        dragOffset = zoomed[index] ? 0 : value.translation.width
+                        guard canPage(value, height: proxy.size.height) else { dragOffset = 0; return }
+                        dragOffset = value.translation.width
                     }
                     .onEnded { value in
-                        guard !isVideo(urls[index]), !zoomed[index] else { dragOffset = 0; return }
+                        guard canPage(value, height: proxy.size.height) else { dragOffset = 0; return }
                         let limit = max(60, width * 0.2)
                         let dx = value.translation.width
                         let predicted = value.predictedEndTranslation.width
@@ -171,15 +170,25 @@ private struct MediaPager: View {
                             dragOffset = 0
                         }
                     },
-                // Preserve native video scrubbing and image zoom gestures.
-                // Videos use the existing previous/next buttons for navigation.
-                including: (isVideo(urls[index]) || zoomed[index]) ? .subviews : .all
+                including: zoomed[index] ? .subviews : .all
             )
         }
         .background(Color.black)
+        .coordinateSpace(name: "mediaPager")
         .clipped()
         .onChange(of: zoomed[index]) { _ in dragOffset = 0 }
         .onChange(of: index) { _ in dragOffset = 0 }
+    }
+
+    private func canPage(_ value: DragGesture.Value, height: CGFloat) -> Bool {
+        guard !zoomed[index], abs(value.translation.width) > abs(value.translation.height) else { return false }
+        if isVideo(urls[index]) {
+            // Reserve the native top controls and bottom scrubber. A horizontal
+            // swipe in the central picture navigates in either direction.
+            return value.startLocation.y > min(80, height * 0.2)
+                && value.startLocation.y < height - min(140, height / 3)
+        }
+        return true
     }
 }
 
@@ -188,14 +197,12 @@ struct MediaPage: View {
     let active: Bool
     @Binding var zoomed: Bool
     @State private var image: UIImage?
-    @State private var player: AVPlayer?
     @State private var failed = false
     var body: some View {
         ZStack {
             Color.black
             if isVideo(url) {
-                if let player { VideoPlayer(player: player) }
-                else { ProgressView().tint(.white) }
+                LocalVideoPlayer(url: url, active: active).id(url)
             } else if url.pathExtension.lowercased() == "gif" {
                 if active { AnimatedImage(url: url) }
             } else if let image {
@@ -205,8 +212,7 @@ struct MediaPage: View {
             } else { ProgressView().tint(.white) }
         }
         .task(id: url) {
-            if isVideo(url) { updatePlayback() }
-            else if url.pathExtension.lowercased() != "gif" {
+            if !isVideo(url), url.pathExtension.lowercased() != "gif" {
                 let value = await Task.detached(priority: .userInitiated) { () -> UIImage? in
                     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                           let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -219,15 +225,47 @@ struct MediaPage: View {
                 if !Task.isCancelled { image = value; failed = value == nil }
             }
         }
-        .onChange(of: active) { _ in updatePlayback() }
-        .onDisappear { player?.pause(); player = nil }
     }
-    private func updatePlayback() {
-        guard isVideo(url) else { return }
-        if active {
-            if player == nil { player = AVPlayer(url: url) }
-            player?.play()
-        } else { player?.pause() }
+}
+
+/// Every mounted video page owns a player, including the preloaded neighbours.
+/// Activation updates playback directly; no optional-player spinner depends on
+/// a SwiftUI task or onChange arriving when a swipe reveals an existing page.
+private struct LocalVideoPlayer: UIViewControllerRepresentable {
+    let url: URL
+    let active: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = context.coordinator.player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspect
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        context.coordinator.setActive(active)
+    }
+
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+        coordinator.player.pause()
+        controller.player = nil
+    }
+
+    final class Coordinator {
+        let player: AVPlayer
+        private var active: Bool?
+
+        init(url: URL) { player = AVPlayer(url: url) }
+
+        func setActive(_ value: Bool) {
+            // Do not undo a user's pause whenever the drag redraws the page.
+            guard active != value else { return }
+            active = value
+            if value { player.play() } else { player.pause() }
+        }
     }
 }
 
