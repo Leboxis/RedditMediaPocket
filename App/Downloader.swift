@@ -311,8 +311,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
         await RedditSession.shared.refresh()
         guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
         do {
-            async let friendsData = data(URL(string: "https://old.reddit.com/prefs/friends/")!)
-            async let feedsData = data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
+            async let friendsData = network.data(URL(string: "https://old.reddit.com/prefs/friends/")!)
+            async let feedsData = network.data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
             let friendsHTML = String(decoding: try await friendsData, as: UTF8.self)
             let own = (try? SavedFeed(preferencesHTML: String(decoding: try await feedsData, as: UTF8.self)))?.username
             try Task.checkCancellation()
@@ -328,7 +328,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// aucun téléchargement.
     func previewPosts(username: String) async throws -> [Post] {
         let source = try FeedSource.user(try MediaExtractor.username(username))
-        let body = try await data(source.feedURL())
+        let body = try await network.data(source.feedURL())
         try Task.checkCancellation()
         return try FeedParser.parse(body)
     }
