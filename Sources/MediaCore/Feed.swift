@@ -7,7 +7,10 @@ public struct Post: Identifiable {
     public let id: String
     public let title: String
     public let html: String
-    public init(id: String, title: String, html: String) { self.id = id; self.title = title; self.html = html }
+    public let publishedAt: Date?
+    public init(id: String, title: String, html: String, publishedAt: Date? = nil) {
+        self.id = id; self.title = title; self.html = html; self.publishedAt = publishedAt
+    }
 }
 
 public enum Media: Hashable, Sendable {
@@ -25,11 +28,11 @@ public enum FeedError: LocalizedError {
     case invalidFeed, invalidUsername, invalidSubreddit, loginRequired, unsupportedVideo
     public var errorDescription: String? {
         switch self {
-        case .unsupportedVideo: return "Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée."
-        case .invalidFeed: return "Réponse RSS invalide : Reddit peut refuser cet accès anonyme."
-        case .invalidUsername: return "Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo)."
-        case .invalidSubreddit: return "Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics)."
-        case .loginRequired: return "Connecte-toi à Reddit dans les Réglages, puis relance : les éléments sauvegardés exigent une session."
+        case .unsupportedVideo: return L("Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée.", "Segmented video manifest unsupported; no lower-quality version downloaded.")
+        case .invalidFeed: return L("Réponse RSS invalide : Reddit peut refuser cet accès anonyme.", "Invalid RSS response: Reddit may deny anonymous access.")
+        case .invalidUsername: return L("Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo).", "Invalid username (3 to 20 letters, digits, hyphens or underscores, e.g. u/username).")
+        case .invalidSubreddit: return L("Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics).", "Invalid subreddit (2 to 21 letters, digits or underscores, e.g. r/pics).")
+        case .loginRequired: return L("Connecte-toi à Reddit dans les Réglages, puis relance : les éléments sauvegardés exigent une session.", "Sign in to Reddit in Settings, then try again: saved posts require a session.")
         }
     }
 }
@@ -83,7 +86,7 @@ public enum FeedSource: Hashable, Sendable {
 
     public var displayName: String {
         switch self {
-        case .saved(let name): return "♥ \(name)"
+        case .saved: return "Saved"
         default: return id
         }
     }
@@ -136,8 +139,15 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     private var posts: [Post] = []
     private var inEntry = false
     private var element = ""
-    private var id = "", title = "", html = ""
+    private var id = "", title = "", html = "", published = ""
     private var isFeed = false
+    private static func parseDate(_ text: String) -> Date? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
+    }
     public static func parse(_ data: Data) throws -> [Post] {
         let delegate = FeedParser()
         let parser = XMLParser(data: data)
@@ -149,15 +159,15 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     public func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         element = name
         if name == "feed" { isFeed = true }
-        if name == "entry" { inEntry = true; id = ""; title = ""; html = "" }
+        if name == "entry" { inEntry = true; id = ""; title = ""; html = ""; published = "" }
     }
     public func parser(_ parser: XMLParser, foundCharacters text: String) {
         guard inEntry else { return }
-        switch element { case "id": id += text; case "title": title += text; case "content": html += text; default: break }
+        switch element { case "id": id += text; case "title": title += text; case "content": html += text; case "published": published += text; default: break }
     }
     public func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
     public func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html)) }; inEntry = false }
+        if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html, publishedAt: Self.parseDate(published))) }; inEntry = false }
         element = ""
     }
 }

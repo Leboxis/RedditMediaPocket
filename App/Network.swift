@@ -6,8 +6,8 @@ enum NetworkError: LocalizedError {
     case refused(Int), limited(service: String, until: Date), invalid(String)
     var errorDescription: String? {
         switch self {
-        case .refused(let code): return "Accès refusé (HTTP \(code)). Aucun contournement ni nouvelle tentative automatique."
-        case .limited(let service, let date): return "\(service) · réessayer le \(date.formatted(date: .numeric, time: .shortened))"
+        case .refused(let code): return L("Accès refusé (HTTP \(code)). Aucun contournement ni nouvelle tentative automatique.", "Access denied (HTTP \(code)). No bypass or automatic retry.")
+        case .limited(let service, let date): return L("\(service) · réessayer le \(date.formatted(date: .numeric, time: .shortened))", "\(service) · retry on \(date.formatted(date: .numeric, time: .shortened))")
         case .invalid(let message): return message
         }
     }
@@ -43,7 +43,7 @@ enum NetworkError: LocalizedError {
         session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }
     private func request(_ url: URL, bearer: String?) async throws -> URLRequest {
-        guard url.scheme == "https" else { throw NetworkError.invalid("Seuls les liens HTTPS sont acceptés.") }
+        guard url.scheme == "https" else { throw NetworkError.invalid(L("Seuls les liens HTTPS sont acceptés.", "Only HTTPS links are accepted.")) }
         let service = RatePolicy.service(for: url.host ?? "Serveur")
         try checkLimit(service)
         // No application-imposed delay: free workers start requests immediately.
@@ -55,7 +55,7 @@ enum NetworkError: LocalizedError {
         return request
     }
     private func check(_ response: URLResponse, requestedURL: URL) throws {
-        guard let http = response as? HTTPURLResponse else { throw NetworkError.invalid("Réponse réseau invalide.") }
+        guard let http = response as? HTTPURLResponse else { throw NetworkError.invalid(L("Réponse réseau invalide.", "Invalid network response.")) }
         if http.statusCode == 429 {
             let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
             let date = RatePolicy.retryDate(header: http.value(forHTTPHeaderField: "Retry-After"), now: Date())
@@ -97,7 +97,7 @@ enum NetworkError: LocalizedError {
             try Task.checkCancellation()
             return try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            throw NetworkError.invalid("Reddit refuse l’accès aux flux privés (HTTP \(code)). Ouvre la connexion dans les Réglages, vérifie le compte et les flux RSS privés dans prefs/feeds, puis relance.")
+            throw NetworkError.invalid(L("Reddit refuse l’accès aux flux privés (HTTP \(code)). Ouvre la connexion dans les Réglages, vérifie le compte et les flux RSS privés dans prefs/feeds, puis relance.", "Reddit denied access to private feeds (HTTP \(code)). Open sign-in in Settings, check your account and private RSS feeds in prefs/feeds, then try again."))
         }
     }
 
@@ -112,12 +112,12 @@ enum NetworkError: LocalizedError {
             if case NetworkError.limited = error { throw error }
             if case NetworkError.refused(let code) = error {
                 if (300...399).contains(code) {
-                    throw NetworkError.invalid("Redirection du flux privé non prise en charge (HTTP \(code)). La destination ne correspond pas au flux des sauvegardés du compte ; téléchargement arrêté pour protéger le lien privé.")
+                    throw NetworkError.invalid(L("Redirection du flux privé non prise en charge (HTTP \(code)). La destination ne correspond pas au flux des sauvegardés du compte ; téléchargement arrêté pour protéger le lien privé.", "Unsupported private feed redirect (HTTP \(code)). The destination does not match the account’s saved feed; download stopped to protect the private link."))
                 }
-                throw NetworkError.invalid("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)). Vérifie la session et l’activation des flux RSS privés dans prefs/feeds. Aucune nouvelle tentative automatique.")
+                throw NetworkError.invalid(L("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)). Vérifie la session et l’activation des flux RSS privés dans prefs/feeds. Aucune nouvelle tentative automatique.", "Reddit denied access to the private saved feed (HTTP \(code)). Check your session and enable private RSS feeds in prefs/feeds. No automatic retry."))
             }
             // URLSession errors can contain the private URL: never expose its token.
-            throw NetworkError.invalid("Impossible de lire le flux privé des sauvegardés. Vérifie la connexion et les flux RSS privés dans les préférences Reddit, puis relance.")
+            throw NetworkError.invalid(L("Impossible de lire le flux privé des sauvegardés. Vérifie la connexion et les flux RSS privés dans les préférences Reddit, puis relance.", "Unable to read the private saved feed. Check your connection and private RSS feeds in Reddit preferences, then try again."))
         }
     }
     func download(_ url: URL) async throws -> URL {
@@ -127,11 +127,11 @@ enum NetworkError: LocalizedError {
         let (temp, response) = try await session.download(for: req)
         do {
             try Task.checkCancellation()
-            guard response.url?.scheme == "https" else { throw NetworkError.invalid("Redirection non HTTPS refusée.") }
+            guard response.url?.scheme == "https" else { throw NetworkError.invalid(L("Redirection non HTTPS refusée.", "Non-HTTPS redirect refused.")) }
             try check(response, requestedURL: url)
             let mime = response.mimeType ?? ""
             guard mime.hasPrefix("image/") || mime.hasPrefix("video/") || mime.hasPrefix("audio/") || mime == "application/octet-stream" else {
-                throw NetworkError.invalid("Le serveur n’a pas renvoyé un média (\(mime)).")
+                throw NetworkError.invalid(L("Le serveur n’a pas renvoyé un média (\(mime)).", "The server did not return media (\(mime))."))
             }
             let persistent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
             try FileManager.default.moveItem(at: temp, to: persistent)

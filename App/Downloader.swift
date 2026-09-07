@@ -15,7 +15,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isSaved { return "saved/\(name)" }
         return (isSubreddit ? "r/" : "u/") + name
     }
-    var displayName: String { isSaved ? "♥ \(name)" : id }
+    var displayName: String { isSaved ? "Saved" : id }
     /// Dossier de stockage. Les points de `r.…` et `saved.…` sont interdits
     /// dans les pseudos : aucune collection existante ne peut entrer en collision.
     var folderName: String {
@@ -247,9 +247,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
               }) == true else { return }
         do {
             try fm.removeItem(at: url)
+            MediaMetadata.remove(for: url)
             reload()
         } catch {
-            errorMessage = "Impossible de supprimer ce média : \(error.localizedDescription)"
+            errorMessage = L("Impossible de supprimer ce média : \(error.localizedDescription)", "Unable to delete this media: \(error.localizedDescription)")
         }
     }
 
@@ -297,7 +298,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             do { try await run() }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
-                status = Task.isCancelled || error is CancellationError ? "Arrêté" : error.localizedDescription
+                status = Task.isCancelled || error is CancellationError ? L("Arrêté", "Stopped") : error.localizedDescription
                 if !Task.isCancelled && !(error is CancellationError) { errorMessage = error.localizedDescription }
             }
         }
@@ -306,13 +307,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private struct Download: Sendable {
         let media: Media
         let destination: URL
+        let postDate: Date?
     }
 
     private func run() async throws {
         let source: FeedSource
         let privateFeed: SavedFeed?
         if sourceKind == "saved" {
-            status = "Recherche des sauvegardés du compte connecté…"
+            status = L("Recherche des sauvegardés du compte connecté…", "Finding saved posts for the signed-in account…")
             let feed = try await network.savedFeed()
             try Task.checkCancellation()
             source = .saved(feed.username)
@@ -321,7 +323,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
             source = try FeedSource.parse(text)
             if case .saved(let name) = source {
-                status = "Vérification du compte et du flux privé…"
+                status = L("Vérification du compte et du flux privé…", "Checking account and private feed…")
                 privateFeed = try await network.savedFeed(username: name)
             } else { privateFeed = nil }
         }
@@ -340,7 +342,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
         for _ in 1...100 {
             try Task.checkCancellation()
-            status = "Recherche…"
+            status = L("Recherche…", "Searching…")
             let posts: [Post]
             if let privateFeed {
                 posts = try await network.savedPosts(privateFeed, after: after)
@@ -381,9 +383,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         }
                     } else if fm.fileExists(atPath: legacyDestination.path) {
                         try? fm.moveItem(at: legacyDestination, to: destination)
+                        MediaMetadata.move(from: legacyDestination, to: destination)
                         renamedExisting = true
                     } else {
-                        downloads.append(Download(media: item, destination: destination))
+                        downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt))
                     }
                 }
             }
@@ -403,11 +406,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
             saveCollections()
         }
         if failed == 0 {
-            status = skipped > 0 ? "\(count) reçus · \(skipped) à reprendre" : (count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés")
+            status = skipped > 0 ? L("\(count) reçus · \(skipped) à reprendre", "\(count) received · \(skipped) to resume") : (count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded"))
         } else {
-            var summary = count == 0 ? "Aucun nouveau média accessible" : "\(count) téléchargés"
-            if skipped > 0 { summary += " · \(skipped) à reprendre" }
-            summary += " · \(failed) inaccessible\(failed > 1 ? "s" : "")"
+            var summary = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
+            if skipped > 0 { summary += L(" · \(skipped) à reprendre", " · \(skipped) to resume") }
+            summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
             status = summary
         }
     }
@@ -441,6 +444,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
+        MediaMetadata(downloadedAt: Date(), postDate: item.postDate).save(for: item.destination)
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
@@ -468,12 +472,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
             struct Response: Decodable { struct Gif: Decodable { struct URLs: Decodable { let hd: URL?; let sd: URL? }; let urls: URLs }; let gif: Gif }
             let data = try await network.data(URL(string: "https://api.redgifs.com/v2/gifs/\(id)")!, bearer: bearer)
             let urls = try JSONDecoder().decode(Response.self, from: data).gif.urls
-            guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid("Média RedGIFs indisponible.") }
+            guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid(L("Média RedGIFs indisponible.", "RedGIFs media unavailable.")) }
             return try await network.download(url)
         case .redditVideo(let base):
             let manifest = base.appendingPathComponent("DASHPlaylist.mpd")
             let tracks = try DASHParser.parse(try await network.data(manifest), relativeTo: manifest)
-            guard tracks.video.host == base.host, tracks.audio == nil || tracks.audio?.host == base.host else { throw NetworkError.invalid("Manifest vidéo inattendu.") }
+            guard tracks.video.host == base.host, tracks.audio == nil || tracks.audio?.host == base.host else { throw NetworkError.invalid(L("Manifest vidéo inattendu.", "Unexpected video manifest.")) }
             let video = try await network.download(tracks.video)
             guard let audioURL = tracks.audio else { return video }
             defer { try? fm.removeItem(at: video) }
@@ -488,16 +492,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
         guard let sourceV = try await v.loadTracks(withMediaType: .video).first,
               let sourceA = try await a.loadTracks(withMediaType: .audio).first,
               let targetV = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid),
-              let targetA = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw NetworkError.invalid("Pistes vidéo/audio illisibles.") }
+              let targetA = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else { throw NetworkError.invalid(L("Pistes vidéo/audio illisibles.", "Unable to read video/audio tracks.")) }
         let durationV = try await v.load(.duration), durationA = try await a.load(.duration)
         try targetV.insertTimeRange(CMTimeRange(start: .zero, duration: durationV), of: sourceV, at: .zero)
         try targetA.insertTimeRange(CMTimeRange(start: .zero, duration: CMTimeMinimum(durationV, durationA)), of: sourceA, at: .zero)
         targetV.preferredTransform = try await sourceV.load(.preferredTransform)
         let output = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
-        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw NetworkError.invalid("Assemblage vidéo indisponible.") }
+        guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw NetworkError.invalid(L("Assemblage vidéo indisponible.", "Video merging unavailable.")) }
         export.outputURL = output; export.outputFileType = .mp4
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
-        guard export.status == .completed else { try? fm.removeItem(at: output); throw export.error ?? NetworkError.invalid("Échec de l’assemblage vidéo.") }
+        guard export.status == .completed else { try? fm.removeItem(at: output); throw export.error ?? NetworkError.invalid(L("Échec de l’assemblage vidéo.", "Video merging failed.")) }
         if Task.isCancelled { try? fm.removeItem(at: output); throw CancellationError() }
         return output
     }

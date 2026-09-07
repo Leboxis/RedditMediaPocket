@@ -1,3 +1,4 @@
+import MediaCore
 import SwiftUI
 import UIKit
 import AVFoundation
@@ -82,6 +83,7 @@ struct MediaThumbnail: View {
 }
 
 struct MediaPreview: View {
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     let urls: [URL]
     @State private var index: Int
     @Environment(\.dismiss) private var dismiss
@@ -93,12 +95,12 @@ struct MediaPreview: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                    .accessibilityLabel("Fermer")
+                    .accessibilityLabel(L("Fermer", "Close"))
                 Button {
                     if index > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index -= 1 } }
                 } label: { Image(systemName: "chevron.backward").frame(width: 44, height: 44) }
                     .disabled(index == 0)
-                    .accessibilityLabel("Média précédent")
+                    .accessibilityLabel(L("Média précédent", "Previous media"))
                 VStack(spacing: 3) {
                     Text(urls[index].lastPathComponent).font(.subheadline.weight(.medium))
                         .lineLimit(1).truncationMode(.middle)
@@ -108,10 +110,10 @@ struct MediaPreview: View {
                     if index < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index += 1 } }
                 } label: { Image(systemName: "chevron.forward").frame(width: 44, height: 44) }
                     .disabled(index == urls.count - 1)
-                    .accessibilityLabel("Média suivant")
+                    .accessibilityLabel(L("Média suivant", "Next media"))
                 ShareLink(item: urls[index]) {
                     Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
-                }.accessibilityLabel("Partager ce média")
+                }.accessibilityLabel(L("Partager ce média", "Share this media"))
             }.padding(.horizontal, 8).padding(.vertical, 4)
             MediaPager(urls: urls, index: $index)
         }

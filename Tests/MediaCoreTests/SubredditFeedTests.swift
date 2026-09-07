@@ -79,7 +79,7 @@ final class SubredditFeedTests: XCTestCase {
 
     func testSavedMapping() {
         XCTAssertEqual(FeedSource.saved("leboxis").id, "saved/leboxis")
-        XCTAssertEqual(FeedSource.saved("leboxis").displayName, "♥ leboxis")
+        XCTAssertEqual(FeedSource.saved("leboxis").displayName, "Saved")
         XCTAssertEqual(FeedSource.saved("leboxis").folderName, "saved.leboxis")
     }
 
