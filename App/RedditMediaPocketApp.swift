@@ -250,7 +250,10 @@ struct ContentView: View {
                     .accessibilityLabel(L("Réglages", "Settings"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                KDriveUploadButton(files: model.files)
+                KDriveCollectionUploadButton(
+                    files: model.files,
+                    collectionLabel: model.activeCollection?.displayName ?? "Pocket"
+                )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button { export = ExportSelection(files: model.files) } label: {
