@@ -250,6 +250,9 @@ struct ContentView: View {
                     .accessibilityLabel(L("Réglages", "Settings"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
+                KDriveUploadButton(files: model.files)
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 Button { export = ExportSelection(files: model.files) } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
@@ -380,6 +383,7 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.") : L("Session locale. Les limites Reddit restent applicables.", "Local session. Reddit rate limits still apply."))
                 }
+                KDriveSettingsSection()
                 Section {
                     Button(L("Supprimer tous les téléchargements", "Delete all downloads"), role: .destructive) { confirmDeleteAll = true }
                         .disabled(model.running)
