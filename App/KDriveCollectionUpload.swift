@@ -59,13 +59,9 @@ private struct KDriveCollectionUploadFlow: View {
     @State private var errorMessage: String?
 
     private var targetFolderName: String {
-        let trimmed = collectionLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let source = trimmed.isEmpty ? "Pocket" : trimmed
-        // Un slash ne peut pas faire partie d’un nom de dossier. Les variantes
-        // Unicode gardent le libellé visuellement identique à la pastille.
-        return source
-            .replacingOccurrences(of: "/", with: "／")
-            .replacingOccurrences(of: "\\", with: "＼")
+        // Dossier kDrive = juste le pseudo/sub, première lettre en majuscule
+        // (ex. `leboxis` → `Leboxis`). Assaini pour l'API kDrive.
+        FilenamePolicy.kDriveFolderName(collectionLabel)
     }
 
     var body: some View {
@@ -227,7 +223,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             var success = 0
             var failed = 0
             var completed = 0
-            var lastErrorMessage: String?
+            var failedExamples: [KDriveContinuousUploadOutcome] = []
 
             await withTaskGroup(of: KDriveContinuousUploadOutcome.self) { group in
                 var nextIndex = 0
@@ -261,7 +257,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                         success += 1
                     } else {
                         failed += 1
-                        lastErrorMessage = outcome.errorMessage
+                        if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
 
                     // File glissante : dès qu’une connexion se libère, le fichier
@@ -285,11 +281,20 @@ private final class KDriveContinuousUploadController: ObservableObject {
             isUploading = false
             activeTask = nil
 
+            let summaryMessage: String? = {
+                guard failed > 0 else { return nil }
+                let examples = failedExamples.compactMap { o -> String? in
+                    guard let msg = o.errorMessage, !msg.isEmpty else { return o.fileName }
+                    return "\(o.fileName) : \(msg)"
+                }.joined(separator: "\n")
+                return L("\(failed) échec(s) sur \(files.count). Exemples :\n\(examples)", "\(failed) failure(s) out of \(files.count). Examples:\n\(examples)")
+            }()
+
             if Task.isCancelled {
                 completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
                 progress = files.isEmpty ? 0 : 1
-                completion(success, failed, lastErrorMessage)
+                completion(success, failed, summaryMessage)
             }
         }
     }
@@ -359,10 +364,50 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let originalName = fileURL.lastPathComponent
+        guard fileSize > 0 else {
+            throw KDriveError.uploadFailed(L("Fichier vide (0 octet) : \(originalName)", "Empty file (0 bytes): \(originalName)"))
+        }
+        guard fileSize <= 1_000_000_000 else {
+            throw KDriveError.uploadFailed(L("Fichier trop volumineux pour l'envoi direct (> 1 Go) : \(originalName)", "File too large for direct upload (> 1 GB): \(originalName)"))
+        }
+        let safeName = FilenamePolicy.kDriveFileName(originalName)
+        do {
+            try await performSingleUpload(
+                fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
+                token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+            )
+        } catch let error as KDriveError {
+            if case .serverError(let code, let message) = error, code == 422 {
+                let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
+                if fallback != safeName {
+                    do {
+                        try await performSingleUpload(
+                            fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
+                            token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+                        )
+                        return
+                    } catch {
+                        throw KDriveError.serverError(code, L("\(originalName) refusé même renommé (\(fallback)) : \(message)", "\(originalName) rejected even renamed (\(fallback)): \(message)"))
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    nonisolated private static func performSingleUpload(
+        fileURL: URL,
+        remoteFileName: String,
+        fileSize: Int64,
+        token cleanToken: String,
+        driveId cleanDriveId: String,
+        directoryId cleanDirectoryId: String
+    ) async throws {
         var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
         components?.queryItems = [
             URLQueryItem(name: "directory_id", value: cleanDirectoryId),
-            URLQueryItem(name: "file_name", value: fileURL.lastPathComponent),
+            URLQueryItem(name: "file_name", value: remoteFileName),
             URLQueryItem(name: "total_size", value: String(fileSize)),
             URLQueryItem(name: "conflict", value: "version")
         ]
@@ -386,13 +431,29 @@ private final class KDriveContinuousUploadController: ObservableObject {
             throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let error = json["error"] as? [String: Any],
-               let description = error["description"] as? String {
-                throw KDriveError.serverError(httpResponse.statusCode, description)
-            }
-            throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+            throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
         }
+    }
+
+    nonisolated private static func detailedMessage(from data: Data, statusCode: Int, fileName: String) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = json["error"] as? [String: Any] {
+            let description = (error["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var details: [String] = []
+            if let items = error["errors"] as? [[String: Any]] {
+                for item in items.prefix(3) {
+                    let d = (item["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let code = (item["code"] as? String) ?? ""
+                    let attribute = ((item["context"] as? [String: Any])?["attribute"] as? String) ?? ""
+                    let part = [attribute, code, d].filter { !$0.isEmpty }.joined(separator: " ")
+                    if !part.isEmpty { details.append(part) }
+                }
+            }
+            var base = description?.isEmpty == false ? description! : "HTTP \(statusCode)"
+            if !details.isEmpty { base += " — " + details.joined(separator: " · ") }
+            return "\(fileName) : \(base)"
+        }
+        return "\(fileName) : HTTP \(statusCode)"
     }
 }
 

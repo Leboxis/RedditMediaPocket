@@ -20,6 +20,16 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.postTitle("", fallback: "t3_abc"), "t3_abc")
         XCTAssertLessThanOrEqual(FilenamePolicy.postTitle(String(repeating: "é", count: 200)).utf8.count, 180)
     }
+    func testKDriveFolderNameCapitalized() {
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("leboxis"), "Leboxis")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("pics"), "Pics")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("AskReddit"), "AskReddit")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("u/leboxis"), "Leboxis")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("r/pics"), "Pics")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("saved/leboxis"), "Leboxis")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName(""), "Pocket")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("a?b"), "A-b")
+    }
 
     func testRecognizedMediaAndDeduplication() {
         let html = """

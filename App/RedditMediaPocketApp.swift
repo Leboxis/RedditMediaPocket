@@ -252,7 +252,7 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection?.displayName ?? "Pocket"
+                    collectionLabel: model.activeCollection?.name ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {

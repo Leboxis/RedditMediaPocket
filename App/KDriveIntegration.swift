@@ -198,10 +198,48 @@ final class KDriveService: ObservableObject {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
         let fileSize = (attributes[.size] as? NSNumber)?.int64Value ?? 0
+        let originalName = fileURL.lastPathComponent
+        guard fileSize > 0 else {
+            throw KDriveError.uploadFailed(L("Fichier vide (0 octet) : \(originalName)", "Empty file (0 bytes): \(originalName)"))
+        }
+        // L'upload direct kDrive est limité à 1 Go : au-delà, il faut une
+        // session chunkée, non prise en charge par cette version.
+        guard fileSize <= 1_000_000_000 else {
+            throw KDriveError.uploadFailed(L("Fichier trop volumineux pour l'envoi direct (> 1 Go) : \(originalName)", "File too large for direct upload (> 1 GB): \(originalName)"))
+        }
+        // Les titres Reddit contiennent souvent `? " * < > | \` : kDrive
+        // répond 422 `validation_failed` au lieu d'accepter le nom.
+        // On envoie donc un nom assaini, avec une 2e tentative ultra-sûre.
+        let safeName = FilenamePolicy.kDriveFileName(originalName)
+        do {
+            try await Self.performSingleUpload(
+                fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
+                token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+            )
+        } catch let error as KDriveError {
+            if case .serverError(let code, let message) = error, code == 422 {
+                let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
+                if fallback != safeName {
+                    do {
+                        try await Self.performSingleUpload(
+                            fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
+                            token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+                        )
+                        return
+                    } catch {
+                        throw KDriveError.serverError(code, L("\(originalName) refusé même renommé (\(fallback)) : \(message)", "\(originalName) rejected even renamed (\(fallback)): \(message)"))
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    nonisolated private static func performSingleUpload(fileURL: URL, remoteFileName: String, fileSize: Int64, token cleanToken: String, driveId cleanDriveId: String, directoryId cleanDirectoryId: String) async throws {
         var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
         components?.queryItems = [
             URLQueryItem(name: "directory_id", value: cleanDirectoryId),
-            URLQueryItem(name: "file_name", value: fileURL.lastPathComponent),
+            URLQueryItem(name: "file_name", value: remoteFileName),
             URLQueryItem(name: "total_size", value: String(fileSize)),
             URLQueryItem(name: "conflict", value: "version")
         ]
@@ -221,13 +259,32 @@ final class KDriveService: ObservableObject {
             throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let error = json["error"] as? [String: Any],
-               let description = error["description"] as? String {
-                throw KDriveError.serverError(httpResponse.statusCode, description)
-            }
-            throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+            throw KDriveError.serverError(httpResponse.statusCode, Self.detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
         }
+    }
+
+    /// Extrait le détail `error.errors[]` d'Infomaniak au lieu du seul
+    /// `error.description` générique (« Validation failed »), en précisant
+    /// le fichier concerné pour retrouver les 422 dans un lot de 446.
+    nonisolated private static func detailedMessage(from data: Data, statusCode: Int, fileName: String) -> String {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = json["error"] as? [String: Any] {
+            let description = (error["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var details: [String] = []
+            if let items = error["errors"] as? [[String: Any]] {
+                for item in items.prefix(3) {
+                    let d = (item["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let code = (item["code"] as? String) ?? ""
+                    let attribute = ((item["context"] as? [String: Any])?["attribute"] as? String) ?? ""
+                    let part = [attribute, code, d].filter { !$0.isEmpty }.joined(separator: " ")
+                    if !part.isEmpty { details.append(part) }
+                }
+            }
+            var base = description?.isEmpty == false ? description! : "HTTP \(statusCode)"
+            if !details.isEmpty { base += " — " + details.joined(separator: " · ") }
+            return "\(fileName) : \(base)"
+        }
+        return "\(fileName) : HTTP \(statusCode)"
     }
 
     func uploadBatch(
@@ -256,7 +313,7 @@ final class KDriveService: ObservableObject {
             var success = 0
             var failed = 0
             var completed = 0
-            var lastErrorMessage: String?
+            var failedExamples: [KDriveUploadOutcome] = []
 
             let batchSize = Self.concurrentUploadLimit
             var batchStart = 0
@@ -310,21 +367,31 @@ final class KDriveService: ObservableObject {
                         success += 1
                     } else {
                         failed += 1
-                        lastErrorMessage = outcome.errorMessage
+                        if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
                 }
 
                 batchStart = batchEnd
             }
 
+            let summaryMessage: String? = {
+                guard failed > 0 else { return nil }
+                let examples = failedExamples.compactMap { o -> String? in
+                    guard let msg = o.errorMessage, !msg.isEmpty else { return o.fileName }
+                    return "\(o.fileName) : \(msg)"
+                }.joined(separator: "\n")
+                let hint = L("Astuce : les noms avec ? \" * < > | \\ / : sont désormais renommés automatiquement à l'envoi. Relance l'upload des fichiers restants après mise à jour.", "Tip: names with ? \" * < > | \\ / : are now renamed automatically on upload. Re-run the upload for the remaining files after updating.")
+                return L("\(failed) échec(s) sur \(files.count). Exemples :\n\(examples)\n\(hint)", "\(failed) failure(s) out of \(files.count). Examples:\n\(examples)\n\(hint)")
+            }()
+
             isUploading = false
             activeTask = nil
-            lastError = lastErrorMessage
+            lastError = summaryMessage
             if Task.isCancelled {
                 completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
                 currentProgress = files.isEmpty ? 0 : 1
-                completion(success, failed, lastErrorMessage)
+                completion(success, failed, summaryMessage)
             }
         }
     }
