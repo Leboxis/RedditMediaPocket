@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import AVKit
 import ImageIO
 import WebKit
 
@@ -113,7 +114,7 @@ struct MediaPreview: View {
                 }.accessibilityLabel("Partager ce média")
             }.padding(.horizontal, 8).padding(.vertical, 4)
             MediaPager(urls: urls, index: $index)
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea(edges: isVideo(urls[index]) ? [] : .bottom)
         }
         .background(Color.black.ignoresSafeArea())
         .foregroundStyle(.white).tint(.white)
@@ -154,9 +155,11 @@ private struct MediaPager: View {
             .gesture(
                 DragGesture(minimumDistance: 12, coordinateSpace: .local)
                     .onChanged { value in
+                        guard !isVideo(urls[index]), !zoomed[index] else { dragOffset = 0; return }
                         dragOffset = zoomed[index] ? 0 : value.translation.width
                     }
                     .onEnded { value in
+                        guard !isVideo(urls[index]), !zoomed[index] else { dragOffset = 0; return }
                         let limit = max(60, width * 0.2)
                         let dx = value.translation.width
                         let predicted = value.predictedEndTranslation.width
@@ -168,12 +171,15 @@ private struct MediaPager: View {
                             dragOffset = 0
                         }
                     },
-                including: zoomed[index] ? .none : .all
+                // Preserve native video scrubbing and image zoom gestures.
+                // Videos use the existing previous/next buttons for navigation.
+                including: (isVideo(urls[index]) || zoomed[index]) ? .subviews : .all
             )
         }
         .background(Color.black)
         .clipped()
         .onChange(of: zoomed[index]) { _ in dragOffset = 0 }
+        .onChange(of: index) { _ in dragOffset = 0 }
     }
 }
 
@@ -188,7 +194,7 @@ struct MediaPage: View {
         ZStack {
             Color.black
             if isVideo(url) {
-                if let player { VideoLayer(player: player).ignoresSafeArea() }
+                if let player { VideoPlayer(player: player) }
                 else { ProgressView().tint(.white) }
             } else if url.pathExtension.lowercased() == "gif" {
                 if active { AnimatedImage(url: url) }
@@ -223,24 +229,6 @@ struct MediaPage: View {
             player?.play()
         } else { player?.pause() }
     }
-}
-
-private struct VideoLayer: UIViewRepresentable {
-    let player: AVPlayer
-    func makeUIView(context: Context) -> PlayerContainer {
-        let container = PlayerContainer()
-        container.playerLayer.player = player
-        return container
-    }
-    func updateUIView(_ view: PlayerContainer, context: Context) { view.playerLayer.player = player }
-    static func dismantleUIView(_ view: PlayerContainer, coordinator: ()) { view.playerLayer.player = nil }
-}
-
-private final class PlayerContainer: UIView {
-    let playerLayer = AVPlayerLayer()
-    override init(frame: CGRect) { super.init(frame: frame); layer.addSublayer(playerLayer) }
-    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
-    override func layoutSubviews() { super.layoutSubviews(); playerLayer.frame = bounds }
 }
 
 private struct AnimatedImage: UIViewRepresentable {
