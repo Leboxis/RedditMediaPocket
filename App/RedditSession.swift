@@ -45,6 +45,7 @@ import MediaCore
 }
 
 struct RedditLogin: View {
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = RedditSession.shared
     @State private var message = ""
@@ -150,6 +151,7 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 struct RedditSessionIndicator: View {
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @ObservedObject private var session = RedditSession.shared
     var body: some View {
         HStack(spacing: 10) {

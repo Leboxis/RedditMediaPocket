@@ -83,6 +83,7 @@ struct MediaThumbnail: View {
 }
 
 struct MediaPreview: View {
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     let urls: [URL]
     @State private var index: Int
     @Environment(\.dismiss) private var dismiss

@@ -304,6 +304,7 @@ struct ContentView: View {
 /// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
 /// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → ♥.
 private struct SourceKindToggle: View {
+    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Binding var kind: String
     @State private var halfFlip = false
 
