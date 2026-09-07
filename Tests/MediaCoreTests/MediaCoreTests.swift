@@ -31,6 +31,19 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("a?b"), "A-b")
     }
 
+    func testKDriveNamesHaveStableSuffixes() {
+        // Fixed vector also catches accidentally reverting to hashValue.
+        XCTAssertEqual(FilenamePolicy.kDriveFallbackName(for: "hello"), "media-a430d846")
+        let original = String(repeating: "é", count: 120) + ".mp4"
+        let name = FilenamePolicy.kDriveFileName(original)
+        XCTAssertLessThanOrEqual(name.utf8.count, 150)
+        XCTAssertTrue(name.hasSuffix(".mp4"))
+        let fallback = FilenamePolicy.kDriveFallbackName(for: original)
+        XCTAssertTrue(name.hasSuffix(String(fallback.dropFirst("media".count))))
+        XCTAssertNotEqual(name, FilenamePolicy.kDriveFileName(String(repeating: "é", count: 119) + "a.mp4"))
+        XCTAssertEqual(FilenamePolicy.kDriveFileName("photo.jpg"), "photo.jpg")
+    }
+
     func testRecognizedMediaAndDeduplication() {
         let html = """
         <img src="https://preview.redd.it/thumbnail.jpg"><a href="https://v.redd.it/abc/">video</a>

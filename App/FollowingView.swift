@@ -10,10 +10,11 @@ struct FollowingView: View {
     @State private var friends: [String]?
     @State private var errorMessage: String?
     @State private var loading = false
+    @State private var retryCount = 0
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
                 if !session.hasSession {
                     VStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.badge.questionmark")
@@ -24,7 +25,7 @@ struct FollowingView: View {
                             .multilineTextAlignment(.center)
                     }
                     .padding(24)
-                } else if loading {
+                } else if loading || (friends == nil && errorMessage == nil) {
                     VStack(spacing: 10) {
                         ProgressView()
                         Text(L("Chargement des suivis…", "Loading followed accounts…"))
@@ -38,7 +39,7 @@ struct FollowingView: View {
                         Text(errorMessage)
                             .font(.footnote).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
-                        Button(L("Réessayer", "Retry")) { Task { await load() } }
+                        Button(L("Réessayer", "Retry")) { retryCount += 1 }
                             .buttonStyle(.borderedProminent)
                     }
                     .padding(24)
@@ -56,23 +57,24 @@ struct FollowingView: View {
                     } else {
                         List {
                             ForEach(friends, id: \.self) { name in
-                                NavigationLink {
-                                    FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "person.crop.circle.fill")
-                                            .font(.title3).foregroundStyle(.orange)
-                                        Text(name).fontWeight(.medium).lineLimit(1)
-                                        Spacer()
-                                        Button {
-                                            onDownloadAll(name)
-                                        } label: {
-                                            Image(systemName: "arrow.down.circle").font(.title3)
+                                HStack(spacing: 10) {
+                                    NavigationLink {
+                                        FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: "person.crop.circle.fill")
+                                                .font(.title3).foregroundStyle(.orange)
+                                            Text(name).fontWeight(.medium).lineLimit(1)
                                         }
-                                        .buttonStyle(.borderless)
-                                        .disabled(model.running)
-                                        .accessibilityLabel(L("Tout télécharger de \(name)", "Download all from \(name)"))
                                     }
+                                    Button {
+                                        onDownloadAll(name)
+                                    } label: {
+                                        Image(systemName: "arrow.down.circle").font(.title3)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .disabled(model.running)
+                                    .accessibilityLabel(L("Tout télécharger de \(name)", "Download all from \(name)"))
                                 }
                             }
                         }
@@ -89,23 +91,23 @@ struct FollowingView: View {
             }
         }
         .tint(.orange)
-        .task {
-            if session.hasSession, friends == nil, errorMessage == nil { await load() }
-        }
-        .onChange(of: session.hasSession) { active in
-            if active, friends == nil, errorMessage == nil, !loading { Task { await load() } }
+        .task(id: "\(session.hasSession)-\(retryCount)") {
+            if session.hasSession, friends == nil { await load() }
         }
     }
 
     @MainActor private func load() async {
         loading = true
+        defer { loading = false }
         errorMessage = nil
         do {
-            friends = try await model.followedUsers()
+            let result = try await model.followedUsers()
+            try Task.checkCancellation()
+            friends = result
         } catch {
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
         }
-        loading = false
     }
 }
 
@@ -117,10 +119,13 @@ struct FollowingUserPosts: View {
     @State private var posts: [Post]?
     @State private var errorMessage: String?
     @State private var loading = false
+    @State private var retryCount = 0
 
     var body: some View {
-        Group {
-            if loading {
+        // Keep a concrete container alive while state changes so the loading
+        // task and navigation modifiers never depend on an empty Group.
+        VStack(spacing: 0) {
+            if loading || (posts == nil && errorMessage == nil) {
                 VStack(spacing: 10) {
                     ProgressView()
                     Text(L("Lecture des posts…", "Loading posts…"))
@@ -134,7 +139,7 @@ struct FollowingUserPosts: View {
                     Text(errorMessage)
                         .font(.footnote).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                    Button(L("Réessayer", "Retry")) { Task { await load() } }
+                    Button(L("Réessayer", "Retry")) { retryCount += 1 }
                         .buttonStyle(.borderedProminent)
                 }
                 .padding(24)
@@ -170,8 +175,8 @@ struct FollowingUserPosts: View {
                 .accessibilityLabel(L("Tout télécharger", "Download all"))
             }
         }
-        .task {
-            if posts == nil, errorMessage == nil { await load() }
+        .task(id: retryCount) {
+            if posts == nil { await load() }
         }
     }
 
@@ -207,12 +212,15 @@ struct FollowingUserPosts: View {
 
     @MainActor private func load() async {
         loading = true
+        defer { loading = false }
         errorMessage = nil
         do {
-            posts = try await model.previewPosts(username: username)
+            let result = try await model.previewPosts(username: username)
+            try Task.checkCancellation()
+            posts = result
         } catch {
+            guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
         }
-        loading = false
     }
 }

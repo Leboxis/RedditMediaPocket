@@ -67,8 +67,7 @@ public enum FilenamePolicy {
         if candidate.utf8.count <= maxUTF8Bytes { return candidate }
 
         // Tronque le stem en gardant l'extension et un suffixe distinctif.
-        let hash = String(abs(original.hashValue), radix: 36)
-        let suffix = "-" + hash.prefix(6)
+        let suffix = "-" + stableSuffix(original).prefix(6)
         let extBytes = ext.isEmpty ? 0 : ext.utf8.count + 1
         let allowedStemBytes = max(1, maxUTF8Bytes - extBytes - suffix.utf8.count)
         var truncated = ""
@@ -93,9 +92,18 @@ public enum FilenamePolicy {
     /// serveur rejette encore le nom assaini avec un 422.
     public static func kDriveFallbackName(for original: String) -> String {
         let ext = URL(fileURLWithPath: original).pathExtension
-        let hash = String(abs(original.hashValue), radix: 36)
-        let stem = "media-" + hash.prefix(8)
+        let stem = "media-" + stableSuffix(original).prefix(8)
         return ext.isEmpty ? String(stem) : "\(stem).\(ext)"
+    }
+
+    /// FNV-1a over UTF-8: persisted names must not depend on Swift's
+    /// randomly seeded hashValue (which changes between app launches).
+    private static func stableSuffix(_ value: String) -> String {
+        var hash: UInt64 = 14695981039346656037
+        for byte in value.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 1099511628211
+        }
+        return String(hash, radix: 16)
     }
 
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
