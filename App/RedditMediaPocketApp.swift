@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var info: MediaInfoSelection?
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @State private var settingsPresented = false
+    @State private var followingPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
     @Environment(\.scenePhase) private var scenePhase
@@ -48,6 +49,12 @@ struct ContentView: View {
             }
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
+            }
+            .sheet(isPresented: $followingPresented) {
+                FollowingView(model: model) { username in
+                    followingPresented = false
+                    model.download(user: username)
+                }
             }
             .fullScreenCover(item: $selection) { item in
                 MediaPreview(urls: item.files, selectedURL: item.url)
@@ -248,6 +255,10 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { settingsPresented = true } label: { Image(systemName: "gearshape") }
                     .accessibilityLabel(L("Réglages", "Settings"))
+            }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { followingPresented = true } label: { Image(systemName: "person.2") }
+                    .accessibilityLabel(L("Comptes suivis", "Followed accounts"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(

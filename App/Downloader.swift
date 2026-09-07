@@ -304,6 +304,35 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
 
+    /// Comptes suivis du compte connecté, extraits de la page privée
+    /// `prefs/friends`. Le compte connecté lui-même (détecté via `prefs/feeds`)
+    /// est exclu ; si cette détection échoue, la liste brute est conservée.
+    func followedUsers() async throws -> [String] {
+        await RedditSession.shared.refresh()
+        guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
+        do {
+            async let friendsData = data(URL(string: "https://old.reddit.com/prefs/friends/")!)
+            async let feedsData = data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
+            let friendsHTML = String(decoding: try await friendsData, as: UTF8.self)
+            let own = (try? SavedFeed(preferencesHTML: String(decoding: try await feedsData, as: UTF8.self)))?.username
+            try Task.checkCancellation()
+            let names = FriendsFeed.parse(friendsHTML)
+            guard let own else { return names }
+            return names.filter { $0.caseInsensitiveCompare(own) != .orderedSame }
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            throw NetworkError.invalid(L("Reddit refuse l’accès aux comptes suivis (HTTP \(code)). Vérifie la session dans les Réglages, puis relance.", "Reddit denied access to followed accounts (HTTP \(code)). Check your session in Settings, then try again."))
+        }
+    }
+
+    /// Aperçu en lecture seule des posts publics d'un profil (RSS), sans
+    /// aucun téléchargement.
+    func previewPosts(username: String) async throws -> [Post] {
+        let source = try FeedSource.user(try MediaExtractor.username(username))
+        let body = try await data(source.feedURL())
+        try Task.checkCancellation()
+        return try FeedParser.parse(body)
+    }
+
     private struct Download: Sendable {
         let media: Media
         let destination: URL
