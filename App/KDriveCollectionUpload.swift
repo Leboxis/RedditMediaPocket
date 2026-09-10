@@ -4,6 +4,7 @@ import SwiftUI
 
 struct KDriveCollectionUploadButton: View {
     let files: [URL]
+    let collectionLabel: String
 
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -31,7 +32,8 @@ struct KDriveCollectionUploadButton: View {
             KDriveCollectionUploadFlow(
                 files: files,
                 token: token,
-                driveId: driveId
+                driveId: driveId,
+                collectionLabel: collectionLabel
             )
         }
         .alert(L("kDrive non configuré", "kDrive is not configured"), isPresented: $showNotConfigured) {
@@ -46,29 +48,149 @@ private struct KDriveCollectionUploadFlow: View {
     let files: [URL]
     let token: String
     let driveId: String
+    let collectionLabel: String
 
     @AppStorage("kDriveDirectoryId") private var configuredDirectoryId = "1"
     @AppStorage("kDriveDirectoryName") private var configuredDirectoryName = "Racine (kDrive)"
 
-    private var directoryId: String {
+    @Environment(\.dismiss) private var dismiss
+    @State private var uploadDirectoryId: String?
+    @State private var uploadDirectoryName = ""
+    @State private var isPreparing = false
+    @State private var errorMessage: String?
+
+    /// Dossier parent : celui choisi dans Réglages > Infomaniak kDrive.
+    private var parentDirectoryId: String {
         let cleaned = configuredDirectoryId.trimmingCharacters(in: .whitespacesAndNewlines)
         return cleaned.isEmpty ? "1" : cleaned
     }
 
-    private var directoryName: String {
-        configuredDirectoryName.isEmpty ? L("Racine", "Root") : configuredDirectoryName
+    private var targetFolderName: String {
+        // Dossier kDrive = juste le pseudo/sub, première lettre en majuscule
+        // (ex. `leboxis` → `Leboxis`). Assaini pour l'API kDrive.
+        FilenamePolicy.kDriveFolderName(collectionLabel)
     }
 
     var body: some View {
-        // Envoi direct dans le dossier choisi dans Réglages > Infomaniak kDrive,
-        // sans choisir de dossier à chaque upload depuis l'onglet principal.
-        KDriveContinuousUploadSheet(
-            files: files,
-            token: token,
-            driveId: driveId,
-            directoryId: directoryId,
-            directoryName: directoryName
-        )
+        Group {
+            if let uploadDirectoryId {
+                KDriveContinuousUploadSheet(
+                    files: files,
+                    token: token,
+                    driveId: driveId,
+                    directoryId: uploadDirectoryId,
+                    directoryName: uploadDirectoryName
+                )
+            } else if isPreparing {
+                NavigationStack {
+                    VStack(spacing: 18) {
+                        Spacer()
+                        ProgressView()
+                            .controlSize(.large)
+                        Text(L("Préparation du dossier…", "Preparing folder…"))
+                            .font(.headline)
+                        Text(targetFolderName)
+                            .font(.subheadline.monospaced())
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .navigationTitle("Infomaniak kDrive")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+            } else if let errorMessage {
+                NavigationStack {
+                    VStack(spacing: 18) {
+                        Spacer()
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.orange)
+                        Text(L("Impossible de préparer le dossier", "Could not prepare folder"))
+                            .font(.headline)
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                        Spacer()
+                        Button(L("Réessayer", "Retry")) {
+                            prepareCollectionFolder()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        Button(L("Annuler", "Cancel")) { dismiss() }
+                            .padding(.bottom)
+                    }
+                    .navigationTitle("Infomaniak kDrive")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+            } else {
+                // Le dossier parent vient des Réglages : on prépare directement
+                // le sous-dossier de la collection, sans choix à chaque upload.
+                ProgressView()
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            prepareCollectionFolder()
+        }
+    }
+
+    private func prepareCollectionFolder() {
+        guard uploadDirectoryId == nil, !isPreparing else { return }
+        isPreparing = true
+        errorMessage = nil
+
+        let parentId = parentDirectoryId
+        Task { @MainActor in
+            do {
+                let service = KDriveService.shared
+                let existing = try await service.fetchSubdirectories(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: parentId
+                )
+
+                let folder: KDriveFolderItem
+                if let match = existing.first(where: {
+                    $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                }) {
+                    folder = match
+                } else {
+                    do {
+                        folder = try await service.createDirectory(
+                            token: token,
+                            driveId: driveId,
+                            parentDirectoryId: parentId,
+                            folderName: targetFolderName
+                        )
+                    } catch {
+                        // Si deux créations se croisent, on relit les dossiers et on
+                        // réutilise celui qui vient d'être créé plutôt que d'échouer.
+                        let refreshed = try await service.fetchSubdirectories(
+                            token: token,
+                            driveId: driveId,
+                            directoryId: parentId
+                        )
+                        if let match = refreshed.first(where: {
+                            $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                        }) {
+                            folder = match
+                        } else {
+                            throw error
+                        }
+                    }
+                }
+
+                uploadDirectoryId = String(folder.id)
+                uploadDirectoryName = folder.name
+                isPreparing = false
+            } catch {
+                isPreparing = false
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 }
 

@@ -530,7 +530,7 @@ struct KDriveSettingsSection: View {
         } header: {
             Text("Infomaniak kDrive")
         } footer: {
-            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici est utilisé automatiquement pour les envois depuis l’onglet principal.", "The token and ID remain stored locally on this device. The folder chosen here is used automatically for uploads from the main tab."))
+            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
         }
         .onChange(of: token) { _ in connectionStatus = nil }
         .onChange(of: driveId) { _ in connectionStatus = nil }
