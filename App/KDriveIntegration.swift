@@ -526,7 +526,7 @@ struct KDriveSettingsSection: View {
         } header: {
             Text("Infomaniak kDrive")
         } footer: {
-            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier configuré ici reste disponible comme préférence, mais le dossier d’envoi est choisi à chaque upload.", "The token and ID remain stored locally on this device. The folder configured here remains available as a preference, but the upload destination is chosen for every upload."))
+            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici est utilisé automatiquement pour les envois depuis l’onglet principal.", "The token and ID remain stored locally on this device. The folder chosen here is used automatically for uploads from the main tab."))
         }
         .sheet(isPresented: $showFolderPicker) {
             KDriveFolderPickerView(
