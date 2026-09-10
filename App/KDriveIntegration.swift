@@ -449,7 +449,6 @@ struct KDriveSettingsSection: View {
     @State private var showToken = false
     @State private var isTestingConnection = false
     @State private var connectionStatus: KDriveConnectionStatus?
-    @State private var showFolderPicker = false
 
     private var configured: Bool {
         !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -487,16 +486,21 @@ struct KDriveSettingsSection: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
-            Button { showFolderPicker = true } label: {
+            NavigationLink {
+                KDriveFolderPickerView(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: $directoryId,
+                    directoryName: $directoryName,
+                    embeddedInNavigationStack: true
+                )
+            } label: {
                 HStack {
                     Label(directoryName.isEmpty ? L("Racine (kDrive)", "Root (kDrive)") : directoryName, systemImage: "folder.fill")
                     Spacer()
                     Text("ID: \(directoryId)")
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
                 }
             }
             .disabled(!configured)
@@ -528,14 +532,6 @@ struct KDriveSettingsSection: View {
         } footer: {
             Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici est utilisé automatiquement pour les envois depuis l’onglet principal.", "The token and ID remain stored locally on this device. The folder chosen here is used automatically for uploads from the main tab."))
         }
-        .sheet(isPresented: $showFolderPicker) {
-            KDriveFolderPickerView(
-                token: token,
-                driveId: driveId,
-                directoryId: $directoryId,
-                directoryName: $directoryName
-            )
-        }
         .onChange(of: token) { _ in connectionStatus = nil }
         .onChange(of: driveId) { _ in connectionStatus = nil }
     }
@@ -543,7 +539,7 @@ struct KDriveSettingsSection: View {
     private func testConnection() {
         isTestingConnection = true
         connectionStatus = nil
-        Task {
+        Task { @MainActor in
             do {
                 let name = try await KDriveService.shared.testConnection(token: token, driveId: driveId)
                 connectionStatus = .success(name)
@@ -567,6 +563,9 @@ struct KDriveFolderPickerView: View {
     @Binding var directoryName: String
     let dismissOnSelection: Bool
     let onChoose: ((String, String) -> Void)?
+    /// `true` quand le sélecteur est poussé via NavigationLink (Réglages) :
+    /// pas de NavigationStack interne et pas de bouton Annuler (Retour suffit).
+    let embeddedInNavigationStack: Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var pathStack: [KDrivePathNode] = []
@@ -582,7 +581,8 @@ struct KDriveFolderPickerView: View {
         directoryId: Binding<String>,
         directoryName: Binding<String>,
         dismissOnSelection: Bool = true,
-        onChoose: ((String, String) -> Void)? = nil
+        onChoose: ((String, String) -> Void)? = nil,
+        embeddedInNavigationStack: Bool = false
     ) {
         self.token = token
         self.driveId = driveId
@@ -590,6 +590,7 @@ struct KDriveFolderPickerView: View {
         self._directoryName = directoryName
         self.dismissOnSelection = dismissOnSelection
         self.onChoose = onChoose
+        self.embeddedInNavigationStack = embeddedInNavigationStack
     }
 
     private var currentFolder: KDrivePathNode {
@@ -597,95 +598,97 @@ struct KDriveFolderPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 5) {
-                            ForEach(Array(pathStack.enumerated()), id: \.offset) { index, node in
-                                if index > 0 {
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-                                Button(node.name) { navigateToBreadcrumb(at: index) }
-                                    .font(index == pathStack.count - 1 ? .subheadline.bold() : .subheadline)
+        // Pas de NavigationStack interne : le sélecteur est poussé dans la
+        // pile des Réglages (NavigationLink) ou enveloppé par l'appelant modal.
+        List {
+            Section {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 5) {
+                        ForEach(Array(pathStack.enumerated()), id: \.offset) { index, node in
+                            if index > 0 {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
                             }
+                            Button(node.name) { navigateToBreadcrumb(at: index) }
+                                .font(index == pathStack.count - 1 ? .subheadline.bold() : .subheadline)
                         }
                     }
                 }
+            }
 
-                if isLoading {
-                    HStack { Spacer(); ProgressView(); Spacer() }
-                } else if let errorMessage {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.red)
-                        Button(L("Réessayer", "Retry")) { loadFolders() }
+            if isLoading {
+                HStack { Spacer(); ProgressView(); Spacer() }
+            } else if let errorMessage {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.red)
+                    Button(L("Réessayer", "Retry")) { loadFolders() }
+                }
+            } else {
+                if pathStack.count > 1 {
+                    Button { goUpOneLevel() } label: {
+                        Label(L("Dossier parent", "Parent folder"), systemImage: "arrow.turn.up.left")
                     }
+                }
+
+                if folders.isEmpty {
+                    Text(L("Aucun sous-dossier ici.", "No subfolders here."))
+                        .foregroundStyle(.secondary)
                 } else {
-                    if pathStack.count > 1 {
-                        Button { goUpOneLevel() } label: {
-                            Label(L("Dossier parent", "Parent folder"), systemImage: "arrow.turn.up.left")
-                        }
-                    }
-
-                    if folders.isEmpty {
-                        Text(L("Aucun sous-dossier ici.", "No subfolders here."))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(folders) { folder in
-                            Button { enterFolder(folder) } label: {
-                                HStack {
-                                    Label(folder.name, systemImage: "folder.fill")
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
+                    ForEach(folders) { folder in
+                        Button { enterFolder(folder) } label: {
+                            HStack {
+                                Label(folder.name, systemImage: "folder.fill")
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle(dismissOnSelection ? L("Dossier kDrive", "kDrive folder") : L("Choisir le dossier", "Choose folder"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+        }
+        .navigationTitle(dismissOnSelection ? L("Dossier kDrive", "kDrive folder") : L("Choisir le dossier", "Choose folder"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if !embeddedInNavigationStack {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(L("Annuler", "Cancel")) { dismiss() }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        newFolderName = ""
-                        showCreateFolder = true
-                    } label: {
-                        Image(systemName: "folder.badge.plus")
-                    }
-                    .disabled(isLoading)
-                    .accessibilityLabel(L("Créer un dossier", "Create folder"))
-                }
             }
-            .safeAreaInset(edge: .bottom) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
-                    let chosenId = currentFolder.id
-                    let chosenName = currentFolder.name
-                    directoryId = chosenId
-                    directoryName = chosenName
-                    onChoose?(chosenId, chosenName)
-                    if dismissOnSelection { dismiss() }
+                    newFolderName = ""
+                    showCreateFolder = true
                 } label: {
-                    Text(dismissOnSelection
-                         ? L("Choisir « \(currentFolder.name) »", "Choose “\(currentFolder.name)”")
-                         : L("Envoyer ici : « \(currentFolder.name) »", "Upload here: “\(currentFolder.name)”"))
-                        .fontWeight(.semibold)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
+                    Image(systemName: "folder.badge.plus")
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
-                .padding()
-                .background(.bar)
+                .disabled(isLoading)
+                .accessibilityLabel(L("Créer un dossier", "Create folder"))
             }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Button {
+                let chosenId = currentFolder.id
+                let chosenName = currentFolder.name
+                directoryId = chosenId
+                directoryName = chosenName
+                onChoose?(chosenId, chosenName)
+                if dismissOnSelection { dismiss() }
+            } label: {
+                Text(dismissOnSelection
+                     ? L("Choisir « \(currentFolder.name) »", "Choose “\(currentFolder.name)”")
+                     : L("Envoyer ici : « \(currentFolder.name) »", "Upload here: “\(currentFolder.name)”"))
+                    .fontWeight(.semibold)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .padding()
+            .background(.bar)
         }
         .alert(L("Nouveau dossier", "New folder"), isPresented: $showCreateFolder) {
             TextField(L("Nom du dossier", "Folder name"), text: $newFolderName)
@@ -730,7 +733,7 @@ struct KDriveFolderPickerView: View {
     private func loadFolders() {
         isLoading = true
         errorMessage = nil
-        Task {
+        Task { @MainActor in
             do {
                 folders = try await KDriveService.shared.fetchSubdirectories(
                     token: token,
@@ -749,7 +752,7 @@ struct KDriveFolderPickerView: View {
         guard !cleanName.isEmpty else { return }
         isLoading = true
         errorMessage = nil
-        Task {
+        Task { @MainActor in
             do {
                 let folder = try await KDriveService.shared.createDirectory(
                     token: token,
@@ -788,14 +791,16 @@ private struct KDriveUploadFlowSheet: View {
                     directoryName: directoryName
                 )
             } else {
-                KDriveFolderPickerView(
-                    token: token,
-                    driveId: driveId,
-                    directoryId: $directoryId,
-                    directoryName: $directoryName,
-                    dismissOnSelection: false,
-                    onChoose: { _, _ in destinationChosen = true }
-                )
+                NavigationStack {
+                    KDriveFolderPickerView(
+                        token: token,
+                        driveId: driveId,
+                        directoryId: $directoryId,
+                        directoryName: $directoryName,
+                        dismissOnSelection: false,
+                        onChoose: { _, _ in destinationChosen = true }
+                    )
+                }
             }
         }
     }
