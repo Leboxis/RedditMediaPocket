@@ -353,7 +353,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Aperçu en lecture seule des posts publics d'un profil (RSS), sans
     /// aucun téléchargement.
     func previewPosts(username: String) async throws -> [Post] {
-        let source = try FeedSource.user(try MediaExtractor.username(username))
+        let source = FeedSource.user(try MediaExtractor.username(username))
         let body = try await network.data(source.feedURL())
         try Task.checkCancellation()
         return try FeedParser.parse(body)
@@ -432,7 +432,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
         }
         if Task.isCancelled {
-            for url in slots.compactMap({ $0 }) { try? fm.removeItem(at: $0) }
+            for url in slots.compactMap({ $0 }) { try? fm.removeItem(at: url) }
             throw CancellationError()
         }
         // Un échec partiel est toléré : le lecteur ouvre avec les médias obtenus.
