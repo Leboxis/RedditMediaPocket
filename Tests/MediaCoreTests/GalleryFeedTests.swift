@@ -48,6 +48,7 @@ final class GalleryFeedTests: XCTestCase {
         XCTAssertEqual(media, [
             .direct(URL(string: "https://i.redd.it/bbb222.jpg")!),
             .direct(URL(string: "https://i.redd.it/aaa111.png")!),
+            .redditVideo(URL(string: "https://v.redd.it/ddd444")!),
             .direct(URL(string: "https://i.redd.it/eee555.gif")!),
             .direct(URL(string: "https://i.redd.it/fff666.jpg")!)
         ])

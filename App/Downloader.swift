@@ -489,7 +489,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
-            let downloads = prepareDownloads(fresh, folder: folder,
+            let downloads = await prepareDownloads(fresh, folder: folder,
                                              seenMedia: &seenMedia, usedFilenames: &usedFilenames)
             discovered += downloads.count
             status = ""
@@ -516,13 +516,39 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
+    /// Les posts galerie (lien `/gallery/` sans média direct) sont résolus via
+    /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
+    /// vidéos `v.redd.it` (DASH). Un échec galerie ignore juste ce post.
     private func prepareDownloads(_ posts: [Post], folder: URL,
                                   seenMedia: inout Set<Media>,
-                                  usedFilenames: inout Set<String>) -> [Download] {
+                                  usedFilenames: inout Set<String>) async -> [Download] {
+        var galleryLists: [String: [Media]] = [:]
+        let candidates = posts.filter { MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
+        if !candidates.isEmpty {
+            await withTaskGroup(of: (String, [Media]).self) { group in
+                for post in candidates {
+                    group.addTask {
+                        do {
+                            let list = try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
+                            return (post.id, list)
+                        } catch {
+                            return (post.id, [])
+                        }
+                    }
+                }
+                for await (id, list) in group {
+                    galleryLists[id] = list
+                }
+            }
+            try? Task.checkCancellation()
+        }
         var downloads: [Download] = []
         var renamedExisting = false
         for post in posts {
-            let media = MediaExtractor.extract(post.html)
+            var media = MediaExtractor.extract(post.html)
+            if media.isEmpty {
+                media = galleryLists[post.id] ?? []
+            }
             for (index, item) in media.enumerated() where seenMedia.insert(item).inserted {
                 let ext: String
                 if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }

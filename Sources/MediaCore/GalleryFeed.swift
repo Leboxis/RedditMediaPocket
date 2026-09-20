@@ -30,8 +30,9 @@ public enum GalleryFeed {
     /// Liste ordonnée des originaux de la galerie : l'ordre vient de
     /// `gallery_data.items`, chaque entrée est résolue par `media_metadata`
     /// vers l'original `i.redd.it` (la source `preview.redd.it` est une copie
-    /// réduite). Une galerie crosspostée porte ses données dans
-    /// `crosspost_parent_list` ; hors galerie, la liste est vide.
+    /// réduite) ou vers `v.redd.it` pour les vidéos (manifest DASH réutilisant
+    /// le pipeline `redditVideo` existant). Une galerie crosspostée porte ses
+    /// données dans `crosspost_parent_list` ; hors galerie, la liste est vide.
     public static func parse(_ data: Data) throws -> [Media] {
         let root: Any
         do { root = try JSONSerialization.jsonObject(with: data) } catch { throw FeedError.invalidFeed }
@@ -56,13 +57,29 @@ public enum GalleryFeed {
                   (meta["status"] as? String ?? "valid") == "valid",
                   let mime = meta["m"] as? String,
                   let source = meta["s"] as? [String: Any] else { continue }
+            // Vidéos de galerie : manifest DASH `v.redd.it`, même pipeline que
+            // les vidéos simples (`Media.redditVideo` + `DASHParser` + fusion).
+            let entryType = meta["e"] as? String ?? ""
+            if entryType == "RedditVideo" || mime == "video/mp4" {
+                guard let dashRaw = source["dashUrl"] as? String,
+                      let dashURL = URL(string: dashRaw),
+                      dashURL.scheme == "https",
+                      dashURL.host?.lowercased() == "v.redd.it" else { continue }
+                let base = dashURL.deletingLastPathComponent()
+                guard base.scheme == "https",
+                      base.host?.lowercased() == "v.redd.it",
+                      !base.pathComponents.filter({ $0 != "/" }).isEmpty else { continue }
+                let candidate: Media = .redditVideo(base)
+                if seen.insert(candidate).inserted { media.append(candidate) }
+                continue
+            }
             let ext: String
             switch mime {
             case "image/jpg", "image/jpeg": ext = "jpg"
             case "image/png": ext = "png"
             case "image/webp": ext = "webp"
             case "image/gif": ext = "gif"
-            default: continue // Vidéos de galerie : flux DASH séparé, hors périmètre.
+            default: continue
             }
             guard let raw = source["u"] as? String ?? source["gif"] as? String,
                   var components = URLComponents(string: raw) else { continue }
