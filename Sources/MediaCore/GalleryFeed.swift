@@ -65,10 +65,11 @@ public enum GalleryFeed {
                       let dashURL = URL(string: dashRaw),
                       dashURL.scheme == "https",
                       dashURL.host?.lowercased() == "v.redd.it" else { continue }
-                let base = dashURL.deletingLastPathComponent()
-                guard base.scheme == "https",
-                      base.host?.lowercased() == "v.redd.it",
-                      !base.pathComponents.filter({ $0 != "/" }).isEmpty else { continue }
+                // Forme canonique sans slash final, comme `MediaExtractor`
+                // (`https://v.redd.it/<id>`) pour une déduplication stable.
+                let parts = dashURL.pathComponents.filter { $0 != "/" }
+                guard let videoID = parts.first, !videoID.isEmpty,
+                      let base = URL(string: "https://v.redd.it/\(videoID)") else { continue }
                 let candidate: Media = .redditVideo(base)
                 if seen.insert(candidate).inserted { media.append(candidate) }
                 continue
