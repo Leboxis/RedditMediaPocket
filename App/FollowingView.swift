@@ -220,12 +220,21 @@ struct FollowingUserPosts: View {
 
     private func postRow(_ post: Post) -> some View {
         let media = MediaExtractor.extract(post.html)
+        let thumbnail = MediaExtractor.previewImage(post.html)
+        let gallery = media.isEmpty && GalleryFeed.linked(post.html)
         return VStack(alignment: .leading, spacing: 4) {
-            if media.isEmpty, let thumbnail = MediaExtractor.previewImage(post.html) {
-                FollowingMediaCard(media: nil, thumbnail: thumbnail, model: model)
-            }
-            ForEach(media, id: \.self) { item in
-                FollowingMediaCard(media: item, thumbnail: MediaExtractor.previewImage(post.html), model: model)
+            if media.isEmpty {
+                if gallery || thumbnail != nil {
+                    FollowingMediaCard(mediaList: [], index: 0, gallery: gallery,
+                                       feedID: post.id, galleryID: GalleryFeed.linkedID(post.html),
+                                       thumbnail: thumbnail, model: model)
+                }
+            } else {
+                ForEach(Array(media.enumerated()), id: \.offset) { index, _ in
+                    FollowingMediaCard(mediaList: media, index: index, gallery: false,
+                                       feedID: post.id, galleryID: nil,
+                                       thumbnail: thumbnail, model: model)
+                }
             }
             Text(post.title).font(.subheadline.weight(.medium)).lineLimit(2)
             HStack(spacing: 8) {
@@ -234,10 +243,15 @@ struct FollowingUserPosts: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if media.isEmpty {
-                    Label(MediaExtractor.previewImage(post.html) == nil
-                          ? L("Sans média pris en charge", "No supported media")
-                          : L("Aperçu uniquement", "Preview only"), systemImage: "slash.circle")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                    if gallery {
+                        Label(L("Galerie", "Gallery"), systemImage: "photo.stack")
+                            .font(.caption2).foregroundStyle(.orange)
+                    } else {
+                        Label(thumbnail == nil
+                              ? L("Sans média pris en charge", "No supported media")
+                              : L("Aperçu uniquement", "Preview only"), systemImage: "slash.circle")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
                 } else {
                     Label(L("\(media.count) média\(media.count > 1 ? "s" : "")",
                             "\(media.count) media file\(media.count > 1 ? "s" : "")"),
@@ -272,12 +286,17 @@ struct FollowingUserPosts: View {
 }
 
 private struct FollowingPreviewSelection: Identifiable {
-    let url: URL
-    var id: URL { url }
+    let urls: [URL]
+    let selected: URL
+    let id = UUID()
 }
 
 private struct FollowingMediaCard: View {
-    let media: Media?
+    let mediaList: [Media]
+    let index: Int
+    let gallery: Bool
+    let feedID: String
+    let galleryID: String?
     let thumbnail: URL?
     @ObservedObject var model: Downloader
     @State private var image: UIImage?
@@ -286,30 +305,32 @@ private struct FollowingMediaCard: View {
     @State private var openRequest = 0
     @State private var errorMessage: String?
     @State private var selection: FollowingPreviewSelection?
-    @State private var temporaryURL: URL?
+    @State private var temporaryURLs: [URL] = []
+
+    private var item: Media? {
+        mediaList.indices.contains(index) ? mediaList[index] : nil
+    }
 
     private var imageURL: URL? {
-        if case .direct(let url)? = media, !isVideo(url) { return url }
+        if case .direct(let url)? = item, !isVideo(url) { return url }
         return thumbnail
     }
 
     private var video: Bool {
-        switch media {
+        switch item {
         case .redditVideo?, .redgifs?: return true
         case .direct(let url)?: return isVideo(url)
         case nil: return false
         }
     }
 
+    /// Une couverture de galerie seule devient ouvrable après résolution du
+    /// JSON du post ; une vignette sans média reste un affichage passif.
+    private var openable: Bool { item != nil || gallery }
+
     var body: some View {
         VStack(spacing: 6) {
-            if media == nil {
-                // A display-only thumbnail is not a disabled control: keep its colors.
-                artwork
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(L("Aperçu uniquement", "Preview only"))
-                    .accessibilityAddTraits(.isImage)
-            } else {
+            if openable {
                 Button {
                     opening = true
                     openRequest += 1
@@ -318,7 +339,15 @@ private struct FollowingMediaCard: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(opening)
-                .accessibilityLabel(video ? L("Lire la vidéo", "Play video") : L("Agrandir l’image", "Enlarge image"))
+                .accessibilityLabel(gallery && item == nil
+                    ? L("Ouvrir la galerie", "Open gallery")
+                    : video ? L("Lire la vidéo", "Play video") : L("Agrandir l’image", "Enlarge image"))
+            } else {
+                // A display-only thumbnail is not a disabled control: keep its colors.
+                artwork
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(L("Aperçu uniquement", "Preview only"))
+                    .accessibilityAddTraits(.isImage)
             }
             if let errorMessage {
                 Text(errorMessage).font(.caption).foregroundStyle(.secondary)
@@ -345,22 +374,39 @@ private struct FollowingMediaCard: View {
             }
         }
         .task(id: openRequest) {
-            guard openRequest > 0, opening, let media else { return }
+            guard openRequest > 0, opening, openable else { return }
             defer { opening = false }
             errorMessage = nil
             do {
-                let url = try await model.previewMedia(media)
-                temporaryURL = url
-                selection = FollowingPreviewSelection(url: url)
+                var list = mediaList
+                if list.isEmpty, gallery {
+                    list = try await model.previewGalleryMedia(feedID: feedID, galleryID: galleryID)
+                }
+                guard !list.isEmpty else {
+                    throw NetworkError.invalid(L("Aucun média trouvé dans la galerie.", "No media found in the gallery."))
+                }
+                let slots = try await model.previewMediaList(list)
+                let urls = slots.compactMap { $0 }
+                guard !urls.isEmpty else {
+                    throw NetworkError.invalid(L("Média indisponible.", "Media unavailable."))
+                }
+                // Position du média touché parmi les résolus ; un média manquant
+                // retombe sur le succès le plus proche avant lui.
+                let before = slots.prefix(index).compactMap { $0 }.count
+                let selected = (index < slots.count ? slots[index] : nil)
+                    ?? urls[min(before, urls.count - 1)]
+                temporaryURLs = urls
+                selection = FollowingPreviewSelection(urls: urls, selected: selected)
             } catch {
+                clearTemporaryFiles()
                 if !Task.isCancelled { errorMessage = error.localizedDescription }
             }
         }
-        .fullScreenCover(item: $selection, onDismiss: clearTemporaryFile) { item in
-            MediaPreview(urls: [item.url], selectedURL: item.url)
+        .fullScreenCover(item: $selection, onDismiss: clearTemporaryFiles) { preview in
+            MediaPreview(urls: preview.urls, selectedURL: preview.selected)
         }
         .onDisappear {
-            if selection == nil { clearTemporaryFile() }
+            if selection == nil { clearTemporaryFiles() }
         }
     }
 
@@ -386,8 +432,8 @@ private struct FollowingMediaCard: View {
         .clipped().contentShape(Rectangle())
     }
 
-    private func clearTemporaryFile() {
-        if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL) }
-        temporaryURL = nil
+    private func clearTemporaryFiles() {
+        for url in temporaryURLs { try? FileManager.default.removeItem(at: url) }
+        temporaryURLs = []
     }
 }

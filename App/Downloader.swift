@@ -376,14 +376,70 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return data
     }
 
-    /// Temporary original for the viewer, without adding it to a collection.
-    func previewMedia(_ media: Media) async throws -> URL {
-        let url = try await resolveAndDownload(media)
+    private var galleryCache: [String: [Media]] = [:]
+    private var galleryCacheRevision = -1
+
+    /// Médias d'un carrousel : le RSS n'expose que la couverture, la liste
+    /// ordonnée vient du JSON du post (mise en cache par session).
+    func previewGalleryMedia(feedID: String, galleryID: String? = nil) async throws -> [Media] {
+        let revision = RedditSession.shared.revision
+        if revision != galleryCacheRevision { galleryCache.removeAll(); galleryCacheRevision = revision }
+        if let cached = galleryCache[feedID] { return cached }
+        var media = try await galleryMedia(feedID: feedID)
+        // Galerie crosspostée ou lien galerie distinct du post : second essai
+        // sur l'identifiant de page galerie exposé par le RSS.
+        let postID = feedID.hasPrefix("t3_") ? String(feedID.dropFirst(3)) : feedID
+        if media.isEmpty, let galleryID, galleryID != postID {
+            media = try await galleryMedia(feedID: galleryID)
+        }
+        // Do not let a response from an earlier session populate the current cache.
+        guard RedditSession.shared.revision == revision else { return media }
+        if galleryCache.count >= 50 { galleryCache.removeAll() }
+        galleryCache[feedID] = media
+        return media
+    }
+
+    private func galleryMedia(feedID: String) async throws -> [Media] {
+        guard let url = GalleryFeed.commentsJSONURL(feedID: feedID) else { return [] }
+        return try GalleryFeed.parse(try await network.data(url))
+    }
+
+    /// Résout chaque média en original temporaire, dans l'ordre, avec une
+    /// concurrence bornée ; l'échec d'un média ne bloque pas les autres et la
+    /// position de chaque résultat reste alignée sur la liste demandée.
+    func previewMediaList(_ media: [Media]) async throws -> [URL?] {
+        guard !media.isEmpty else { return [] }
+        var slots = [URL?](repeating: nil, count: media.count)
+        var failure: String?
+        var next = 0
+        try await withThrowingTaskGroup(of: (Int, URL?, String?).self) { group in
+            func enqueue(until limit: Int) {
+                while next < min(limit, media.count) {
+                    let index = next
+                    next += 1
+                    group.addTask {
+                        do { return (index, try await self.resolveAndDownload(media[index]), nil) }
+                        catch is CancellationError { return (index, nil, nil) }
+                        catch { return (index, nil, error.localizedDescription) }
+                    }
+                }
+            }
+            enqueue(until: 3)
+            for try await (index, url, error) in group {
+                if let url { slots[index] = url }
+                else if let error { failure = failure ?? error }
+                enqueue(until: next + 1)
+            }
+        }
         if Task.isCancelled {
-            try? fm.removeItem(at: url)
+            for url in slots.compactMap({ $0 }) { try? fm.removeItem(at: $0) }
             throw CancellationError()
         }
-        return url
+        // Un échec partiel est toléré : le lecteur ouvre avec les médias obtenus.
+        guard !slots.compactMap({ $0 }).isEmpty else {
+            throw NetworkError.invalid(failure ?? L("Média indisponible.", "Media unavailable."))
+        }
+        return slots
     }
 
     private struct Download: Sendable {
