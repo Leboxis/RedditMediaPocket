@@ -489,34 +489,58 @@ struct UserCollection: Codable, Identifiable, Equatable {
         reload()
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        var after: String?
-        var visited = Set<String>()
+        var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
-        // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
-        // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
+        // Phase 1 — nouveautés : le flux est antéchronologique, les posts
+        // publiés depuis la dernière exécution sont devant. On part du début
+        // et on s'arrête à la première page entièrement déjà vue : tout ce
+        // qui suit est connu. Sans historique, on saute cette phase.
+        if !visited.isEmpty {
+            var checkAfter: String? = nil
+            // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
+            // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
+            for _ in 1...100 {
+                try Task.checkCancellation()
+                status = L("Recherche des nouveautés…", "Checking for new posts…")
+                let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: checkAfter)
+                let fresh = posts.filter { visited.insert($0.id).inserted }
+                if !fresh.isEmpty {
+                    let downloads = try await prepareDownloads(fresh, folder: folder,
+                                                      seenMedia: &seenMedia, usedFilenames: &usedFilenames)
+                    try await executeDownloads(downloads)
+                }
+                Self.persistResumeState(canonical: canonical, cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)), visited: visited)
+                guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { break }
+                // Page entièrement connue : on a rejoint l'historique.
+                if fresh.isEmpty { break }
+                checkAfter = last
+            }
+        }
+        // Phase 2 — reprise : on repart du curseur persisté (fin de la
+        // dernière page traitée) au lieu de rescanner depuis le début.
+        // Sans curseur (jamais interrompu), parcours normal depuis le début.
+        var after: String? = UserDefaults.standard.string(forKey: Self.cursorKey(canonical))
+        var completed = false
         for _ in 1...100 {
             try Task.checkCancellation()
             status = L("Recherche…", "Searching…")
-            let posts: [Post]
-            if let privateFeed {
-                posts = try await network.savedPosts(privateFeed, after: after)
-            } else {
-                posts = try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
-            }
+            let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: after)
             let fresh = posts.filter { visited.insert($0.id).inserted }
-            if fresh.isEmpty { break }
+            if fresh.isEmpty { completed = true; break }
             let downloads = try await prepareDownloads(fresh, folder: folder,
                                               seenMedia: &seenMedia, usedFilenames: &usedFilenames)
-            discovered += downloads.count
-            status = ""
-            try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
-                try await self.saveUnlessLimited(item)
-            }
+            try await executeDownloads(downloads)
             // Saved listings can contain comments as well as posts.
-            guard let last = posts.last?.id,
-                  last.hasPrefix("t3_") || (privateFeed != nil && last.hasPrefix("t1_")) else { break }
+            guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { completed = true; break }
             after = last
+            Self.persistResumeState(canonical: canonical, cursor: after, visited: visited)
+        }
+        // Parcours terminé : on efface le curseur (une prochaine exécution
+        // ne fera que la phase nouveautés) mais on garde les posts vus.
+        // En cas d'erreur/arrêt, le curseur reste pour la reprise.
+        if completed {
+            Self.persistResumeState(canonical: canonical, cursor: nil, visited: visited)
         }
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
@@ -529,6 +553,39 @@ struct UserCollection: Codable, Identifiable, Equatable {
             if skipped > 0 { summary += L(" · \(skipped) à reprendre", " · \(skipped) to resume") }
             summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
             status = summary
+        }
+    }
+
+    private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
+    private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
+
+    /// Marque-page persisté par collection : curseur de la dernière page
+    /// traitée + posts déjà vus (borné). `cursor: nil` efface la reprise
+    /// tout en gardant l'historique pour la détection des nouveautés.
+    private static func persistResumeState(canonical: String, cursor: String?, visited: Set<String>) {
+        let defaults = UserDefaults.standard
+        if let cursor { defaults.set(cursor, forKey: cursorKey(canonical)) }
+        else { defaults.removeObject(forKey: cursorKey(canonical)) }
+        defaults.set(Array(Array(visited).suffix(10_000)), forKey: visitedKey(canonical))
+    }
+
+    private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
+        if let privateFeed {
+            return try await network.savedPosts(privateFeed, after: after)
+        } else {
+            return try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
+        }
+    }
+
+    private static func validPageCursor(_ id: String, privateFeed: SavedFeed?) -> Bool {
+        id.hasPrefix("t3_") || (privateFeed != nil && id.hasPrefix("t1_"))
+    }
+
+    private func executeDownloads(_ downloads: [Download]) async throws {
+        discovered += downloads.count
+        status = ""
+        try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
+            try await self.saveUnlessLimited(item)
         }
     }
 
@@ -663,6 +720,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
+        // Tri par date du post dans Fichiers/Photos : le fichier porte la
+        // date du post (la date de téléchargement reste dans le sidecar).
+        if let postDate = item.postDate {
+            try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: item.destination.path)
+        }
         MediaMetadata(downloadedAt: Date(), postDate: item.postDate).save(for: item.destination)
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
