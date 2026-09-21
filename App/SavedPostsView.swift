@@ -4,11 +4,44 @@ import UIKit
 import ImageIO
 import AVKit
 
-struct SavedFeedItem: Identifiable {
+/// Entrée légère du feed : construite de façon synchrone par simple parse
+/// local du HTML (aucun accès réseau). L'original est résolu paresseusement
+/// par chaque carte à son apparition (décision Jev C : hybride progressif).
+struct SavedFeedEntry: Identifiable {
     let id = UUID()
     let post: Post
-    let media: Media
-    let galleryMedia: [Media]
+    let media: Media?
+    let thumbnail: URL?
+    let isGallery: Bool
+    let galleryID: String?
+}
+
+private func savedFeedEntries(from posts: [Post]) -> [SavedFeedEntry] {
+    var entries: [SavedFeedEntry] = []
+    for post in posts {
+        let media = MediaExtractor.extract(post.html)
+        let thumbnail = MediaExtractor.previewImage(post.html)
+        if !media.isEmpty {
+            for m in media {
+                entries.append(SavedFeedEntry(post: post, media: m, thumbnail: thumbnail, isGallery: false, galleryID: nil))
+            }
+        } else if GalleryFeed.linked(post.html) {
+            entries.append(SavedFeedEntry(post: post, media: nil, thumbnail: thumbnail, isGallery: true, galleryID: GalleryFeed.linkedID(post.html)))
+        }
+    }
+    return entries
+}
+
+/// Réserve de fichiers temporaires du feed : les originaux résolus sont
+/// conservés pendant toute la durée du feed (retour arrière instantané,
+/// sans retéléchargement) et purgés à la fermeture.
+@MainActor final class FeedTempBin: ObservableObject {
+    private(set) var urls: [URL] = []
+    func add(_ urls: [URL]) { self.urls.append(contentsOf: urls) }
+    func clear() {
+        for url in urls { try? FileManager.default.removeItem(at: url) }
+        urls = []
+    }
 }
 
 struct SavedPostsView: View {
@@ -23,22 +56,7 @@ struct SavedPostsView: View {
     @State private var retryCount = 0
     @State private var showFeed = false
 
-    private var feedItems: [SavedFeedItem] {
-        guard let posts else { return [] }
-        var items: [SavedFeedItem] = []
-        for post in posts {
-            let media = MediaExtractor.extract(post.html)
-            let gallery = media.isEmpty && GalleryFeed.linked(post.html)
-            if !media.isEmpty {
-                for m in media {
-                    items.append(SavedFeedItem(post: post, media: m, galleryMedia: []))
-                }
-            } else if gallery {
-                items.append(SavedFeedItem(post: post, media: .direct(URL(string: "about:blank")!), galleryMedia: []))
-            }
-        }
-        return items
-    }
+
 
     var body: some View {
         NavigationStack {
@@ -83,7 +101,7 @@ struct SavedPostsView: View {
                         }
                         .padding(24)
                     } else if showFeed {
-                        SavedFeedView(items: feedItems, posts: posts, model: model)
+                        SavedFeedView(posts: posts, model: model)
                     } else {
                         List(posts) { post in
                             SavedPostRow(post: post, model: model)
@@ -140,116 +158,140 @@ struct SavedPostsView: View {
     }
 }
 
+/// Feed plein écran à défilement vertical (décision Jev A) : paging natif
+/// iOS 17, repli ScrollView vertical simple sur iOS 16. Les entrées sont
+/// affichées immédiatement ; chaque carte résout son original en lazy.
 struct SavedFeedView: View {
-    let items: [SavedFeedItem]
     let posts: [Post]
     @ObservedObject var model: Downloader
-    @State private var resolvedItems: [ResolvedFeedItem] = []
-    @State private var resolving = false
+    @StateObject private var bin = FeedTempBin()
+    @State private var visibleID: SavedFeedEntry.ID?
 
-    struct ResolvedFeedItem: Identifiable {
-        let id = UUID()
-        let post: Post
-        let url: URL
-        let isVideo: Bool
-        var temporaryURLs: [URL] = []
-    }
+    private var entries: [SavedFeedEntry] { savedFeedEntries(from: posts) }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            if resolving || resolvedItems.isEmpty {
-                VStack(spacing: 12) {
-                    ProgressView().tint(.white)
-                    Text(L("Préparation des médias…", "Preparing media…"))
-                        .font(.footnote).foregroundStyle(.white.opacity(0.7))
+            if entries.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.white.opacity(0.4))
+                    Text(L("Aucun média à afficher dans le feed.", "No media to show in the feed."))
+                        .font(.footnote).foregroundStyle(.white.opacity(0.6))
+                        .multilineTextAlignment(.center)
                 }
+                .padding(24)
+            } else if #available(iOS 17, *) {
+                PagedFeed17(entries: entries, visibleID: $visibleID, model: model, bin: bin)
             } else {
-                TabView {
-                    ForEach(Array(resolvedItems.enumerated()), id: \.element.id) { index, item in
-                        FeedCard(item: item, isActive: true, model: model)
-                            .tag(index)
+                PagedFeed16(entries: entries, visibleID: $visibleID, model: model, bin: bin)
+            }
+        }
+        .onDisappear { bin.clear() }
+    }
+}
+
+@available(iOS 17, *)
+private struct PagedFeed17: View {
+    let entries: [SavedFeedEntry]
+    @Binding var visibleID: SavedFeedEntry.ID?
+    @ObservedObject var model: Downloader
+    @ObservedObject var bin: FeedTempBin
+
+    var body: some View {
+        ScrollView(.vertical) {
+            LazyVStack(spacing: 0) {
+                ForEach(entries) { entry in
+                    FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin)
+                        .containerRelativeFrame(.vertical)
+                        .id(entry.id)
+                        .onAppear { visibleID = entry.id }
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $visibleID)
+        .scrollIndicators(.hidden)
+        .ignoresSafeArea()
+    }
+}
+
+private struct PagedFeed16: View {
+    let entries: [SavedFeedEntry]
+    @Binding var visibleID: SavedFeedEntry.ID?
+    @ObservedObject var model: Downloader
+    @ObservedObject var bin: FeedTempBin
+
+    var body: some View {
+        GeometryReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVStack(spacing: 0) {
+                    ForEach(entries) { entry in
+                        FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin)
+                            .frame(height: proxy.size.height)
+                            .onAppear { visibleID = entry.id }
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .indexViewStyle(.page(backgroundDisplayMode: .never))
             }
+            .ignoresSafeArea()
         }
-        .task {
-            await resolveAll()
-        }
-    }
-
-    private func resolveAll() async {
-        guard !resolving else { return }
-        resolving = true
-        defer { resolving = false }
-        var resolved: [ResolvedFeedItem] = []
-        for post in posts {
-            let media = MediaExtractor.extract(post.html)
-            let gallery = media.isEmpty && GalleryFeed.linked(post.html)
-            var mediaList = media
-            if mediaList.isEmpty, gallery {
-                mediaList = (try? await model.previewGalleryMedia(
-                    feedID: post.id,
-                    galleryID: GalleryFeed.linkedID(post.html)
-                )) ?? []
-            }
-            guard !mediaList.isEmpty else { continue }
-            let slots = (try? await model.previewMediaList(mediaList)) ?? []
-            var tempURLs: [URL] = []
-            for slot in slots.compactMap({ $0 }) {
-                tempURLs.append(slot)
-            }
-            for (i, m) in mediaList.enumerated() {
-                guard i < slots.count, let url = slots[i] else { continue }
-                let vid: Bool
-                switch m {
-                case .redditVideo, .redgifs: vid = true
-                case .direct(let u): vid = isVideo(u)
-                }
-                resolved.append(ResolvedFeedItem(
-                    post: post, url: url, isVideo: vid, temporaryURLs: tempURLs
-                ))
-            }
-        }
-        resolvedItems = resolved
     }
 }
 
 private struct FeedCard: View {
-    let item: SavedFeedView.ResolvedFeedItem
+    let entry: SavedFeedEntry
     let isActive: Bool
     @ObservedObject var model: Downloader
+    @ObservedObject var bin: FeedTempBin
+    @State private var thumb: UIImage?
+    @State private var full: UIImage?
+    @State private var videoURL: URL?
+    @State private var failed = false
+
+    private var thumbURL: URL? {
+        if case .direct(let url)? = entry.media, !isVideo(url) { return url }
+        return entry.thumbnail
+    }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Color.black.ignoresSafeArea()
-            if item.isVideo {
-                AutoPlayVideo(url: item.url, active: isActive)
-            } else {
-                AsyncImage(url: item.url) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image.resizable().scaledToFit()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    case .failure:
-                        Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.5))
-                    case .empty:
+            Color.black
+            if let videoURL {
+                AutoPlayVideo(url: videoURL, active: isActive)
+            } else if let full {
+                Image(uiImage: full).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let thumb {
+                ZStack {
+                    Image(uiImage: thumb).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 8) {
+                        Spacer()
                         ProgressView().tint(.white)
-                    @unknown default:
-                        EmptyView()
+                        Text(L("Chargement HD…", "Loading HD…"))
+                            .font(.caption2).foregroundStyle(.white.opacity(0.7))
+                        Spacer()
                     }
                 }
+            } else if failed {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
+                    Text(L("Média indisponible", "Media unavailable"))
+                        .font(.caption).foregroundStyle(.white.opacity(0.6))
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().tint(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.post.title)
+                Text(entry.post.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(3)
                     .shadow(radius: 2)
-                if let date = item.post.publishedAt {
+                if let date = entry.post.publishedAt {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.7))
@@ -265,6 +307,63 @@ private struct FeedCard: View {
             )
         }
         .clipped()
+        .task(id: entry.id) { await load() }
+    }
+
+    private func load() async {
+        if let thumbURL {
+            if let data = try? await model.previewImageData(thumbURL),
+               !Task.isCancelled,
+               let source = CGImageSourceCreateWithData(data as CFData, nil),
+               let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 960
+               ] as CFDictionary) {
+                thumb = UIImage(cgImage: cg)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        do {
+            let list: [Media]
+            if let media = entry.media {
+                list = [media]
+            } else {
+                list = try await model.previewGalleryMedia(feedID: entry.post.id, galleryID: entry.galleryID)
+            }
+            guard !Task.isCancelled, !list.isEmpty else { return }
+            let slots = try await model.previewMediaList(list)
+            guard !Task.isCancelled else { return }
+            let urls = slots.compactMap { $0 }
+            guard let url = urls.first else { failed = true; return }
+            bin.add(urls)
+            let isVid: Bool = {
+                if let media = entry.media {
+                    switch media {
+                    case .redditVideo, .redgifs: return true
+                    case .direct(let u): return isVideo(u)
+                    }
+                }
+                return isVideo(url)
+            }()
+            if isVid {
+                videoURL = url
+            } else {
+                let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                          let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                            kCGImageSourceCreateThumbnailFromImageAlways: true,
+                            kCGImageSourceCreateThumbnailWithTransform: true,
+                            kCGImageSourceThumbnailMaxPixelSize: 2048
+                          ] as CFDictionary) else { return nil }
+                    return UIImage(cgImage: cg)
+                }.value
+                guard !Task.isCancelled else { return }
+                if let image { full = image } else { failed = true }
+            }
+        } catch {
+            if !Task.isCancelled { failed = true }
+        }
     }
 }
 
@@ -294,8 +393,24 @@ private struct AutoPlayVideo: UIViewControllerRepresentable {
     final class Coordinator {
         let player: AVPlayer
         private var active = false
+        private var observer: NSObjectProtocol?
 
-        init(url: URL) { player = AVPlayer(url: url) }
+        init(url: URL) {
+            player = AVPlayer(url: url)
+            player.actionAtItemEnd = .none
+            observer = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: player.currentItem,
+                queue: .main
+            ) { [weak player] _ in
+                player?.seek(to: .zero)
+                player?.play()
+            }
+        }
+
+        deinit {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
 
         func setActive(_ value: Bool) {
             guard active != value else { return }
