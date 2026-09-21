@@ -546,7 +546,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     galleryLists[id] = list
                 }
             }
-            try? Task.checkCancellation()
+            try Task.checkCancellation()
         }
         var downloads: [Download] = []
         var renamedExisting = false
@@ -645,16 +645,25 @@ struct UserCollection: Codable, Identifiable, Equatable {
         token = result; tokenDate = Date()
         return result
     }
+    private func downloadRedgifs(id: String) async throws -> URL {
+        let bearer = try await redgifsToken()
+        struct Response: Decodable { struct Gif: Decodable { struct URLs: Decodable { let hd: URL?; let sd: URL? }; let urls: URLs }; let gif: Gif }
+        let data = try await network.data(URL(string: "https://api.redgifs.com/v2/gifs/\(id)")!, bearer: bearer)
+        let urls = try JSONDecoder().decode(Response.self, from: data).gif.urls
+        guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid(L("Média RedGIFs indisponible.", "RedGIFs media unavailable.")) }
+        return try await network.download(url)
+    }
     private func resolveAndDownload(_ media: Media) async throws -> URL {
         switch media {
         case .direct(let url): return try await network.download(url)
         case .redgifs(let id):
-            let bearer = try await redgifsToken()
-            struct Response: Decodable { struct Gif: Decodable { struct URLs: Decodable { let hd: URL?; let sd: URL? }; let urls: URLs }; let gif: Gif }
-            let data = try await network.data(URL(string: "https://api.redgifs.com/v2/gifs/\(id)")!, bearer: bearer)
-            let urls = try JSONDecoder().decode(Response.self, from: data).gif.urls
-            guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid(L("Média RedGIFs indisponible.", "RedGIFs media unavailable.")) }
-            return try await network.download(url)
+            do {
+                return try await downloadRedgifs(id: id)
+            } catch NetworkError.refused(let code) where code == 401 {
+                // Token expiré entre le cache et l'appel : un seul refresh + nouvel essai.
+                token = nil
+                return try await downloadRedgifs(id: id)
+            }
         case .redditVideo(let base):
             let manifest = base.appendingPathComponent("DASHPlaylist.mpd")
             let tracks = try DASHParser.parse(try await network.data(manifest), relativeTo: manifest)
@@ -681,7 +690,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let output = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
         guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw NetworkError.invalid(L("Assemblage vidéo indisponible.", "Video merging unavailable.")) }
         export.outputURL = output; export.outputFileType = .mp4
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
+        } onCancel: {
+            export.cancel()
+        }
         guard export.status == .completed else { try? fm.removeItem(at: output); throw export.error ?? NetworkError.invalid(L("Échec de l’assemblage vidéo.", "Video merging failed.")) }
         if Task.isCancelled { try? fm.removeItem(at: output); throw CancellationError() }
         return output

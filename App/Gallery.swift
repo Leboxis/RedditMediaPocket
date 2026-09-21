@@ -180,6 +180,12 @@ private struct MediaPager: View {
         .clipped()
         .onChange(of: zoomed[index]) { _ in dragOffset = 0 }
         .onChange(of: index) { _ in dragOffset = 0 }
+        .onChange(of: urls.count) { _ in
+            // urls est une copie stable par présentation ; resync défensive
+            // si la source change (zoomed dimensionné à l'init sinon).
+            zoomed = Array(repeating: false, count: urls.count)
+            if index >= urls.count { index = max(urls.count - 1, 0) }
+        }
     }
 
     private func canPage(_ value: DragGesture.Value, height: CGFloat) -> Bool {
