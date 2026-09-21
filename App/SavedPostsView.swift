@@ -57,10 +57,26 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 @MainActor final class FeedPreloadStore: ObservableObject {
     private var cache: [String: [URL]] = [:]
     private var tasks: [String: Task<[URL], Error>] = [:]
+    private var model: Downloader?
+    private var bin: FeedTempBin?
+
+    /// Le store porte model/bin pour que PagedFeed/FeedCard n'aient plus
+    /// à observer Downloader (zéro re-rendu lié aux transferts réseau).
+    /// Le store ne publie jamais : l'observer ne coûte aucun re-rendu.
+    func configure(model: Downloader, bin: FeedTempBin) {
+        self.model = model
+        self.bin = bin
+    }
 
     func cached(_ id: String) -> [URL]? { cache[id] }
 
-    func resolve(entry: SavedFeedEntry, model: Downloader, bin: FeedTempBin) async throws -> [URL] {
+    func thumbData(_ url: URL) async throws -> Data {
+        guard let model else { throw NetworkError.invalid(L("Média indisponible.", "Media unavailable.")) }
+        return try await model.previewImageData(url)
+    }
+
+    func resolve(entry: SavedFeedEntry) async throws -> [URL] {
+        guard let model, let bin else { throw NetworkError.invalid(L("Média indisponible.", "Media unavailable.")) }
         if let hit = cache[entry.id] { return hit }
         if let running = tasks[entry.id] { return try await running.value }
         let task = Task<[URL], Error> {
@@ -90,8 +106,8 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 
     /// Précharge les vignettes (cache NSCache) + originaux des entrées
     /// suivantes. Appelé à chaque changement de carte visible.
-    func prefetchNext(entries: [SavedFeedEntry], visibleID: SavedFeedEntry.ID?, count: Int, model: Downloader, bin: FeedTempBin) async {
-        guard let visibleID, let current = entries.firstIndex(where: { $0.id == visibleID }) else { return }
+    func prefetchNext(entries: [SavedFeedEntry], visibleID: SavedFeedEntry.ID?, count: Int) async {
+        guard let model, let visibleID, let current = entries.firstIndex(where: { $0.id == visibleID }) else { return }
         for offset in 1...count {
             if Task.isCancelled { return }
             let index = current + offset
@@ -102,7 +118,7 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
                 _ = try? await model.previewImageData(thumbURL)
             }
             if Task.isCancelled { return }
-            _ = try? await resolve(entry: entry, model: model, bin: bin)
+            _ = try? await resolve(entry: entry)
         }
     }
 }
@@ -248,11 +264,12 @@ struct SavedFeedView: View {
                 }
                 .padding(24)
             } else {
-                PagedFeed(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
+                PagedFeed(entries: entries, visibleID: $visibleID, preload: preload)
             }
         }
         .onDisappear { bin.clear() }
         .task(id: posts.map(\.id)) {
+            preload.configure(model: model, bin: bin)
             let fresh = savedFeedEntries(from: posts)
             entries = fresh
             // scrollPosition est la seule source de vérité : on cale
@@ -263,7 +280,7 @@ struct SavedFeedView: View {
             }
         }
         .task(id: visibleID) {
-            await preload.prefetchNext(entries: entries, visibleID: visibleID, count: 5, model: model, bin: bin)
+            await preload.prefetchNext(entries: entries, visibleID: visibleID, count: 5)
         }
     }
 }
@@ -271,15 +288,14 @@ struct SavedFeedView: View {
 private struct PagedFeed: View {
     let entries: [SavedFeedEntry]
     @Binding var visibleID: SavedFeedEntry.ID?
-    @ObservedObject var model: Downloader
-    @ObservedObject var bin: FeedTempBin
     @ObservedObject var preload: FeedPreloadStore
 
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
                 ForEach(entries) { entry in
-                    FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin, preload: preload)
+                    FeedCard(entry: entry, isActive: entry.id == visibleID, preload: preload)
+                        .equatable()
                         .containerRelativeFrame(.vertical)
                         .id(entry.id)
                         .scrollTransition(.animated(.smooth), axis: .vertical) { content, phase in
@@ -300,16 +316,21 @@ private struct PagedFeed: View {
     }
 }
 
-private struct FeedCard: View {
+/// Équatable sur (id, isActive) : avec des ids stables, SwiftUI saute
+/// le re-rendu des cartes quand un ancêtre se réévalue (transferts
+/// réseau) ; seul le scroll (isActive) ou une nouvelle entrée relance.
+private struct FeedCard: View, Equatable {
     let entry: SavedFeedEntry
     let isActive: Bool
-    @ObservedObject var model: Downloader
-    @ObservedObject var bin: FeedTempBin
     @ObservedObject var preload: FeedPreloadStore
     @State private var thumb: UIImage?
     @State private var full: UIImage?
     @State private var videoURL: URL?
     @State private var failed = false
+
+    static func ==(lhs: FeedCard, rhs: FeedCard) -> Bool {
+        lhs.entry.id == rhs.entry.id && lhs.isActive == rhs.isActive
+    }
 
     private var thumbURL: URL? { feedThumbURL(for: entry) }
 
@@ -379,7 +400,7 @@ private struct FeedCard: View {
 
     private func load() async {
         if let thumbURL {
-            if let data = try? await model.previewImageData(thumbURL),
+            if let data = try? await preload.thumbData(thumbURL),
                !Task.isCancelled,
                let source = CGImageSourceCreateWithData(data as CFData, nil),
                let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -392,7 +413,7 @@ private struct FeedCard: View {
         }
         guard !Task.isCancelled else { return }
         do {
-            let urls = try await preload.resolve(entry: entry, model: model, bin: bin)
+            let urls = try await preload.resolve(entry: entry)
             guard !Task.isCancelled else { return }
             guard let url = urls.first else { failed = true; return }
             let isVid: Bool = {
