@@ -44,6 +44,69 @@ private func savedFeedEntries(from posts: [Post]) -> [SavedFeedEntry] {
     }
 }
 
+/// Vignette d'une entrée : direct non-vidéo sinon aperçu RSS.
+private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
+    if case .direct(let url)? = entry.media, !isVideo(url) { return url }
+    return entry.thumbnail
+}
+
+/// Cache partagé des originaux préchargés (décision Jev B) : les URLs
+/// temporaires résolues sont stockées par entry.id pour que FeedCard
+/// réutilise le préchargement sans retélécharger. Les tâches en cours
+/// sont dédupliquées : préchargement et carte attendent la même tâche.
+@MainActor final class FeedPreloadStore: ObservableObject {
+    private var cache: [String: [URL]] = [:]
+    private var tasks: [String: Task<[URL], Error>] = [:]
+
+    func cached(_ id: String) -> [URL]? { cache[id] }
+
+    func resolve(entry: SavedFeedEntry, model: Downloader, bin: FeedTempBin) async throws -> [URL] {
+        if let hit = cache[entry.id] { return hit }
+        if let running = tasks[entry.id] { return try await running.value }
+        let task = Task<[URL], Error> {
+            let list: [Media]
+            if let media = entry.media {
+                list = [media]
+            } else {
+                list = try await model.previewGalleryMedia(feedID: entry.post.id, galleryID: entry.galleryID)
+            }
+            let slots = try await model.previewMediaList(list)
+            let urls = slots.compactMap { $0 }
+            guard !urls.isEmpty else { throw NetworkError.invalid(L("Média indisponible.", "Media unavailable.")) }
+            return urls
+        }
+        tasks[entry.id] = task
+        do {
+            let urls = try await task.value
+            cache[entry.id] = urls
+            bin.add(urls)
+            tasks[entry.id] = nil
+            return urls
+        } catch {
+            tasks[entry.id] = nil
+            throw error
+        }
+    }
+
+    /// Précharge les vignettes (cache NSCache) + originaux des entrées
+    /// suivantes. Appelé à chaque changement de carte visible.
+    func prefetchNext(entries: [SavedFeedEntry], visibleID: SavedFeedEntry.ID?, count: Int, model: Downloader, bin: FeedTempBin) async {
+        guard let visibleID, let current = entries.firstIndex(where: { $0.id == visibleID }) else { return }
+        for offset in 1...count {
+            if Task.isCancelled { return }
+            let index = current + offset
+            guard entries.indices.contains(index) else { return }
+            let entry = entries[index]
+            if cache[entry.id] != nil || tasks[entry.id] != nil { continue }
+            if let thumbURL = feedThumbURL(for: entry) {
+                _ = try? await model.previewImageData(thumbURL)
+            }
+            if Task.isCancelled { return }
+            _ = try? await resolve(entry: entry, model: model, bin: bin)
+        }
+    }
+}
+
 struct SavedPostsView: View {
     @ObservedObject var model: Downloader
     let onDownloadAll: (String) -> Void
@@ -165,6 +228,7 @@ struct SavedFeedView: View {
     let posts: [Post]
     @ObservedObject var model: Downloader
     @StateObject private var bin = FeedTempBin()
+    @StateObject private var preload = FeedPreloadStore()
     @State private var visibleID: SavedFeedEntry.ID?
     @State private var entries: [SavedFeedEntry] = []
 
@@ -181,13 +245,16 @@ struct SavedFeedView: View {
                 }
                 .padding(24)
             } else if #available(iOS 17, *) {
-                PagedFeed17(entries: entries, visibleID: $visibleID, model: model, bin: bin)
+                PagedFeed17(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
             } else {
-                PagedFeed16(entries: entries, visibleID: $visibleID, model: model, bin: bin)
+                PagedFeed16(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
             }
         }
         .onDisappear { bin.clear() }
         .task(id: posts.count) { entries = savedFeedEntries(from: posts) }
+        .task(id: visibleID) {
+            await preload.prefetchNext(entries: entries, visibleID: visibleID, count: 5, model: model, bin: bin)
+        }
     }
 }
 
@@ -197,14 +264,21 @@ private struct PagedFeed17: View {
     @Binding var visibleID: SavedFeedEntry.ID?
     @ObservedObject var model: Downloader
     @ObservedObject var bin: FeedTempBin
+    @ObservedObject var preload: FeedPreloadStore
 
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(spacing: 0) {
                 ForEach(entries) { entry in
-                    FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin)
+                    FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin, preload: preload)
                         .containerRelativeFrame(.vertical)
                         .id(entry.id)
+                        .scrollTransition(.animated(.smooth), axis: .vertical) { content, phase in
+                            content
+                                .scaleEffect(phase.isIdentity ? 1 : 0.97)
+                                .opacity(phase.isIdentity ? 1 : 0.7)
+                                .saturation(phase.isIdentity ? 1 : 0.9)
+                        }
                         .onAppear { visibleID = entry.id }
                 }
             }
@@ -213,6 +287,7 @@ private struct PagedFeed17: View {
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $visibleID)
         .scrollIndicators(.hidden)
+        .animation(.smooth(duration: 0.28), value: visibleID)
         .ignoresSafeArea()
     }
 }
@@ -222,14 +297,18 @@ private struct PagedFeed16: View {
     @Binding var visibleID: SavedFeedEntry.ID?
     @ObservedObject var model: Downloader
     @ObservedObject var bin: FeedTempBin
+    @ObservedObject var preload: FeedPreloadStore
 
     var body: some View {
         GeometryReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 0) {
                     ForEach(entries) { entry in
-                        FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin)
+                        FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin, preload: preload)
                             .frame(height: proxy.size.height)
+                            .scaleEffect(entry.id == visibleID ? 1 : 0.98)
+                            .opacity(entry.id == visibleID ? 1 : 0.85)
+                            .animation(.smooth(duration: 0.25), value: visibleID)
                             .onAppear { visibleID = entry.id }
                     }
                 }
@@ -244,24 +323,27 @@ private struct FeedCard: View {
     let isActive: Bool
     @ObservedObject var model: Downloader
     @ObservedObject var bin: FeedTempBin
+    @ObservedObject var preload: FeedPreloadStore
     @State private var thumb: UIImage?
     @State private var full: UIImage?
     @State private var videoURL: URL?
     @State private var failed = false
 
-    private var thumbURL: URL? {
-        if case .direct(let url)? = entry.media, !isVideo(url) { return url }
-        return entry.thumbnail
-    }
+    private var thumbURL: URL? { feedThumbURL(for: entry) }
+
+    /// Étape d'affichage : pilote le fondu entre vignette / HD / vidéo.
+    private var stageKey: String { "\(thumb != nil)-\(full != nil)-\(videoURL != nil)-\(failed)" }
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Color.black
             if let videoURL {
                 AutoPlayVideo(url: videoURL, active: isActive)
+                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
             } else if let full {
                 Image(uiImage: full).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
             } else if let thumb {
                 ZStack {
                     Image(uiImage: thumb).resizable().scaledToFit()
@@ -274,6 +356,7 @@ private struct FeedCard: View {
                         Spacer()
                     }
                 }
+                .transition(.opacity)
             } else if failed {
                 VStack(spacing: 8) {
                     Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
@@ -305,8 +388,10 @@ private struct FeedCard: View {
                     .frame(height: 120),
                 alignment: .bottom
             )
+            .drawingGroup()
         }
         .clipped()
+        .animation(.smooth(duration: 0.25), value: stageKey)
         .task(id: entry.id) { await load() }
     }
 
@@ -325,18 +410,9 @@ private struct FeedCard: View {
         }
         guard !Task.isCancelled else { return }
         do {
-            let list: [Media]
-            if let media = entry.media {
-                list = [media]
-            } else {
-                list = try await model.previewGalleryMedia(feedID: entry.post.id, galleryID: entry.galleryID)
-            }
-            guard !Task.isCancelled, !list.isEmpty else { return }
-            let slots = try await model.previewMediaList(list)
+            let urls = try await preload.resolve(entry: entry, model: model, bin: bin)
             guard !Task.isCancelled else { return }
-            let urls = slots.compactMap { $0 }
             guard let url = urls.first else { failed = true; return }
-            bin.add(urls)
             let isVid: Bool = {
                 if let media = entry.media {
                     switch media {
