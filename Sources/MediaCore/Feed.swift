@@ -206,7 +206,7 @@ public enum MediaExtractor {
             guard let url = URL(string: raw), url.scheme == "https", let host = url.host?.lowercased() else { return nil }
             var media: Media?
             if host == "v.redd.it", let id = url.pathComponents.dropFirst().first, !id.isEmpty {
-                guard let videoURL = URL(string: "https://v.redd.it/\(id)") else { continue }
+                guard let videoURL = URL(string: "https://v.redd.it/\(id)") else { return nil }
                 media = .redditVideo(videoURL)
             } else if host == "redgifs.com" || host == "www.redgifs.com" {
                 let parts = url.pathComponents
