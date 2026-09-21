@@ -318,14 +318,25 @@ struct UserCollection: Codable, Identifiable, Equatable {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
         errorMessage = nil
+        // Relance manuelle : on oublie les pauses enregistrées et on retente
+        // vraiment le serveur au lieu de bloquer en local.
+        network.resetRateLimits()
         running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; failed = 0; limitedServices = [:]
         task = Task {
             defer { running = false; active = 0; task = nil }
             do { try await run() }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
-                status = Task.isCancelled || error is CancellationError ? L("Arrêté", "Stopped") : error.localizedDescription
-                if !Task.isCancelled && !(error is CancellationError) { errorMessage = error.localizedDescription }
+                if Task.isCancelled || error is CancellationError {
+                    status = L("Arrêté", "Stopped")
+                } else if case NetworkError.limited(let service, let until) = error {
+                    let msg = L("\(service) : trop de demandes, téléchargement en pause. \(count) médias conservés. Relance après \(until.formatted(date: .numeric, time: .shortened)) pour continuer.", "\(service): too many requests, download paused. \(count) media files kept. Restart after \(until.formatted(date: .numeric, time: .shortened)) to continue.")
+                    status = msg
+                    errorMessage = msg
+                } else {
+                    status = error.localizedDescription
+                    errorMessage = error.localizedDescription
+                }
             }
         }
     }
@@ -487,7 +498,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for _ in 1...100 {
             try Task.checkCancellation()
             status = L("Recherche…", "Searching…")
-            let posts = try await fetchFeedPage(source: source, privateFeed: privateFeed, after: after)
+            let posts: [Post]
+            if let privateFeed {
+                posts = try await network.savedPosts(privateFeed, after: after)
+            } else {
+                posts = try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
+            }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
             let downloads = try await prepareDownloads(fresh, folder: folder,
@@ -513,26 +529,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
             if skipped > 0 { summary += L(" · \(skipped) à reprendre", " · \(skipped) to resume") }
             summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
             status = summary
-        }
-    }
-
-    /// Page RSS avec pause automatique sur 429 : au lieu d'avorter tout le
-    /// parcours, on attend jusqu'à l'heure du serveur (annulable par Stop)
-    /// puis on réessaie la même page. Les fichiers existants sont skippés.
-    private func fetchFeedPage(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
-        while true {
-            do {
-                if let privateFeed {
-                    return try await network.savedPosts(privateFeed, after: after)
-                } else {
-                    return try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
-                }
-            } catch NetworkError.limited(let service, let until) {
-                let wait = max(0, until.timeIntervalSinceNow)
-                status = L("\(service) en pause · reprise à \(until.formatted(date: .numeric, time: .shortened))…", "\(service) paused · resuming at \(until.formatted(date: .numeric, time: .shortened))…")
-                try await Task.sleep(for: .seconds(wait))
-                try Task.checkCancellation()
-            }
         }
     }
 

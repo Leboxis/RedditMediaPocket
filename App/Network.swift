@@ -30,6 +30,13 @@ enum NetworkError: LocalizedError {
             throw NetworkError.limited(service: service, until: date)
         }
     }
+    /// Relance manuelle : oublie les pauses enregistrées (mémoire +
+    /// UserDefaults) pour retenter vraiment le serveur.
+    func resetRateLimits() {
+        limits = ServiceLimits()
+        defaults.removeObject(forKey: "serviceCooldowns")
+        defaults.removeObject(forKey: "cooldown")
+    }
     init() {
         let stored = UserDefaults.standard.dictionary(forKey: "serviceCooldowns") as? [String: Double] ?? [:]
         limits = ServiceLimits(deadlines: stored.mapValues { Date(timeIntervalSince1970: $0) })
