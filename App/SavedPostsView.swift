@@ -339,11 +339,11 @@ private struct FeedCard: View {
             Color.black
             if let videoURL {
                 AutoPlayVideo(url: videoURL, active: isActive)
-                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
+                    .transition(.opacity)
             } else if let full {
                 Image(uiImage: full).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
+                    .transition(.opacity)
             } else if let thumb {
                 ZStack {
                     Image(uiImage: thumb).resizable().scaledToFit()
