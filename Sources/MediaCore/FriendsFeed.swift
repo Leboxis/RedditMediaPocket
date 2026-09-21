@@ -5,8 +5,10 @@ import Foundation
 /// `prefs/feeds`. Parsing pur : aucun réseau ici. Seuls les liens de
 /// profil Reddit valides sont retenus, dédupliqués et ordonnés d'apparition.
 public enum FriendsFeed {
+    private static let hrefRegex = try! NSRegularExpression(pattern: #"(?i)\bhref\s*=\s*["']([^"']+)["']"#)
+
     public static func parse(_ html: String) -> [String] {
-        let regex = try! NSRegularExpression(pattern: #"(?i)\bhref\s*=\s*["']([^"']+)["']"#)
+        let regex = Self.hrefRegex
         let ns = html as NSString
         var names: [String] = []
         var seen = Set<String>()

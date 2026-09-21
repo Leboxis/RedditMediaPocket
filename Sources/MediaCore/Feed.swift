@@ -173,9 +173,13 @@ public final class FeedParser: NSObject, XMLParserDelegate {
 }
 
 public enum MediaExtractor {
+    /// Compilées une fois : `extract`/`previewImage` tournent par post.
+    private static let imgRegex = try! NSRegularExpression(pattern: #"(?i)<img\b[^>]*?\s+src\s*=\s*["']([^"']+)["']"#)
+    private static let hrefRegex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']([^"']+)["']"#)
+
     /// RSS thumbnails are for display only; never substitute them for originals.
     public static func previewImage(_ html: String) -> URL? {
-        let regex = try! NSRegularExpression(pattern: #"(?i)<img\b[^>]*?\s+src\s*=\s*["']([^"']+)["']"#)
+        let regex = Self.imgRegex
         let ns = html as NSString
         for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
             let raw = ns.substring(with: match.range(at: 1)).replacingOccurrences(of: "&amp;", with: "&")
@@ -194,7 +198,7 @@ public enum MediaExtractor {
     }
     public static func extract(_ html: String) -> [Media] {
         // Only linked originals; RSS thumbnails and preview.redd.it are intentionally ignored.
-        let regex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']([^"']+)["']"#)
+        let regex = Self.hrefRegex
         let ns = html as NSString
         var seen = Set<Media>()
         return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).compactMap { match in
@@ -202,7 +206,8 @@ public enum MediaExtractor {
             guard let url = URL(string: raw), url.scheme == "https", let host = url.host?.lowercased() else { return nil }
             var media: Media?
             if host == "v.redd.it", let id = url.pathComponents.dropFirst().first, !id.isEmpty {
-                media = .redditVideo(URL(string: "https://v.redd.it/\(id)")!)
+                guard let videoURL = URL(string: "https://v.redd.it/\(id)") else { continue }
+                media = .redditVideo(videoURL)
             } else if host == "redgifs.com" || host == "www.redgifs.com" {
                 let parts = url.pathComponents
                 if parts.count >= 3, ["watch", "ifr"].contains(parts[1]), parts[2].range(of: "^[a-zA-Z]+$", options: .regularExpression) != nil {

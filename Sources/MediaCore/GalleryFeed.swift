@@ -4,15 +4,18 @@ import Foundation
 /// comme un lien vers la page `/gallery/<id>` et la miniature de couverture ;
 /// la liste ordonnée des originaux ne se trouve que dans le JSON du post.
 public enum GalleryFeed {
+    private static let linkedRegex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/[A-Za-z0-9]+["']"#)
+    private static let linkedIDRegex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/([A-Za-z0-9]+)["']"#)
+
     /// Vrai quand le contenu RSS pointe la page galerie d'un post.
     public static func linked(_ html: String) -> Bool {
-        let regex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/[A-Za-z0-9]+["']"#)
+        let regex = Self.linkedRegex
         return regex.firstMatch(in: html, range: NSRange(location: 0, length: (html as NSString).length)) != nil
     }
 
     /// Premier identifiant de page galerie du contenu RSS, s'il existe.
     public static func linkedID(_ html: String) -> String? {
-        let regex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/([A-Za-z0-9]+)["']"#)
+        let regex = Self.linkedIDRegex
         let ns = html as NSString
         guard let match = regex.firstMatch(in: html, range: NSRange(location: 0, length: ns.length)) else { return nil }
         return ns.substring(with: match.range(at: 1))
