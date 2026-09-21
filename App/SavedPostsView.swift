@@ -2,6 +2,14 @@ import SwiftUI
 import MediaCore
 import UIKit
 import ImageIO
+import AVKit
+
+struct SavedFeedItem: Identifiable {
+    let id = UUID()
+    let post: Post
+    let media: Media
+    let galleryMedia: [Media]
+}
 
 struct SavedPostsView: View {
     @ObservedObject var model: Downloader
@@ -13,6 +21,24 @@ struct SavedPostsView: View {
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
+    @State private var showFeed = false
+
+    private var feedItems: [SavedFeedItem] {
+        guard let posts else { return [] }
+        var items: [SavedFeedItem] = []
+        for post in posts {
+            let media = MediaExtractor.extract(post.html)
+            let gallery = media.isEmpty && GalleryFeed.linked(post.html)
+            if !media.isEmpty {
+                for m in media {
+                    items.append(SavedFeedItem(post: post, media: m, galleryMedia: []))
+                }
+            } else if gallery {
+                items.append(SavedFeedItem(post: post, media: .direct(URL(string: "about:blank")!), galleryMedia: []))
+            }
+        }
+        return items
+    }
 
     var body: some View {
         NavigationStack {
@@ -56,6 +82,8 @@ struct SavedPostsView: View {
                                 .multilineTextAlignment(.center)
                         }
                         .padding(24)
+                    } else if showFeed {
+                        SavedFeedView(items: feedItems, posts: posts, model: model)
                     } else {
                         List(posts) { post in
                             SavedPostRow(post: post, model: model)
@@ -69,6 +97,16 @@ struct SavedPostsView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("Fermer", "Close")) { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showFeed.toggle()
+                    } label: {
+                        Image(systemName: showFeed ? "square.grid.3x3" : "play.rectangle")
+                    }
+                    .accessibilityLabel(showFeed
+                        ? L("Vue grille", "Grid view")
+                        : L("Vue défilement", "Feed view"))
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -98,6 +136,175 @@ struct SavedPostsView: View {
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct SavedFeedView: View {
+    let items: [SavedFeedItem]
+    let posts: [Post]
+    @ObservedObject var model: Downloader
+    @State private var resolvedItems: [ResolvedFeedItem] = []
+    @State private var resolving = false
+
+    struct ResolvedFeedItem: Identifiable {
+        let id = UUID()
+        let post: Post
+        let url: URL
+        let isVideo: Bool
+        var temporaryURLs: [URL] = []
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if resolving || resolvedItems.isEmpty {
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text(L("Préparation des médias…", "Preparing media…"))
+                        .font(.footnote).foregroundStyle(.white.opacity(0.7))
+                }
+            } else {
+                TabView {
+                    ForEach(Array(resolvedItems.enumerated()), id: \.element.id) { index, item in
+                        FeedCard(item: item, isActive: true, model: model)
+                            .tag(index)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .indexViewStyle(.page(backgroundDisplayMode: .never))
+            }
+        }
+        .task {
+            await resolveAll()
+        }
+    }
+
+    private func resolveAll() async {
+        guard !resolving else { return }
+        resolving = true
+        defer { resolving = false }
+        var resolved: [ResolvedFeedItem] = []
+        for post in posts {
+            let media = MediaExtractor.extract(post.html)
+            let gallery = media.isEmpty && GalleryFeed.linked(post.html)
+            var mediaList = media
+            if mediaList.isEmpty, gallery {
+                mediaList = (try? await model.previewGalleryMedia(
+                    feedID: post.id,
+                    galleryID: GalleryFeed.linkedID(post.html)
+                )) ?? []
+            }
+            guard !mediaList.isEmpty else { continue }
+            let slots = (try? await model.previewMediaList(mediaList)) ?? []
+            var tempURLs: [URL] = []
+            for slot in slots.compactMap({ $0 }) {
+                tempURLs.append(slot)
+            }
+            for (i, m) in mediaList.enumerated() {
+                guard i < slots.count, let url = slots[i] else { continue }
+                let vid: Bool
+                switch m {
+                case .redditVideo, .redgifs: vid = true
+                case .direct(let u): vid = isVideo(u)
+                }
+                resolved.append(ResolvedFeedItem(
+                    post: post, url: url, isVideo: vid, temporaryURLs: tempURLs
+                ))
+            }
+        }
+        resolvedItems = resolved
+    }
+}
+
+private struct FeedCard: View {
+    let item: SavedFeedView.ResolvedFeedItem
+    let isActive: Bool
+    @ObservedObject var model: Downloader
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Color.black.ignoresSafeArea()
+            if item.isVideo {
+                AutoPlayVideo(url: item.url, active: isActive)
+            } else {
+                AsyncImage(url: item.url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .failure:
+                        Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.5))
+                    case .empty:
+                        ProgressView().tint(.white)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.post.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+                    .shadow(radius: 2)
+                if let date = item.post.publishedAt {
+                    Text(date.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .shadow(radius: 1)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 120),
+                alignment: .bottom
+            )
+        }
+        .clipped()
+    }
+}
+
+private struct AutoPlayVideo: UIViewControllerRepresentable {
+    let url: URL
+    let active: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = context.coordinator.player
+        controller.showsPlaybackControls = true
+        controller.videoGravity = .resizeAspectFill
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        context.coordinator.setActive(active)
+    }
+
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
+        coordinator.player.pause()
+        controller.player = nil
+    }
+
+    final class Coordinator {
+        let player: AVPlayer
+        private var active = false
+
+        init(url: URL) { player = AVPlayer(url: url) }
+
+        func setActive(_ value: Bool) {
+            guard active != value else { return }
+            active = value
+            if value {
+                player.play()
+            } else {
+                player.pause()
+            }
         }
     }
 }
