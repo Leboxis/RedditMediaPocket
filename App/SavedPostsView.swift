@@ -222,8 +222,8 @@ struct SavedPostsView: View {
 }
 
 /// Feed plein écran à défilement vertical (décision Jev A) : paging natif
-/// iOS 17, repli ScrollView vertical simple sur iOS 16. Les entrées sont
-/// affichées immédiatement ; chaque carte résout son original en lazy.
+/// avec préchargement des 5 médias suivants. Les entrées sont affichées
+/// immédiatement ; chaque carte résout son original en lazy.
 struct SavedFeedView: View {
     let posts: [Post]
     @ObservedObject var model: Downloader
@@ -244,10 +244,8 @@ struct SavedFeedView: View {
                         .multilineTextAlignment(.center)
                 }
                 .padding(24)
-            } else if #available(iOS 17, *) {
-                PagedFeed17(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
             } else {
-                PagedFeed16(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
+                PagedFeed(entries: entries, visibleID: $visibleID, model: model, bin: bin, preload: preload)
             }
         }
         .onDisappear { bin.clear() }
@@ -258,8 +256,7 @@ struct SavedFeedView: View {
     }
 }
 
-@available(iOS 17, *)
-private struct PagedFeed17: View {
+private struct PagedFeed: View {
     let entries: [SavedFeedEntry]
     @Binding var visibleID: SavedFeedEntry.ID?
     @ObservedObject var model: Downloader
@@ -292,32 +289,6 @@ private struct PagedFeed17: View {
     }
 }
 
-private struct PagedFeed16: View {
-    let entries: [SavedFeedEntry]
-    @Binding var visibleID: SavedFeedEntry.ID?
-    @ObservedObject var model: Downloader
-    @ObservedObject var bin: FeedTempBin
-    @ObservedObject var preload: FeedPreloadStore
-
-    var body: some View {
-        GeometryReader { proxy in
-            ScrollView(.vertical, showsIndicators: false) {
-                LazyVStack(spacing: 0) {
-                    ForEach(entries) { entry in
-                        FeedCard(entry: entry, isActive: entry.id == visibleID, model: model, bin: bin, preload: preload)
-                            .frame(height: proxy.size.height)
-                            .scaleEffect(entry.id == visibleID ? 1 : 0.98)
-                            .opacity(entry.id == visibleID ? 1 : 0.85)
-                            .animation(.smooth(duration: 0.25), value: visibleID)
-                            .onAppear { visibleID = entry.id }
-                    }
-                }
-            }
-            .ignoresSafeArea()
-        }
-    }
-}
-
 private struct FeedCard: View {
     let entry: SavedFeedEntry
     let isActive: Bool
@@ -339,11 +310,11 @@ private struct FeedCard: View {
             Color.black
             if let videoURL {
                 AutoPlayVideo(url: videoURL, active: isActive)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
             } else if let full {
                 Image(uiImage: full).resizable().scaledToFit()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
             } else if let thumb {
                 ZStack {
                     Image(uiImage: thumb).resizable().scaledToFit()

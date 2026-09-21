@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 16+). On choisit `u/` (profil) ou `r/` (subreddit), puis on saisit le nom ; `♥` sélectionne les sauvegardés du compte Reddit connecté sans demander de pseudo. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). On choisit `u/` (profil) ou `r/` (subreddit), puis on saisit le nom ; `♥` sélectionne les sauvegardés du compte Reddit connecté sans demander de pseudo. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## État réel
 

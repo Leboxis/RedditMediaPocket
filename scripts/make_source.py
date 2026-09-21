@@ -37,7 +37,7 @@ def build_source(repo, version, ipa):
                 "localizedDescription": "Galerie compacte et correction des zones tactiles des miniatures.",
                 "downloadURL": f"{base}/{ipa.name}",
                 "size": ipa.stat().st_size,
-                "minOSVersion": "16.0"
+                "minOSVersion": "26.0"
             }]
         }],
         "news": []

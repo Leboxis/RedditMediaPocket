@@ -3,7 +3,7 @@ options:
   developmentLanguage: en
   bundleIdPrefix: com.leboxis
   deploymentTarget:
-    iOS: '16.0'
+    iOS: '26.0'
 packages:
   MediaCore:
     path: .
