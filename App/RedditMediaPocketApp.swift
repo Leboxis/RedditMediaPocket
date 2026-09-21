@@ -269,7 +269,7 @@ struct ContentView: View {
                     .accessibilityLabel(L("Réglages", "Settings"))
             }
             ToolbarItem(placement: .navigationBarLeading) {
-                Button { savedPostsPresented = true } label: { Image(systemName: "bookmark") }
+                Button { savedPostsPresented = true } label: { Image(systemName: "bookmark.fill") }
                     .accessibilityLabel(L("Posts sauvegardés", "Saved posts"))
             }
             ToolbarItem(placement: .navigationBarLeading) {

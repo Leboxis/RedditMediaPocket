@@ -117,7 +117,7 @@ struct SavedPostsView: View {
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
-    @State private var showFeed = false
+    @State private var showFeed = true
 
 
 
@@ -177,16 +177,19 @@ struct SavedPostsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L("Fermer", "Close")) { dismiss() }
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill").font(.title3)
+                    }
+                    .accessibilityLabel(L("Fermer", "Close"))
                 }
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         showFeed.toggle()
                     } label: {
-                        Image(systemName: showFeed ? "square.grid.3x3" : "play.rectangle")
+                        Image(systemName: showFeed ? "list.bullet" : "play.rectangle.on.rectangle.fill").font(.title3)
                     }
                     .accessibilityLabel(showFeed
-                        ? L("Vue grille", "Grid view")
+                        ? L("Vue liste", "List view")
                         : L("Vue défilement", "Feed view"))
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
