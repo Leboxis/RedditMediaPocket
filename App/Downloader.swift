@@ -359,6 +359,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return try FeedParser.parse(body)
     }
 
+    func previewSavedPosts() async throws -> [Post] {
+        let feed = try await network.savedFeed()
+        try Task.checkCancellation()
+        return try await network.savedPosts(feed, after: nil)
+    }
+
     func previewImageData(_ url: URL) async throws -> Data {
         try Task.checkCancellation()
         let revision = RedditSession.shared.revision

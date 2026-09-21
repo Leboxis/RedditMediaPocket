@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var info: MediaInfoSelection?
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @State private var settingsPresented = false
+    @State private var savedPostsPresented = false
     @State private var followingPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
@@ -49,6 +50,13 @@ struct ContentView: View {
             }
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
+            }
+            .sheet(isPresented: $savedPostsPresented) {
+                SavedPostsView(model: model) { _ in
+                    savedPostsPresented = false
+                    model.sourceKind = "saved"
+                    model.start()
+                }
             }
             .sheet(isPresented: $followingPresented) {
                 FollowingView(model: model) { username in
@@ -259,6 +267,10 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { settingsPresented = true } label: { Image(systemName: "gearshape") }
                     .accessibilityLabel(L("Réglages", "Settings"))
+            }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { savedPostsPresented = true } label: { Image(systemName: "bookmark") }
+                    .accessibilityLabel(L("Posts sauvegardés", "Saved posts"))
             }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { followingPresented = true } label: { Image(systemName: "person.2") }
