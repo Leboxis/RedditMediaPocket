@@ -252,7 +252,16 @@ struct SavedFeedView: View {
             }
         }
         .onDisappear { bin.clear() }
-        .task(id: posts.count) { entries = savedFeedEntries(from: posts) }
+        .task(id: posts.map(\.id)) {
+            let fresh = savedFeedEntries(from: posts)
+            entries = fresh
+            // scrollPosition est la seule source de vérité : on cale
+            // visibleID sur la première carte (ou on garde la position
+            // si le post est toujours présent après refresh).
+            if fresh.first(where: { $0.id == visibleID }) == nil {
+                visibleID = fresh.first?.id
+            }
+        }
         .task(id: visibleID) {
             await preload.prefetchNext(entries: entries, visibleID: visibleID, count: 5, model: model, bin: bin)
         }
@@ -279,7 +288,6 @@ private struct PagedFeed: View {
                                 .opacity(phase.isIdentity ? 1 : 0.7)
                                 .saturation(phase.isIdentity ? 1 : 0.9)
                         }
-                        .onAppear { visibleID = entry.id }
                 }
             }
             .scrollTargetLayout()
@@ -437,6 +445,7 @@ private struct AutoPlayVideo: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.player.pause()
+        coordinator.player.replaceCurrentItem(with: nil)
         controller.player = nil
     }
 
