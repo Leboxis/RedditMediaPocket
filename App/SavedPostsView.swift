@@ -8,7 +8,7 @@ import AVKit
 /// local du HTML (aucun accès réseau). L'original est résolu paresseusement
 /// par chaque carte à son apparition (décision Jev C : hybride progressif).
 struct SavedFeedEntry: Identifiable {
-    let id = UUID()
+    let id: String
     let post: Post
     let media: Media?
     let thumbnail: URL?
@@ -22,11 +22,11 @@ private func savedFeedEntries(from posts: [Post]) -> [SavedFeedEntry] {
         let media = MediaExtractor.extract(post.html)
         let thumbnail = MediaExtractor.previewImage(post.html)
         if !media.isEmpty {
-            for m in media {
-                entries.append(SavedFeedEntry(post: post, media: m, thumbnail: thumbnail, isGallery: false, galleryID: nil))
+            for (index, m) in media.enumerated() {
+                entries.append(SavedFeedEntry(id: "\(post.id)-\(index)", post: post, media: m, thumbnail: thumbnail, isGallery: false, galleryID: nil))
             }
         } else if GalleryFeed.linked(post.html) {
-            entries.append(SavedFeedEntry(post: post, media: nil, thumbnail: thumbnail, isGallery: true, galleryID: GalleryFeed.linkedID(post.html)))
+            entries.append(SavedFeedEntry(id: "\(post.id)-gallery", post: post, media: nil, thumbnail: thumbnail, isGallery: true, galleryID: GalleryFeed.linkedID(post.html)))
         }
     }
     return entries
@@ -166,8 +166,7 @@ struct SavedFeedView: View {
     @ObservedObject var model: Downloader
     @StateObject private var bin = FeedTempBin()
     @State private var visibleID: SavedFeedEntry.ID?
-
-    private var entries: [SavedFeedEntry] { savedFeedEntries(from: posts) }
+    @State private var entries: [SavedFeedEntry] = []
 
     var body: some View {
         ZStack {
@@ -188,6 +187,7 @@ struct SavedFeedView: View {
             }
         }
         .onDisappear { bin.clear() }
+        .task(id: posts.count) { entries = savedFeedEntries(from: posts) }
     }
 }
 
