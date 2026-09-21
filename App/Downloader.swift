@@ -594,8 +594,37 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return downloads
     }
 
+    /// Relance bornée sur erreur transitoire (réseau mobile instable) :
+    /// 3 essais max, backoff 2s/4s. Le 429 est exclu : déjà converti en
+    /// `NetworkError.limited` avec Retry-After par `Network.check`.
+    private func saveWithRetry(_ item: Download) async throws {
+        var attempt = 0
+        while true {
+            do {
+                return try await save(item)
+            } catch {
+                if error is CancellationError { throw error }
+                guard Self.isTransient(error), attempt < 2 else { throw error }
+                attempt += 1
+                try await Task.sleep(for: .seconds(1 << attempt))
+            }
+        }
+    }
+
+    private static func isTransient(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            return [.timedOut, .networkConnectionLost, .notConnectedToInternet,
+                    .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+                    .secureConnectionFailed].contains(urlError.code)
+        }
+        if case NetworkError.refused(let code) = error {
+            return code == 408 || (500...599).contains(code)
+        }
+        return false
+    }
+
     private func saveUnlessLimited(_ item: Download) async throws {
-        do { try await save(item) }
+        do { try await saveWithRetry(item) }
         catch NetworkError.limited(let service, let until) {
             try Task.checkCancellation()
             skipped += 1
