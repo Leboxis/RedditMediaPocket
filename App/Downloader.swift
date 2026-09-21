@@ -495,8 +495,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
             let fresh = posts.filter { visited.insert($0.id).inserted }
             if fresh.isEmpty { break }
-            let downloads = await prepareDownloads(fresh, folder: folder,
-                                             seenMedia: &seenMedia, usedFilenames: &usedFilenames)
+            let downloads = try await prepareDownloads(fresh, folder: folder,
+                                              seenMedia: &seenMedia, usedFilenames: &usedFilenames)
             discovered += downloads.count
             status = ""
             try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
@@ -526,8 +526,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
     /// vidéos `v.redd.it` (DASH). Un échec galerie ignore juste ce post.
     private func prepareDownloads(_ posts: [Post], folder: URL,
-                                  seenMedia: inout Set<Media>,
-                                  usedFilenames: inout Set<String>) async -> [Download] {
+                                   seenMedia: inout Set<Media>,
+                                   usedFilenames: inout Set<String>) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
@@ -693,7 +693,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
         } onCancel: {
-            export.cancel()
+            export.cancelExport()
         }
         guard export.status == .completed else { try? fm.removeItem(at: output); throw export.error ?? NetworkError.invalid(L("Échec de l’assemblage vidéo.", "Video merging failed.")) }
         if Task.isCancelled { try? fm.removeItem(at: output); throw CancellationError() }
