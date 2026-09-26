@@ -38,7 +38,6 @@ struct ContentView: View {
                 savedHintRow
                 userChipsRow
                 metricsRow
-                if !model.limitNotice.isEmpty { limitBanner }
                 gallerySection
             }
             .navigationTitle("Pocket")
@@ -203,13 +202,6 @@ struct ContentView: View {
                 .accessibilityHidden(!showProgress)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
-    }
-
-    private var limitBanner: some View {
-        Label(model.limitNotice, systemImage: "clock")
-            .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.horizontal, 18).padding(.bottom, 10)
     }
 
     @ViewBuilder private var gallerySection: some View {

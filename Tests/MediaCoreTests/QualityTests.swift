@@ -41,10 +41,4 @@ final class QualityTests: XCTestCase {
         XCTAssertEqual(QualityPolicy.redgifsURL(hd: nil, sd: sd), sd)
         XCTAssertNil(QualityPolicy.redgifsURL(hd: nil, sd: nil))
     }
-    func testQuotaAdviceOnlyWhenValid() {
-        XCTAssertEqual(RatePolicy.quotaDelay(remaining: "10", reset: "60"), 6)
-        XCTAssertEqual(RatePolicy.quotaDelay(remaining: "0", reset: "60"), 60)
-        XCTAssertNil(RatePolicy.quotaDelay(remaining: nil, reset: "60"))
-        XCTAssertNil(RatePolicy.quotaDelay(remaining: "nan", reset: "60"))
-    }
 }

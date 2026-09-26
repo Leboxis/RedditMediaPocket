@@ -73,13 +73,13 @@ Si le dépôt porte un autre nom, adapter cette URL ; le workflow utilise automa
 | Autres hébergeurs / galeries Imgur | Non pris en charge |
 | Privé, supprimé, accès soumis à connexion | Non accessible |
 
-RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS et l'annulation arrêtent la session et restent visibles.
+RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS, l'annulation et un HTTP 429 arrêtent la session et restent visibles.
 
 ## Comportement réseau et stockage
 
-- Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Les départs sont espacés par service : 7 secondes pour le RSS, 2 secondes pour les métadonnées RedGIFs, 1 seconde pour les médias. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
+- Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
-- Un HTTP 429 conserve le délai `Retry-After` par service entre lancements (15 minutes par défaut). Les médias des autres services déjà découverts continuent. Une limite sur le flux RSS arrête la découverte des pages suivantes. Les erreurs du flux RSS arrêtent la session ; les erreurs portant sur un seul média l'ignorent et continuent le parcours.
+- Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts encore en vol. Les médias déjà enregistrés sont conservés. Aucun délai n’est inventé : l’app attend celui annoncé par le serveur (`Retry-After`, sinon `x-ratelimit-reset`) et n’affiche une heure de reprise que s’il existe. S’il n’existe pas, le message indique seulement qu’une relance est possible. Dans tous les cas, relancer efface les pauses enregistrées et retente le serveur immédiatement, quitte à retomber sur le même refus. Les erreurs portant sur un seul média absent (HTTP 404) restent ignorées et le parcours continue.
 - Reprise par fichiers complets : relancer le pseudo saute les URLs déjà enregistrées. Un transfert interrompu recommence depuis le début. Le parcours RSS repart de la première page.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
 - Garder l'application au premier plan. Le prototype n'implémente pas de service de téléchargement en arrière-plan.
@@ -108,7 +108,7 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 Interface compacte : sélecteur `u/`, `r/` ou `♥`, nom (ou « Sauvegardés du compte connecté » pour le cœur), bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
-Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt ou une erreur autre qu’un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
+Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt, une erreur ou un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 
 Les tests de concurrence vérifient le plafond de trois, le remplacement avant la fin du transfert le plus lent, l’annulation après erreur et le bouton arrêter.
 
@@ -118,7 +118,7 @@ Le bouton de partage en haut à droite exporte tous les médias actuellement té
 
 La visionneuse reçoit un instantané de la galerie et ouvre le média touché ; balayer à gauche/droite passe aux éléments suivants/précédents, images et vidéos mélangées. Le partage intégré suit le média affiché. Les téléchargements arrivant pendant la consultation apparaissent après réouverture de la visionneuse.
 
-Les hôtes Reddit et redd.it partagent un délai, tout comme les hôtes API/CDN RedGIFs. Les nouvelles requêtes vers un service limité sont évitées localement, sans annuler les autres services. Les fichiers non téléchargés sont indiqués « à reprendre » ; relancer après le délai. Les anciens délais globaux sont respectés jusqu’à leur expiration car leur source n’était pas enregistrée. Aucun réglage ne garantit l’absence de limitation serveur.
+Les hôtes Reddit et redd.it partagent un délai, tout comme les hôtes API/CDN RedGIFs. Tant qu’un délai est en cours, les nouvelles requêtes vers ce service sont évitées localement. La session s’arrête au premier refus HTTP 429, quel que soit le service : aucun parcours partiel « à reprendre » n’est proposé, et le bandeau de services en pause a été supprimé. Relancer repart immédiatement et retoque le serveur. Les anciens délais globaux sont respectés jusqu’à leur expiration car leur source n’était pas enregistrée. Aucun réglage ne garantit l’absence de limitation serveur.
 
 ## Qualité et investigation du débit
 
@@ -126,9 +126,9 @@ La meilleure qualité signifie la meilleure variante exposée par le chemin publ
 
 Pour DASH, la priorité est hauteur, largeur, fréquence d’images puis débit ; les attributs hérités de l’AdaptationSet sont lus. La piste audio au débit maximal est choisie. AVAssetExportPresetPassthrough conserve les pistes sans recompression. Si le manifest nécessite SegmentTemplate/SegmentList, cette version échoue explicitement plutôt que choisir discrètement une piste inférieure. RedGIFs prend HD quand cette URL existe ; SD seulement si le serveur n’expose pas HD. Une erreur HD ne déclenche pas de repli SD. Les fichiers anciens ne sont pas requalifiés ou remplacés automatiquement.
 
-Investigation : aucune cadence sûre officielle trouvée pour le RSS anonyme et les CDN utilisés. Le quota Reddit Data API de 100 requêtes/minute concerne les clients OAuth et ne doit pas être transposé au RSS de cette app. Augmenter le nombre de connexions ou supprimer les pauses pourrait provoquer davantage de 429 ; aucune accélération chiffrée n’est revendiquée.
+Investigation : aucune cadence sûre officielle trouvée pour le RSS anonyme et les CDN utilisés. Le quota Reddit Data API de 100 requêtes/minute concerne les clients OAuth et ne doit pas être transposé au RSS de cette app. Augmenter le nombre de connexions provoque davantage de 429 ; aucune accélération chiffrée n’est revendiquée. Mesure relevée sur `www.reddit.com/r/…/new.rss` : un 429 y est renvoyé avec `x-ratelimit-used`, `x-ratelimit-remaining: 0.0` et `x-ratelimit-reset`, mais sans `Retry-After`. C’est la raison du repli sur `x-ratelimit-reset`.
 
-L’amélioration mise en œuvre vise les requêtes évitables : 16 pages RSS maximum réutilisables pendant 120 secondes, en mémoire seulement, limitées à 2 Mo chacune. Cela sert aux arrêts/reprises proches et peut retarder l’apparition d’un nouveau post de deux minutes. Les fichiers complets sont toujours ignorés à la reprise. Les en-têtes X-Ratelimit-Remaining/Reset, quand présents, peuvent ralentir préventivement les requêtes ; leur absence ne vaut pas autorisation d’accélérer. Les délais de base et le plafond de trois transferts restent inchangés.
+L’amélioration mise en œuvre vise les requêtes évitables : 16 pages RSS maximum réutilisables pendant 120 secondes, en mémoire seulement, limitées à 2 Mo chacune. Cela sert aux arrêts/reprises proches et peut retarder l’apparition d’un nouveau post de deux minutes. Les fichiers complets sont toujours ignorés à la reprise. Les en-têtes X-Ratelimit-Remaining/Reset ne ralentissent plus les requêtes : seuls les refus réels limitent, et un quota annoncé sans refus reste sans effet. Les délais de base et le plafond de trois transferts restent inchangés.
 
 Références consultées :
 - Reddit : https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki
@@ -138,7 +138,7 @@ Références consultées :
 
 ## Réglage de la concurrence
 
-La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective, et les délais par service restent respectés. Choisir 1 ou 2 peut aider si les limitations sont fréquentes, sans garantie. La connexion par cookies n’est pas implémentée dans cette version.
+La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective. Choisir 1 ou 2 peut réduire la fréquence des 429, sans garantie. La connexion par cookies n’est pas implémentée dans cette version.
 
 ## Connexion Reddit locale
 
@@ -146,13 +146,13 @@ Réglages → Se connecter à Reddit. Saisir ses identifiants directement sur le
 
 Les requêtes HTTPS reddit.com peuvent recevoir les cookies correspondants à leur domaine, chemin et expiration. Les cookies ne sont jamais appliqués à redd.it, RedGIFs ou Imgur. Chaque redirection reconstruit les cookies pour sa destination et retire l’autorisation lors d’un changement d’hôte. Les navigations principales de la fenêtre de connexion sont limitées à HTTPS reddit.com et ses sous-domaines.
 
-Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Aucun délai de limitation n’est effacé. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
+Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Une déconnexion n’efface pas les pauses enregistrées, mais le démarrage d’une session les efface toujours. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
 
 Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit. La session sert aussi à lire l’onglet Sauvegardés (`♥`) du compte.
 
 ## Transferts immédiats et état de session
 
-Les pauses artificielles de départ ont été supprimées, ainsi que le lissage du débit inféré des quotas encore disponibles. Aucun Task.sleep n’est utilisé par la couche réseau. Les tâches démarrent dès qu’un emplacement est libre. Les réponses HTTP 429 et quotas explicitement épuisés continuent de bloquer le service concerné jusqu’au délai requis.
+Les pauses artificielles de départ ont été supprimées, ainsi que le lissage du débit inféré des quotas encore disponibles. Aucun Task.sleep n’est utilisé par la couche réseau. Les tâches démarrent dès qu’un emplacement est libre. Seul un refus HTTP 429 arrête la session ; l’app applique alors le délai annoncé par le serveur, ou aucun délai si le serveur n’en annonce pas.
 
 Le compteur affiche les appels de téléchargement réseau en cours, et non la totalité des tâches de résolution/assemblage. Le nombre choisi est un maximum de médias traités simultanément ; il peut être inférieur pendant la découverte RSS, les résolutions, l’assemblage ou à la fin d’une page.
 
@@ -170,7 +170,7 @@ Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tro
 
 ## Galerie compacte et zones tactiles
 
-Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs fatales apparaissent dans une alerte ponctuelle ; les limites de service gardent leur message conditionnel.
+Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs fatales apparaissent dans une alerte ponctuelle ; un refus HTTP 429 y affiche le délai du serveur quand il existe, sinon la seule invitation à relancer.
 
 Chaque bouton de galerie définit une zone tactile rectangulaire et les overlays décoratifs ne participent pas au hit-testing. Le découpage visuel seul de scaledToFill ne suffisait pas à borner la zone tactile. Vérifier sur iPhone les touchers près du bord supérieur d’une vidéo et du bord inférieur de la carte qui la précède.
 

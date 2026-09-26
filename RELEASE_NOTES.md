@@ -1,3 +1,11 @@
+Un HTTP 429 arrête la session, sans délai imposé.
+
+- Le téléchargement s'arrête au premier refus, flux RSS comme média, et annule les transferts encore en vol ; les fichiers déjà enregistrés sont conservés.
+- Suppression du délai par défaut de 15 minutes et de la lecture des en-têtes `X-Ratelimit` sur les réponses réussies : seul un refus réel limite.
+- Le délai annoncé par le serveur est respecté : `Retry-After`, sinon `x-ratelimit-reset`, mesure à 48 s sur le RSS de Reddit. Sans en-tête, aucun délai n'est inventé.
+- Relancer efface les pauses enregistrées et retente le serveur immédiatement, quitte à retomber sur le même refus.
+- Fin du bandeau de services en pause et du compteur « à reprendre » : plus de parcours partiel, la reprise se fait depuis le curseur.
+
 Sélection automatique du compte pour les sauvegardés.
 
 - Le cœur utilise la session Reddit connectée sans demander de pseudo.

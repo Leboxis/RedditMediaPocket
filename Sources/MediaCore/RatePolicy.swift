@@ -10,24 +10,28 @@ public enum RatePolicy {
         return host
     }
 
-    /// Optional advisory headers; their absence does not imply an anonymous quota.
-    public static func quotaDelay(remaining: String?, reset: String?) -> TimeInterval? {
-        guard let remaining = remaining.flatMap(Double.init), remaining.isFinite, remaining >= 0,
-              let reset = reset.flatMap(Double.init), reset.isFinite, reset > 0 else { return nil }
-        return remaining < 1 ? reset : reset / remaining
+    /// Server-stated deadline for a refused request, or nil when the server
+    /// states none. Reddit's RSS endpoints answer 429 with `x-ratelimit-reset`
+    /// and no `Retry-After`, so the reset is read as a fallback. Nothing is
+    /// invented: a nil deadline keeps a manual restart immediately possible.
+    public static func retryDate(retryAfter: String?, reset: String?, now: Date) -> Date? {
+        if let date = absolute(retryAfter, now: now) { return date }
+        guard let seconds = reset.flatMap(Double.init), seconds.isFinite, seconds > 0 else { return nil }
+        return now.addingTimeInterval(seconds)
     }
 
-    public static func retryDate(header: String?, now: Date) -> Date {
+    /// `Retry-After` carries either a delay in seconds or an absolute HTTP date.
+    private static func absolute(_ header: String?, now: Date) -> Date? {
         let value = (header ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if let seconds = Double(value), seconds.isFinite, seconds >= 0 {
-            return now.addingTimeInterval(max(1, seconds))
+            return now.addingTimeInterval(seconds)
         }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
         formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
         if let date = formatter.date(from: value), date > now { return date }
-        return now.addingTimeInterval(900)
+        return nil
     }
 }
 

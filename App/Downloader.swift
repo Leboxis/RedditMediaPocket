@@ -96,9 +96,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     @Published var active = 0
     @Published private(set) var transfers = 0
-    @Published var limitNotice = ""
-    private var limitedServices: [String: Date] = [:]
-    private var skipped = 0
     private var failed = 0
     private let network = Network()
     private let previewCache: NSCache<NSURL, NSData> = {
@@ -321,7 +318,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
-        running = true; discovered = 0; count = 0; status = ""; limitNotice = ""; skipped = 0; failed = 0; limitedServices = [:]
+        running = true; discovered = 0; count = 0; status = ""; failed = 0
         task = Task {
             defer { running = false; active = 0; task = nil }
             do { try await run() }
@@ -330,7 +327,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 if Task.isCancelled || error is CancellationError {
                     status = L("Arrêté", "Stopped")
                 } else if case NetworkError.limited(let service, let until) = error {
-                    let msg = L("\(service) : trop de demandes, téléchargement en pause. \(count) médias conservés. Relance après \(until.formatted(date: .numeric, time: .shortened)) pour continuer.", "\(service): too many requests, download paused. \(count) media files kept. Restart after \(until.formatted(date: .numeric, time: .shortened)) to continue.")
+                    let kept = L("\(count) médias conservés", "\(count) media files kept")
+                    let msg = until.map { date in
+                        L("\(service) : trop de demandes, téléchargement arrêté. \(kept). Relance après \(date.formatted(date: .numeric, time: .shortened)) pour continuer.",
+                          "\(service): too many requests, download stopped. \(kept). Restart after \(date.formatted(date: .numeric, time: .shortened)) to continue.")
+                    } ?? L("\(service) : trop de demandes, téléchargement arrêté. \(kept). Relance pour réessayer.",
+                           "\(service): too many requests, download stopped. \(kept). Restart to try again.")
                     status = msg
                     errorMessage = msg
                 } else {
@@ -547,10 +549,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
             saveCollections()
         }
         if failed == 0 {
-            status = skipped > 0 ? L("\(count) reçus · \(skipped) à reprendre", "\(count) received · \(skipped) to resume") : (count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded"))
+            status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
         } else {
             var summary = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
-            if skipped > 0 { summary += L(" · \(skipped) à reprendre", " · \(skipped) to resume") }
             summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
             status = summary
         }
@@ -585,32 +586,35 @@ struct UserCollection: Codable, Identifiable, Equatable {
         discovered += downloads.count
         status = ""
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
-            try await self.saveUnlessLimited(item)
+            try await self.saveIgnoringInaccessible(item)
         }
     }
 
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
     /// Les posts galerie (lien `/gallery/` sans média direct) sont résolus via
     /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
-    /// vidéos `v.redd.it` (DASH). Un échec galerie ignore juste ce post.
+    /// vidéos `v.redd.it` (DASH). Un échec galerie ignore juste ce post, sauf
+    /// un refus HTTP 429 qui arrête la session comme n'importe quel autre.
     private func prepareDownloads(_ posts: [Post], folder: URL,
                                    seenMedia: inout Set<Media>,
                                    usedFilenames: inout Set<String>) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
-            await withTaskGroup(of: (String, [Media]).self) { group in
+            try await withThrowingTaskGroup(of: (String, [Media]).self) { group in
                 for post in candidates {
                     group.addTask {
                         do {
                             let list = try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
                             return (post.id, list)
+                        } catch NetworkError.limited(let service, let until) {
+                            throw NetworkError.limited(service: service, until: until)
                         } catch {
                             return (post.id, [])
                         }
                     }
                 }
-                for await (id, list) in group {
+                for try await (id, list) in group {
                     galleryLists[id] = list
                 }
             }
@@ -663,8 +667,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     /// Relance bornée sur erreur transitoire (réseau mobile instable) :
-    /// 3 essais max, backoff 2s/4s. Le 429 est exclu : déjà converti en
-    /// `NetworkError.limited` avec Retry-After par `Network.check`.
+    /// 3 essais max, backoff 2s/4s. Le 429 est exclu : il est déjà converti en
+    /// `NetworkError.limited` par `Network.check` et n'est jamais réessayé.
     private func saveWithRetry(_ item: Download) async throws {
         var attempt = 0
         while true {
@@ -691,20 +695,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return false
     }
 
-    private func saveUnlessLimited(_ item: Download) async throws {
+    /// Un média supprimé ou inaccessible (ex. HTTP 404) ne doit pas annuler
+    /// tout le parcours : on le comptabilise et on continue avec les autres.
+    /// Seules l'annulation, les erreurs de flux RSS et un HTTP 429 restent
+    /// fatales : un refus du serveur arrête la session entière, même au milieu
+    /// d'un lot, et l'utilisateur choisit quand relancer.
+    private func saveIgnoringInaccessible(_ item: Download) async throws {
         do { try await saveWithRetry(item) }
-        catch NetworkError.limited(let service, let until) {
-            try Task.checkCancellation()
-            skipped += 1
-            limitedServices[service] = max(limitedServices[service] ?? .distantPast, until)
-            limitNotice = limitedServices.sorted { $0.key < $1.key }.map {
-                "\($0.key) · \($0.value.formatted(date: .numeric, time: .shortened))"
-            }.joined(separator: " — ")
-            // Keep processing the other services. Blocked requests fail locally without contacting them.
-        } catch {
-            // Un média supprimé ou inaccessible (ex. HTTP 404) ne doit pas annuler
-            // tout le parcours : on le comptabilise et on continue avec les autres.
-            // Seules l'annulation et les erreurs de flux RSS restent fatales.
+        catch {
             if error is CancellationError { throw error }
             try Task.checkCancellation()
             failed += 1

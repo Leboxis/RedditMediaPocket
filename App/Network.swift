@@ -3,17 +3,21 @@ import Combine
 import MediaCore
 
 enum NetworkError: LocalizedError {
-    case refused(Int), limited(service: String, until: Date), invalid(String)
+    case refused(Int), limited(service: String, until: Date?), invalid(String)
     var errorDescription: String? {
         switch self {
         case .refused(let code): return L("Accès refusé (HTTP \(code)). Aucun contournement ni nouvelle tentative automatique.", "Access denied (HTTP \(code)). No bypass or automatic retry.")
-        case .limited(let service, let date): return L("\(service) · réessayer le \(date.formatted(date: .numeric, time: .shortened))", "\(service) · retry on \(date.formatted(date: .numeric, time: .shortened))")
+        case .limited(let service, let date):
+            // No server-stated deadline: the user may restart right away, and may
+            // hit the same refusal again. No wait is invented to prevent that.
+            guard let date else { return L("\(service) : trop de demandes. Relance pour réessayer.", "\(service): too many requests. Restart to try again.") }
+            return L("\(service) · réessayer le \(date.formatted(date: .numeric, time: .shortened))", "\(service) · retry on \(date.formatted(date: .numeric, time: .shortened))")
         case .invalid(let message): return message
         }
     }
 }
 
-// Configurable bounded media pipelines; service-specific pacing and persistent limits.
+// Configurable bounded media pipelines; server-stated service limits only.
 @MainActor final class Network: ObservableObject {
     @Published private(set) var transfers = 0
     private let session: URLSession
@@ -63,22 +67,23 @@ enum NetworkError: LocalizedError {
     }
     private func check(_ response: URLResponse, requestedURL: URL) throws {
         guard let http = response as? HTTPURLResponse else { throw NetworkError.invalid(L("Réponse réseau invalide.", "Invalid network response.")) }
-        if http.statusCode == 429 {
+        // Only an explicit refusal stops a run. A quota header on a successful
+        // response is never enough on its own: it would stop downloads without
+        // any request having been refused.
+        guard (200...299).contains(http.statusCode) else {
+            guard http.statusCode == 429 else { throw NetworkError.refused(http.statusCode) }
             let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
-            let date = RatePolicy.retryDate(header: http.value(forHTTPHeaderField: "Retry-After"), now: Date())
-            limits.record(service: service, until: date)
-            defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
-            throw NetworkError.limited(service: service, until: limits.deadlines[service] ?? date)
+            // Reddit omits `Retry-After` here and advertises `x-ratelimit-reset`
+            // instead. With neither, nothing is recorded and the next start is free.
+            let date = RatePolicy.retryDate(retryAfter: http.value(forHTTPHeaderField: "Retry-After"),
+                                            reset: http.value(forHTTPHeaderField: "X-Ratelimit-Reset"),
+                                            now: Date())
+            if let date {
+                limits.record(service: service, until: date)
+                defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
+            }
+            throw NetworkError.limited(service: service, until: date)
         }
-        if (200...299).contains(http.statusCode),
-           let remaining = Double(http.value(forHTTPHeaderField: "X-Ratelimit-Remaining") ?? ""), remaining.isFinite, remaining >= 0, remaining < 1,
-           let reset = Double(http.value(forHTTPHeaderField: "X-Ratelimit-Reset") ?? ""), reset.isFinite, reset > 0 {
-            // An explicitly exhausted server quota is respected; no pacing is inferred otherwise.
-            let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
-            limits.record(service: service, until: Date().addingTimeInterval(reset))
-            defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
-        }
-        guard (200...299).contains(http.statusCode) else { throw NetworkError.refused(http.statusCode) }
     }
     func data(_ url: URL, bearer: String? = nil) async throws -> Data {
         let revision = RedditSession.shared.revision
