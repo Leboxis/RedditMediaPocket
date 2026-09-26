@@ -8,6 +8,8 @@ Le code et le workflow sont disponibles dans ce dépôt. GitHub Actions compile 
 
 Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronquer l'historique, refuser la pagination ou refuser l'accès. L'application s'arrête si une page se répète, si le curseur n'est pas reconnu ou après 100 pages. Les miniatures ne sont pas utilisées à la place des originaux.
 
+Chaque exécution commence par lire les 3 premières pages, là où les nouveaux posts arrivent, puis saute directement au point de lecture atteint si une session précédente a été interrompue. Sans cette reprise, une relance après un HTTP 429 relirait toutes les pages déjà parcourues et consommerait le quota pour rien. Le point de lecture est effacé dès que le parcours rejoint l'historique.
+
 Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`) pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
