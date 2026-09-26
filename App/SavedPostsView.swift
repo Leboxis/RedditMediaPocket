@@ -254,7 +254,7 @@ struct SavedPostsView: View {
     private func savedCountBannerText(_ snapshot: SavedMediaCount) -> some View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return Text(savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter))
+        return savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter)
             .font(.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
