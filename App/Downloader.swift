@@ -516,7 +516,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 try Task.checkCancellation()
                 status = L("Recherche des nouveautés…", "Checking for new posts…")
                 let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: checkAfter)
-                let fresh = posts.filter { insertVisited($0.id, &visitedSet, &visitedOrder) }
+                let fresh = posts.filter { Self.insertVisited($0.id, &visitedSet, &visitedOrder) }
                 if !fresh.isEmpty {
                     let downloads = try await prepareDownloads(fresh, folder: folder,
                                                       seenMedia: &seenMedia, usedFilenames: &usedFilenames)
@@ -556,7 +556,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             try Task.checkCancellation()
             status = L("Recherche…", "Searching…")
             let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: after)
-            let fresh = posts.filter { insertVisited($0.id, &visitedSet, &visitedOrder) }
+            let fresh = posts.filter { Self.insertVisited($0.id, &visitedSet, &visitedOrder) }
             if fresh.isEmpty { completed = true; break }
             let downloads = try await prepareDownloads(fresh, folder: folder,
                                               seenMedia: &seenMedia, usedFilenames: &usedFilenames)
