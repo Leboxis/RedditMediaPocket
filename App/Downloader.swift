@@ -498,7 +498,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // Phase 1 — nouveautés : le flux est antéchronologique, les posts
         // publiés depuis la dernière exécution sont devant. On part du début
         // et on s'arrête à la première page entièrement déjà vue : tout ce
-        // qui suit est connu. Sans historique, on saute cette phase.        if !visitedSet.isEmpty {
+        // qui suit est connu. Sans historique, on saute cette phase.
+        if !visitedSet.isEmpty {
             // Les nouveaux posts n'apparaissent qu'en tête de flux, donc la tête
             // est relue jusqu'à être entièrement connue. Une tête connue ne veut
             // pas dire « parcours fini » : si une session précédente s'était
