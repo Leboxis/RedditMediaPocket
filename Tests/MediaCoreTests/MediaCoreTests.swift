@@ -20,6 +20,12 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.postTitle("", fallback: "t3_abc"), "t3_abc")
         XCTAssertLessThanOrEqual(FilenamePolicy.postTitle(String(repeating: "é", count: 200)).utf8.count, 180)
     }
+
+    func testKDriveNameMatch() {
+        XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "leboxis"))
+        XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "Léboxis"))
+        XCTAssertFalse(FilenamePolicy.kDriveNameMatch("Leboxis", "Autre"))
+    }
     func testKDriveFolderNameCapitalized() {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("leboxis"), "Leboxis")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("pics"), "Pics")

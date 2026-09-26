@@ -13,7 +13,18 @@ struct FollowingView: View {
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
+    @State private var kDriveFolders: [String: KDriveFolderItem]?
+    @State private var kDriveLoading = false
+    @State private var kDriveError: String?
     @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
+    @AppStorage("kDriveApiToken") private var kDriveToken = ""
+    @AppStorage("kDriveId") private var kDriveId = ""
+    @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
+
+    private var kDriveConfigured: Bool {
+        !kDriveToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !kDriveId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     private var downloadedUsernames: Set<String> {
         Set((try? JSONDecoder().decode([String].self, from: downloadedUsernamesData)) ?? [])
@@ -85,7 +96,15 @@ struct FollowingView: View {
                                         HStack(spacing: 10) {
                                             Image(systemName: "person.crop.circle.fill")
                                                 .font(.title3).foregroundStyle(.orange)
-                                            Text(name).fontWeight(.medium).lineLimit(1)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(name).fontWeight(.medium).lineLimit(1)
+                                                if let folder = kDriveFolders?[name] {
+                                                    Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
+                                                        .font(.caption2)
+                                                        .foregroundStyle(.green)
+                                                        .lineLimit(1)
+                                                }
+                                            }
                                         }
                                     }
                                     Button {
@@ -122,11 +141,24 @@ struct FollowingView: View {
             }
             .navigationTitle(L("Suivis", "Following"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L("Fermer", "Close")) { dismiss() }
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            Task { await checkKDrive() }
+                        } label: {
+                            if kDriveLoading {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "externaldrive")
+                            }
+                        }
+                        .disabled(!kDriveConfigured || kDriveLoading || model.running)
+                        .accessibilityLabel(L("Vérifier sur kDrive", "Check on kDrive"))
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(L("Fermer", "Close")) { dismiss() }
+                    }
                 }
-            }
         }
         .tint(.orange)
         .task(id: "\(session.hasSession)-\(retryCount)") {
@@ -145,6 +177,35 @@ struct FollowingView: View {
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func kDriveBadgeText(_ folder: KDriveFolderItem) -> String {
+        let timestamp = folder.lastModifiedAt ?? folder.updatedAt ?? 0
+        guard timestamp > 0 else { return L("Dans kDrive", "On kDrive") }
+        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return L("Importé \(formatter.localizedString(for: date, relativeTo: Date()))",
+                 "Imported \(formatter.localizedString(for: date, relativeTo: Date()))")
+    }
+
+    private func checkKDrive() async {
+        guard let friends, !friends.isEmpty else { return }
+        kDriveLoading = true
+        kDriveError = nil
+        defer { kDriveLoading = false }
+        do {
+            let folders = try await KDriveService.shared.folderStatus(
+                token: kDriveToken,
+                driveId: kDriveId,
+                parentDirectoryId: kDriveDirectoryId,
+                names: friends
+            )
+            kDriveFolders = folders
+        } catch {
+            kDriveFolders = nil
+            kDriveError = error.localizedDescription
         }
     }
 }

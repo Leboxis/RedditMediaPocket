@@ -41,6 +41,27 @@ struct KDriveFolderItem: Identifiable, Codable, Equatable, Hashable {
     let id: Int
     let name: String
     let type: String?
+    let lastModifiedAt: Int?
+    let updatedAt: Int?
+
+    init(id: Int, name: String, type: String?, lastModifiedAt: Int? = nil, updatedAt: Int? = nil) {
+        self.id = id
+        self.name = name
+        self.type = type
+        self.lastModifiedAt = lastModifiedAt
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, type, last_modified_at, updated_at }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decodeIfPresent(String.self, forKey: .type)
+        lastModifiedAt = try container.decodeIfPresent(Int.self, forKey: .last_modified_at)
+        updatedAt = try container.decodeIfPresent(Int.self, forKey: .updated_at)
+    }
 
     var isDirectory: Bool {
         type == "dir" || type == "directory" || type == nil
@@ -157,6 +178,20 @@ final class KDriveService: ObservableObject {
         return allFolders
             .filter(\.isDirectory)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Vérifie quels dossiers (par nom) existent déjà dans kDrive.
+    /// Une seule requête : liste les sous-dossiers du parent, puis matching local.
+    func folderStatus(token: String, driveId: String, parentDirectoryId: String = "1", names: [String]) async throws -> [String: KDriveFolderItem] {
+        let existing = try await fetchSubdirectories(token: token, driveId: driveId, directoryId: parentDirectoryId)
+        var result: [String: KDriveFolderItem] = [:]
+        for name in names {
+            let target = FilenamePolicy.kDriveFolderName(name)
+            if let match = existing.first(where: { FilenamePolicy.kDriveNameMatch($0.name, target) }) {
+                result[name] = match
+            }
+        }
+        return result
     }
 
     func createDirectory(token: String, driveId: String, parentDirectoryId: String = "1", folderName: String) async throws -> KDriveFolderItem {

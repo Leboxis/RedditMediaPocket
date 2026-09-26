@@ -41,6 +41,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 }
 
+struct SavedMediaCount: Codable {
+    let count: Int
+    let computedAt: Date
+}
+
 @MainActor final class Downloader: ObservableObject {
     @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
     @Published var collections: [UserCollection] = []
@@ -54,6 +59,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var discovered = 0
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
+
+    private static func savedMediaCountKey(_ canonical: String) -> String { "savedMediaCount.\(canonical)" }
+
+    static func savedMediaCount(for canonical: String) -> SavedMediaCount? {
+        guard let data = UserDefaults.standard.data(forKey: savedMediaCountKey(canonical)) else { return nil }
+        return try? JSONDecoder().decode(SavedMediaCount.self, from: data)
+    }
+
+    static func clearSavedMediaCount(for canonical: String) {
+        UserDefaults.standard.removeObject(forKey: savedMediaCountKey(canonical))
+    }
     @Published var concurrentLimit = max(1, min(6, UserDefaults.standard.object(forKey: "concurrentLimit") as? Int ?? 3)) {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
@@ -495,6 +511,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var visitedOrder = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
+        var preparedCount = 0
         // Phase 1 — nouveautés : le flux est antéchronologique, les posts
         // publiés depuis la dernière exécution sont devant. On part du début
         // et on s'arrête à la première page entièrement déjà vue : tout ce
@@ -572,6 +589,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if completed {
             Self.persistResumeState(canonical: canonical, cursor: nil, visited: visitedOrder)
         }
+        if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
+            let snapshot = SavedMediaCount(count: preparedCount, computedAt: Date())
+            if let data = try? JSONEncoder().encode(snapshot) {
+                UserDefaults.standard.set(data, forKey: Self.savedMediaCountKey(canonical))
+            }
+        }
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
             saveCollections()
@@ -634,6 +657,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func executeDownloads(_ downloads: [Download]) async throws {
+        preparedCount += downloads.count
         status = ""
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
             try await self.saveIgnoringInaccessible(item)

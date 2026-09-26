@@ -106,6 +106,12 @@ public enum FilenamePolicy {
         return String(hash, radix: 16)
     }
 
+    /// Comparaison de noms de dossiers kDrive : insensible à la casse et aux
+    /// diacritiques, comme la recherche dans `prepareCollectionFolder`.
+    public static func kDriveNameMatch(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+    }
+
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
     /// Accepte aussi les anciens libellés `u/pseudo`, `r/sub`, `saved/pseudo`.

@@ -179,13 +179,18 @@ struct SavedPostsView: View {
                                 .multilineTextAlignment(.center)
                         }
                         .padding(24)
-                    } else if showFeed {
-                        SavedFeedView(posts: posts, model: model)
                     } else {
-                        List(posts) { post in
-                            SavedPostRow(post: post, model: model)
+                        VStack(spacing: 0) {
+                            savedCountBanner
+                            if showFeed {
+                                SavedFeedView(posts: posts, model: model)
+                            } else {
+                                List(posts) { post in
+                                    SavedPostRow(post: post, model: model)
+                                }
+                                .listStyle(.insetGrouped)
+                            }
                         }
-                        .listStyle(.insetGrouped)
                     }
                 }
             }
@@ -236,6 +241,21 @@ struct SavedPostsView: View {
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    @ViewBuilder private var savedCountBanner: some View {
+        if let canonical = model.activeUser,
+           let snapshot = Downloader.savedMediaCount(for: canonical) {
+            let formatter = RelativeDateTimeFormatter()
+            formatter.unitsStyle = .short
+            Text(L("\(snapshot.count) médias · compté \(formatter.localizedString(for: snapshot.computedAt, relativeTo: Date()))",
+                   "\(snapshot.count) media · counted \(formatter.localizedString(for: snapshot.computedAt, relativeTo: Date()))"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(Color(.systemGray6))
         }
     }
 }
