@@ -1,8 +1,9 @@
-Reprise de la recherche de nouveautés sans relire l'historique.
+Reprise de la recherche de nouveautés à l'endroit exact où elle s'était arrêtée.
 
-- Les 3 premières pages sont toujours relues, car c'est là que les nouveaux posts apparaissent.
-- Le point de lecture de cette phase est mémorisé : après un HTTP 429, la relance saute directement à l'endroit atteint au lieu de relire les pages déjà parcourues.
-- Le point de lecture est effacé dès que le parcours rejoint l'historique, et conservé si les 100 pages ont été consommées sans l'atteindre.
+- Le flux est relu depuis le début, page par page, jusqu'à la première page entièrement connue : les nouveaux posts sont donc tous vus, sans limite de nombre.
+- Le point d'arrivée de cette lecture est mémorisé après chaque page. Une session interrompue par un HTTP 429 le reprend directement au lieu de conclure qu'elle a déjà tout lu.
+- Un HTTP 429 en pleine recherche de nouveautés abandonnait les posts restants : ils n'étaient plus jamais repris tant qu'ils ne remontaient pas en tête du flux.
+- Le point d'arrivée est effacé dès que le parcours rejoint l'historique, et conservé si les 100 pages ont été consommées sans l'atteindre.
 - Aucun média téléchargé n'est retéléchargé : un fichier déjà présent est toujours sauté.
 
 Un HTTP 429 arrête la session, sans délai imposé.

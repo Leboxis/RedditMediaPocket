@@ -8,7 +8,7 @@ Le code et le workflow sont disponibles dans ce dépôt. GitHub Actions compile 
 
 Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronquer l'historique, refuser la pagination ou refuser l'accès. L'application s'arrête si une page se répète, si le curseur n'est pas reconnu ou après 100 pages. Les miniatures ne sont pas utilisées à la place des originaux.
 
-Chaque exécution commence par lire les 3 premières pages, là où les nouveaux posts arrivent, puis saute directement au point de lecture atteint si une session précédente a été interrompue. Sans cette reprise, une relance après un HTTP 429 relirait toutes les pages déjà parcourues et consommerait le quota pour rien. Le point de lecture est effacé dès que le parcours rejoint l'historique.
+Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencontrer une page entièrement déjà connue : c'est là que les nouveaux posts s'arrêtent. Si une session précédente a été interrompue au milieu de cette lecture, le point d'arrivée est mémorisé et l'exécution suivante saute directement dessus au lieu de conclure à tort qu'elle a tout vu. Ce point est effacé dès que le parcours rejoint l'historique, ou conservé si les 100 pages ont été consommées sans l'atteindre.
 
 Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`) pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 

@@ -497,15 +497,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // Phase 1 — nouveautés : le flux est antéchronologique, les posts
         // publiés depuis la dernière exécution sont devant. On part du début
         // et on s'arrête à la première page entièrement déjà vue : tout ce
-        // qui suit est connu. Sans historique, on saute cette phase.
-        if !visited.isEmpty {
-            // Les nouveaux posts n'apparaissent qu'en tête de flux, donc les
-            // premières pages sont toujours relues. Le front de lecture est
-            // persisté : une session coupée par une limitation reprend là où
-            // elle s'est arrêtée au lieu de relire les pages déjà parcourues.
+        // qui suit est connu. Sans historique, on saute cette phase.        if !visited.isEmpty {
+            // Les nouveaux posts n'apparaissent qu'en tête de flux, donc la tête
+            // est relue jusqu'à être entièrement connue. Une tête connue ne veut
+            // pas dire « parcours fini » : si une session précédente s'était
+            // arrêtée plus loin, on saute à ce point de lecture. Sans ce saut,
+            // une relance conclut à tort qu'elle a tout vu et abandonne les
+            // posts restants jusqu'à ce qu'ils remontent en tête du flux.
             var checkAfter: String? = nil
             var frontier = UserDefaults.standard.string(forKey: Self.frontierKey(canonical))
-            var pages = 0
+            var jumped = frontier == nil
             var capped = true
             // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
             // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
@@ -520,24 +521,28 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     try await executeDownloads(downloads)
                 }
                 Self.persistResumeState(canonical: canonical, cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)), visited: visited)
-                Self.persistFrontier(canonical, checkAfter)
+                // Curseur publié après la page traitée, jamais avant : il désigne
+                // la page suivante, donc une page interrompue n'est jamais relue
+                // comme nouvelle et le parcours ne peut pas boucler sur lui.
                 guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { capped = false; break }
-                // Page entièrement connue : on a rejoint l'historique.
-                if fresh.isEmpty { capped = false; break }
                 checkAfter = last
-                pages += 1
-                if pages < Self.headPages { continue }
-                // Tête lue : tout ce qui sépare la tête du front persisté est
-                // déjà dans `visited`, inutile de le relire. Un front plus
-                // proche que la tête fait sauter quelques pages en arrière,
-                // sans rien perdre.
-                if let resume = frontier, Self.validPageCursor(resume, privateFeed: privateFeed) { checkAfter = resume }
-                frontier = nil
-                pages = 0
+                Self.persistFrontier(canonical, checkAfter)
+                // Page entièrement connue : on a rejoint l'historique, sauf si
+                // le point de lecture mémorisé est plus loin.
+                if fresh.isEmpty {
+                    if !jumped, let resume = frontier, Self.validPageCursor(resume, privateFeed: privateFeed) {
+                        jumped = true
+                        checkAfter = resume
+                        Self.persistFrontier(canonical, resume)
+                        continue
+                    }
+                    capped = false
+                    break
+                }
             }
-            // Le parcours a atteint l'historique ou s'est arrêté pour de bon :
-            // le front ne sert plus à rien. Conservé seulement si les 100 pages
-            // ont été consommées sans rejoindre l'historique.
+            // Le parcours a rejoint l'historique ou s'est arrêté pour de bon :
+            // le point de lecture ne sert plus. Conservé seulement si les 100
+            // pages ont été consommées sans rejoindre l'historique.
             if !capped { Self.persistFrontier(canonical, nil) }
         }
         // Phase 2 — reprise : on repart du curseur persisté (fin de la
@@ -583,8 +588,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
     /// été parcourues, pour reprendre là où une session interrompue s'est arrêtée.
     private static func frontierKey(_ canonical: String) -> String { "newPostsFrontier.\(canonical)" }
-    /// Pages toujours relues depuis la tête, où les nouveaux posts arrivent.
-    private static let headPages = 3
 
     /// Marque-page persisté par collection : curseur de la dernière page
     /// traitée + posts déjà vus (borné). `cursor: nil` efface la reprise
