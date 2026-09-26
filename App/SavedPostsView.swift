@@ -249,16 +249,20 @@ struct SavedPostsView: View {
            let snapshot = Downloader.savedMediaCount(for: canonical) {
             let formatter = RelativeDateTimeFormatter()
             formatter.unitsStyle = .short
-            Text(L("\(snapshot.count) médias · compté \(formatter.localizedString(for: snapshot.computedAt, relativeTo: Date()))",
-                   "\(snapshot.count) media · counted \(formatter.localizedString(for: snapshot.computedAt, relativeTo: Date()))"))
+            Text(savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .background(Color(.systemGray6))
-        } else {
-            EmptyView()
         }
+    }
+
+    private func savedCountText(count: Int, date: Date, formatter: RelativeDateTimeFormatter) -> Text {
+        Text(L("\(count) médias · compté \(formatter.localizedString(for: date, relativeTo: Date()))",
+               "\(count) media · counted \(formatter.localizedString(for: date, relativeTo: Date()))"))
+    }
+}
     }
 }
 
