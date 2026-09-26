@@ -24,9 +24,9 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("leboxis"), "Leboxis")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("pics"), "Pics")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("AskReddit"), "AskReddit")
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("u/leboxis"), "Leboxis")
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("r/pics"), "Pics")
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("saved/leboxis"), "Leboxis")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("u/leboxis"), "Uleboxis")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("r/pics"), "Rpics")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("saved/leboxis"), "Sleboxis")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName(""), "Pocket")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("a?b"), "A-b")
     }

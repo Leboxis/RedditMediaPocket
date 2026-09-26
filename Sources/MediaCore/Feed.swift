@@ -169,7 +169,7 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     public func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
     public func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
         if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html, publishedAt: Self.parseDate(published))) }; inEntry = false }
-        elementStack.popLast()
+        _ = elementStack.popLast()
     }
 }
 

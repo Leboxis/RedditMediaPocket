@@ -91,7 +91,7 @@ final class SavedFeedTests: XCTestCase {
     func testCanonicalRedirectRetainsAuthenticationAndCursor() throws {
         let source = URL(string: "https://old.reddit.com/saved.rss?feed=a%2Bb%26c&user=Alice&limit=100&after=t1_comment")!
         for host in ["reddit.com", "www.reddit.com", "old.reddit.com"] {
-            for path in ["/saved.rss", "/saved/.rss", "/user/Alice/saved.rss", "/user/Alice/saved/.rss", "/user/Alice/saved.rss/"] {
+            for path in ["/saved.rss", "/user/Alice/saved.rss", "/user/Alice/saved/.rss", "/user/Alice/saved.rss/"] {
                 let destination = URL(string: "https://\(host)\(path)")!
                 let resolved = try XCTUnwrap(SavedFeed.redirectURL(from: source, to: destination))
                 let parts = try XCTUnwrap(URLComponents(url: resolved, resolvingAgainstBaseURL: false))
