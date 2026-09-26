@@ -247,15 +247,19 @@ struct SavedPostsView: View {
     @ViewBuilder private var savedCountBanner: some View {
         if let canonical = model.activeUser,
            let snapshot = Downloader.savedMediaCount(for: canonical) {
-            let formatter = RelativeDateTimeFormatter()
-            formatter.unitsStyle = .short
-            Text(savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(Color(.systemGray6))
+            savedCountBannerText(snapshot)
         }
+    }
+
+    private func savedCountBannerText(_ snapshot: SavedMediaCount) -> some View {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return Text(savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(Color(.systemGray6))
     }
 
     private func savedCountText(count: Int, date: Date, formatter: RelativeDateTimeFormatter) -> Text {
