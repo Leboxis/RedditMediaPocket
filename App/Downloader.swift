@@ -537,7 +537,7 @@ struct SavedMediaCount: Codable {
                 if !fresh.isEmpty {
                     let downloads = try await prepareDownloads(fresh, folder: folder,
                                                       seenMedia: &seenMedia, usedFilenames: &usedFilenames)
-                    try await executeDownloads(downloads)
+                    try await executeDownloads(downloads, &preparedCount)
                 }
                 // Curseur publié après la page traitée, jamais avant : il désigne
                 // la page suivante, donc une page interrompue n'est jamais relue
@@ -577,7 +577,7 @@ struct SavedMediaCount: Codable {
             if fresh.isEmpty { completed = true; break }
             let downloads = try await prepareDownloads(fresh, folder: folder,
                                               seenMedia: &seenMedia, usedFilenames: &usedFilenames)
-            try await executeDownloads(downloads)
+            try await executeDownloads(downloads, &preparedCount)
             // Saved listings can contain comments as well as posts.
             guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { completed = true; break }
             after = last
@@ -656,7 +656,7 @@ struct SavedMediaCount: Codable {
         id.hasPrefix("t3_") || (privateFeed != nil && id.hasPrefix("t1_"))
     }
 
-    private func executeDownloads(_ downloads: [Download]) async throws {
+    private func executeDownloads(_ downloads: [Download], _ preparedCount: inout Int) async throws {
         preparedCount += downloads.count
         status = ""
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in

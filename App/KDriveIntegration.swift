@@ -63,6 +63,15 @@ struct KDriveFolderItem: Identifiable, Codable, Equatable, Hashable {
         updatedAt = try container.decodeIfPresent(Int.self, forKey: .updated_at)
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encodeIfPresent(type, forKey: .type)
+        try container.encodeIfPresent(lastModifiedAt, forKey: .last_modified_at)
+        try container.encodeIfPresent(updatedAt, forKey: .updated_at)
+    }
+
     var isDirectory: Bool {
         type == "dir" || type == "directory" || type == nil
     }

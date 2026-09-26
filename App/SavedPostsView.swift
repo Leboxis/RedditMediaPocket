@@ -256,6 +256,8 @@ struct SavedPostsView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .background(Color(.systemGray6))
+        } else {
+            EmptyView()
         }
     }
 }
