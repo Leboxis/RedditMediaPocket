@@ -263,8 +263,6 @@ struct SavedPostsView: View {
                "\(count) media · counted \(formatter.localizedString(for: date, relativeTo: Date()))"))
     }
 }
-    }
-}
 
 /// Feed plein écran à défilement vertical (décision Jev A) : paging natif
 /// avec préchargement des 5 médias suivants. Les entrées sont affichées
