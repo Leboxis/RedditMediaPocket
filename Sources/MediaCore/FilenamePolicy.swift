@@ -112,6 +112,15 @@ public enum FilenamePolicy {
         lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
     }
 
+    /// Noms distants possibles d'un fichier local : le nom assaini envoyé en
+    /// premier, puis le repli déterministe utilisé après un 422. Un fichier
+    /// déjà présent sous l'un ou l'autre ne doit pas être ré-uploadé.
+    public static func kDriveRemoteCandidateNames(for original: String) -> [String] {
+        let safe = kDriveFileName(original)
+        let fallback = kDriveFallbackName(for: original)
+        return fallback == safe ? [safe] : [safe, fallback]
+    }
+
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
     /// Accepte aussi les anciens libellés `u/pseudo`, `r/sub`, `saved/pseudo`.

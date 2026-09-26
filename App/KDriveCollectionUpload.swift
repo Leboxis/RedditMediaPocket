@@ -58,6 +58,8 @@ private struct KDriveCollectionUploadFlow: View {
     @State private var uploadDirectoryName = ""
     @State private var isPreparing = false
     @State private var errorMessage: String?
+    @State private var pendingFiles: [URL]?
+    @State private var skippedCount = 0
 
     /// Dossier parent : celui choisi dans Réglages > Infomaniak kDrive.
     private var parentDirectoryId: String {
@@ -73,13 +75,14 @@ private struct KDriveCollectionUploadFlow: View {
 
     var body: some View {
         Group {
-            if let uploadDirectoryId {
+            if let uploadDirectoryId, let pendingFiles {
                 KDriveContinuousUploadSheet(
-                    files: files,
+                    files: pendingFiles,
                     token: token,
                     driveId: driveId,
                     directoryId: uploadDirectoryId,
-                    directoryName: uploadDirectoryName
+                    directoryName: uploadDirectoryName,
+                    skippedCount: skippedCount
                 )
             } else if isPreparing {
                 NavigationStack {
@@ -138,7 +141,7 @@ private struct KDriveCollectionUploadFlow: View {
     }
 
     private func prepareCollectionFolder() {
-        guard uploadDirectoryId == nil, !isPreparing else { return }
+        guard uploadDirectoryId == nil, pendingFiles == nil, !isPreparing else { return }
         isPreparing = true
         errorMessage = nil
 
@@ -185,6 +188,24 @@ private struct KDriveCollectionUploadFlow: View {
 
                 uploadDirectoryId = String(folder.id)
                 uploadDirectoryName = folder.name
+
+                // Déduplication par nom : on ne ré-uploade jamais un média
+                // déjà présent (nom assaini ou repli 422 déterministe).
+                let remoteNames = try await service.fetchFileNames(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: String(folder.id)
+                )
+                let filtered = files.filter { localURL in
+                    let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: localURL.lastPathComponent)
+                    return !candidates.contains { candidate in
+                        remoteNames.contains { remote in
+                            FilenamePolicy.kDriveNameMatch(remote, candidate)
+                        }
+                    }
+                }
+                skippedCount = files.count - filtered.count
+                pendingFiles = filtered
                 isPreparing = false
             } catch {
                 isPreparing = false
@@ -470,6 +491,7 @@ private struct KDriveContinuousUploadSheet: View {
     let driveId: String
     let directoryId: String
     let directoryName: String
+    let skippedCount: Int
 
     @StateObject private var uploader = KDriveContinuousUploadController()
     @Environment(\.dismiss) private var dismiss
@@ -496,6 +518,12 @@ private struct KDriveContinuousUploadSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+
+                    if skippedCount > 0 {
+                        Text(L("\(skippedCount) déjà présent(s), ignoré(s).", "\(skippedCount) already present, skipped."))
+                            .font(.subheadline)
+                            .foregroundStyle(.green)
+                    }
 
                     if failedCount > 0 {
                         Text(L("\(failedCount) échec(s).", "\(failedCount) failure(s)."))

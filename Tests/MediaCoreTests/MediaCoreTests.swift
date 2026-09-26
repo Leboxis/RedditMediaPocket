@@ -26,6 +26,15 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "Léboxis"))
         XCTAssertFalse(FilenamePolicy.kDriveNameMatch("Leboxis", "Autre"))
     }
+
+    func testKDriveRemoteCandidateNames() {
+        // Le repli 422 est déterministe : un fichier déjà uploadé sous son
+        // nom de repli doit être détecté comme présent.
+        let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: "a?b.mp4")
+        XCTAssertEqual(candidates.first, FilenamePolicy.kDriveFileName("a?b.mp4"))
+        XCTAssertTrue(candidates.contains(FilenamePolicy.kDriveFallbackName(for: "a?b.mp4")))
+        XCTAssertEqual(candidates.count, Set(candidates).count)
+    }
     func testKDriveFolderNameCapitalized() {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("leboxis"), "Leboxis")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("pics"), "Pics")

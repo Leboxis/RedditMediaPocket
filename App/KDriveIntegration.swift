@@ -203,6 +203,55 @@ final class KDriveService: ObservableObject {
         return result
     }
 
+    /// Noms des fichiers déjà présents dans un dossier, en suivant la
+    /// pagination `cursor` / `has_more`. Sert à ne pas ré-uploader les
+    /// médias existants (comparaison par nom, insensible casse/diacritiques).
+    func fetchFileNames(token: String, driveId: String, directoryId: String) async throws -> Set<String> {
+        let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDriveId = driveId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDirectory = directoryId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDirectoryId = trimmedDirectory.isEmpty ? "1" : trimmedDirectory
+        guard !cleanToken.isEmpty, !cleanDriveId.isEmpty else { throw KDriveError.invalidConfiguration }
+
+        var names = Set<String>()
+        var cursor: String?
+        var hasMore = true
+        while hasMore {
+            var urlString = "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files?type[]=file&limit=200"
+            if let cursor { urlString += "&cursor=\(cursor)" }
+            guard let url = URL(string: urlString) else { throw KDriveError.invalidURL }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+            }
+            if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
+                   let description = decoded.error?.description {
+                    throw KDriveError.serverError(httpResponse.statusCode, description)
+                }
+                throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+            }
+
+            let decoded = try JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data)
+            for item in decoded.data ?? [] {
+                // `type[]=file` ne garantit pas `type` renseigné : on n'exclut
+                // que les dossiers avérés, jamais les types inconnus.
+                if item.type == "dir" || item.type == "directory" { continue }
+                names.insert(item.name)
+            }
+            hasMore = decoded.has_more ?? false
+            cursor = decoded.cursor
+        }
+        return names
+    }
+
     func createDirectory(token: String, driveId: String, parentDirectoryId: String = "1", folderName: String) async throws -> KDriveFolderItem {
         let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDriveId = driveId.trimmingCharacters(in: .whitespacesAndNewlines)
