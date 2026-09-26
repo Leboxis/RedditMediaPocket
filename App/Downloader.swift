@@ -491,13 +491,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
         reload()
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
+        var visitedSet = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
+        var visitedOrder = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         // Phase 1 — nouveautés : le flux est antéchronologique, les posts
         // publiés depuis la dernière exécution sont devant. On part du début
         // et on s'arrête à la première page entièrement déjà vue : tout ce
-        // qui suit est connu. Sans historique, on saute cette phase.        if !visited.isEmpty {
+        // qui suit est connu. Sans historique, on saute cette phase.        if !visitedSet.isEmpty {
             // Les nouveaux posts n'apparaissent qu'en tête de flux, donc la tête
             // est relue jusqu'à être entièrement connue. Une tête connue ne veut
             // pas dire « parcours fini » : si une session précédente s'était
@@ -514,18 +515,18 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 try Task.checkCancellation()
                 status = L("Recherche des nouveautés…", "Checking for new posts…")
                 let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: checkAfter)
-                let fresh = posts.filter { visited.insert($0.id).inserted }
+                let fresh = posts.filter { insertVisited($0.id, &visitedSet, &visitedOrder) }
                 if !fresh.isEmpty {
                     let downloads = try await prepareDownloads(fresh, folder: folder,
                                                       seenMedia: &seenMedia, usedFilenames: &usedFilenames)
                     try await executeDownloads(downloads)
                 }
-                Self.persistResumeState(canonical: canonical, cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)), visited: visited)
                 // Curseur publié après la page traitée, jamais avant : il désigne
                 // la page suivante, donc une page interrompue n'est jamais relue
                 // comme nouvelle et le parcours ne peut pas boucler sur lui.
                 guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { capped = false; break }
                 checkAfter = last
+                Self.persistResumeState(canonical: canonical, cursor: last, visited: visitedOrder)
                 Self.persistFrontier(canonical, checkAfter)
                 // Page entièrement connue : on a rejoint l'historique, sauf si
                 // le point de lecture mémorisé est plus loin.
@@ -554,7 +555,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             try Task.checkCancellation()
             status = L("Recherche…", "Searching…")
             let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: after)
-            let fresh = posts.filter { visited.insert($0.id).inserted }
+            let fresh = posts.filter { insertVisited($0.id, &visitedSet, &visitedOrder) }
             if fresh.isEmpty { completed = true; break }
             let downloads = try await prepareDownloads(fresh, folder: folder,
                                               seenMedia: &seenMedia, usedFilenames: &usedFilenames)
@@ -562,19 +563,21 @@ struct UserCollection: Codable, Identifiable, Equatable {
             // Saved listings can contain comments as well as posts.
             guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { completed = true; break }
             after = last
-            Self.persistResumeState(canonical: canonical, cursor: after, visited: visited)
+            Self.persistResumeState(canonical: canonical, cursor: after, visited: visitedOrder)
         }
         // Parcours terminé : on efface le curseur (une prochaine exécution
         // ne fera que la phase nouveautés) mais on garde les posts vus.
         // En cas d'erreur/arrêt, le curseur reste pour la reprise.
         if completed {
-            Self.persistResumeState(canonical: canonical, cursor: nil, visited: visited)
+            Self.persistResumeState(canonical: canonical, cursor: nil, visited: visitedOrder)
         }
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
             saveCollections()
         }
-        if failed == 0 {
+        if !completed {
+            status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
+        } else if failed == 0 {
             status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
         } else {
             var summary = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
@@ -589,14 +592,24 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// été parcourues, pour reprendre là où une session interrompue s'est arrêtée.
     private static func frontierKey(_ canonical: String) -> String { "newPostsFrontier.\(canonical)" }
 
+    /// Insère un post dans l'historique ordonné. Un `Set` garantit la recherche en
+    /// O(1) ; l'ordre d'insertion est conservé dans `order` pour que la
+    /// troncature persistée enlève les plus anciens, pas un sous-ensemble
+    /// arbitraire.
+    private static func insertVisited(_ id: String, _ set: inout Set<String>, _ order: inout [String]) -> Bool {
+        guard set.insert(id).inserted else { return false }
+        order.append(id)
+        return true
+    }
+
     /// Marque-page persisté par collection : curseur de la dernière page
     /// traitée + posts déjà vus (borné). `cursor: nil` efface la reprise
     /// tout en gardant l'historique pour la détection des nouveautés.
-    private static func persistResumeState(canonical: String, cursor: String?, visited: Set<String>) {
+    private static func persistResumeState(canonical: String, cursor: String?, visited: [String]) {
         let defaults = UserDefaults.standard
         if let cursor { defaults.set(cursor, forKey: cursorKey(canonical)) }
         else { defaults.removeObject(forKey: cursorKey(canonical)) }
-        defaults.set(Array(Array(visited).suffix(10_000)), forKey: visitedKey(canonical))
+        defaults.set(Array(visited.suffix(10_000)), forKey: visitedKey(canonical))
     }
 
     /// Distinct de la reprise : la phase 2 n'y touche pas, seule la phase
@@ -620,7 +633,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func executeDownloads(_ downloads: [Download]) async throws {
-        discovered += downloads.count
         status = ""
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
             try await self.saveIgnoringInaccessible(item)
@@ -764,6 +776,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
+        discovered += 1
         // A scan started before this save must not overwrite the newly inserted file.
         if reloadTask != nil { reload() }
     }

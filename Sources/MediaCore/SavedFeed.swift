@@ -100,7 +100,12 @@ public struct SavedFeed {
 
     private static func isSavedPath(_ path: String, owner: String) -> Bool {
         let normalized = path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            .replacingOccurrences(of: "/.rss", with: ".rss")
-        return normalized == "saved.rss" || normalized == "user/\(owner.lowercased())/saved.rss"
+        // `saved/.rss` à la racine est un fichier `.rss` dans un dossier `saved/`,
+        // pas le feed sauvegardé : on le refuse explicitement.
+        if normalized == "saved/.rss" { return false }
+        let canonical = normalized.hasSuffix("/.rss")
+            ? normalized.replacingOccurrences(of: "/.rss", with: ".rss")
+            : normalized
+        return canonical == "saved.rss" || canonical == "user/\(owner.lowercased())/saved.rss"
     }
 }

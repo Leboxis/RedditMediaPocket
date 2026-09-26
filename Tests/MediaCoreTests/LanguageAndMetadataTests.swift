@@ -57,4 +57,20 @@ final class LanguageAndMetadataTests: XCTestCase {
         MediaMetadata.remove(for: target)
         XCTAssertNil(MediaMetadata.read(for: target))
     }
+
+    func testNestedXMLContentPreservesText() throws {
+        let xml = """
+        <feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><id>t3_one</id><title>One</title><published>2026-09-01T12:34:56Z</published><content>Hello <b>world</b> tail</content></entry>
+        </feed>
+        """
+        let posts = try FeedParser.parse(Data(xml.utf8))
+        XCTAssertEqual(posts.count, 1)
+        XCTAssertEqual(posts[0].html, "Hello  tail")
+    }
+
+    func testKDriveFolderNameNoCollisionBetweenUserAndSaved() {
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("u/foo"), FilenamePolicy.kDriveFolderName("saved/foo"))
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("u/foo"), FilenamePolicy.kDriveFolderName("r/foo"))
+    }
 }

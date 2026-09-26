@@ -51,6 +51,8 @@ private struct KDriveAPIResponse<T: Codable>: Codable {
     let result: String
     let data: T?
     let error: KDriveAPIError?
+    let has_more: Bool?
+    let cursor: String?
 }
 
 private struct KDriveAPIError: Codable {
@@ -112,36 +114,47 @@ final class KDriveService: ObservableObject {
         return decoded.data?.name ?? "kDrive (ID: \(cleanDriveId))"
     }
 
+    /// Liste les sous-dossiers d'un répertoire, en suivant la pagination
+    /// `cursor` / `has_more` (un seul appel suffisait sous 200 dossiers).
     func fetchSubdirectories(token: String, driveId: String, directoryId: String = "1") async throws -> [KDriveFolderItem] {
         let cleanToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDriveId = driveId.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDirectory = directoryId.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanDirectoryId = trimmedDirectory.isEmpty ? "1" : trimmedDirectory
         guard !cleanToken.isEmpty, !cleanDriveId.isEmpty else { throw KDriveError.invalidConfiguration }
-        guard let url = URL(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files?type[]=dir&limit=200") else {
-            throw KDriveError.invalidURL
-        }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        var allFolders: [KDriveFolderItem] = []
+        var cursor: String?
+        var hasMore = true
+        while hasMore {
+            var urlString = "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files?type[]=dir&limit=200"
+            if let cursor { urlString += "&cursor=\(cursor)" }
+            guard let url = URL(string: urlString) else { throw KDriveError.invalidURL }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
-        }
-        if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
-               let description = decoded.error?.description {
-                throw KDriveError.serverError(httpResponse.statusCode, description)
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
             }
-            throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
-        }
+            if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
+            guard (200..<300).contains(httpResponse.statusCode) else {
+                if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
+                   let description = decoded.error?.description {
+                    throw KDriveError.serverError(httpResponse.statusCode, description)
+                }
+                throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+            }
 
-        let decoded = try JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data)
-        return (decoded.data ?? [])
+            let decoded = try JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data)
+            allFolders.append(contentsOf: decoded.data ?? [])
+            hasMore = decoded.has_more ?? false
+            cursor = decoded.cursor
+        }
+        return allFolders
             .filter(\.isDirectory)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

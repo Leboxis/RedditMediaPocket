@@ -29,13 +29,16 @@ public struct MediaMetadata: Codable, Equatable {
         } catch { return false }
     }
 
-    public static func remove(for url: URL) {
-        try? FileManager.default.removeItem(at: location(for: url))
+    @discardableResult public static func remove(for url: URL) -> Bool {
+        (try? FileManager.default.removeItem(at: location(for: url))) != nil
     }
 
-    public static func move(from source: URL, to destination: URL) {
+    /// Déplace le sidecar. Retourne `false` si la suppression de la source
+    /// échoue : les métadonnées existent alors encore à l'originen, ce qui
+    /// permet à l'appelant de réessayer au lieu de silencieusement dupliquer.
+    public static func move(from source: URL, to destination: URL) -> Bool {
         guard FileManager.default.fileExists(atPath: destination.path), let metadata = read(for: source),
-              metadata.save(for: destination) else { return }
-        remove(for: source)
+              metadata.save(for: destination), remove(for: source) else { return false }
+        return true
     }
 }

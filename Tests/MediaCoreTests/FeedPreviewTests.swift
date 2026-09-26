@@ -28,4 +28,11 @@ final class FeedPreviewTests: XCTestCase {
         XCTAssertNotNil(MediaExtractor.previewImage(html))
         XCTAssertTrue(MediaExtractor.extract(html).isEmpty)
     }
+
+    func testRedgifsIDWithDigits() {
+        let html = """
+        <a href="https://www.redgifs.com/watch/abc123">gif</a>
+        """
+        XCTAssertEqual(MediaExtractor.extract(html), [.redgifs("abc123")])
+    }
 }

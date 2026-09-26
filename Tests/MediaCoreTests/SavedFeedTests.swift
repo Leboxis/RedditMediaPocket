@@ -127,4 +127,8 @@ final class SavedFeedTests: XCTestCase {
         let feed = try SavedFeed(preferencesHTML: "<a href='/user/Alice/saved/.rss?feed=secret&amp;user=Alice'>RSS</a>", username: "Alice")
         XCTAssertEqual(feed.pageURL().path, "/user/Alice/saved/.rss")
     }
+
+    func testRejectsHiddenRssFileAtRoot() {
+        XCTAssertThrowsError(try SavedFeed(preferencesHTML: "<a href='/saved/.rss?feed=secret&amp;user=Alice'>RSS</a>", username: "Alice"))
+    }
 }

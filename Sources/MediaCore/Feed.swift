@@ -138,7 +138,8 @@ public enum FeedSource: Hashable, Sendable {
 public final class FeedParser: NSObject, XMLParserDelegate {
     private var posts: [Post] = []
     private var inEntry = false
-    private var element = ""
+    private var elementStack: [String] = []
+    private var element: String { elementStack.last ?? "" }
     private var id = "", title = "", html = "", published = ""
     private var isFeed = false
     private static func parseDate(_ text: String) -> Date? {
@@ -157,7 +158,7 @@ public final class FeedParser: NSObject, XMLParserDelegate {
         return delegate.posts
     }
     public func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
-        element = name
+        elementStack.append(name)
         if name == "feed" { isFeed = true }
         if name == "entry" { inEntry = true; id = ""; title = ""; html = ""; published = "" }
     }
@@ -168,7 +169,7 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     public func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
     public func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
         if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html, publishedAt: Self.parseDate(published))) }; inEntry = false }
-        element = ""
+        elementStack.popLast()
     }
 }
 
@@ -210,7 +211,7 @@ public enum MediaExtractor {
                 media = .redditVideo(videoURL)
             } else if host == "redgifs.com" || host == "www.redgifs.com" {
                 let parts = url.pathComponents
-                if parts.count >= 3, ["watch", "ifr"].contains(parts[1]), parts[2].range(of: "^[a-zA-Z]+$", options: .regularExpression) != nil {
+                if parts.count >= 3, ["watch", "ifr"].contains(parts[1]), parts[2].range(of: "^[a-zA-Z0-9]+$", options: .regularExpression) != nil {
                     media = .redgifs(parts[2].lowercased())
                 }
             } else if ["i.redd.it", "i.imgur.com"].contains(host), ["jpg", "jpeg", "png", "gif", "webp", "mp4"].contains(url.pathExtension.lowercased()) {
