@@ -75,7 +75,7 @@ Si le dépôt porte un autre nom, adapter cette URL ; le workflow utilise automa
 | Autres hébergeurs / galeries Imgur | Non pris en charge |
 | Privé, supprimé, accès soumis à connexion | Non accessible |
 
-RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS, l'annulation et un HTTP 429 arrêtent la session et restent visibles.
+RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; si le fichier HD RedGIFs est inaccessible, la variante SD exposée est essayée avant de le compter ainsi, et un HTTP 410 du service RedGIFs signifie que le contenu a été retiré de leur côté (aucun repli possible). Aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS, l'annulation et un HTTP 429 arrêtent la session et restent visibles.
 
 ## Comportement réseau et stockage
 

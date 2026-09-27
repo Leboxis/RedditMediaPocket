@@ -337,17 +337,26 @@ struct SavedMediaCount: Codable {
             let worker = Task.detached(priority: .userInitiated) {
                 try CollectionFiles.scan(folder)
             }
-            let snapshot = try? await withTaskCancellationHandler {
-                try await worker.value
-            } onCancel: {
-                worker.cancel()
+            do {
+                let snapshot = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
+                self.reloadTask = nil
+                self.loadingFiles = false
+                self.files = snapshot.files
+                self.totalBytes = snapshot.totalBytes
+            } catch is CancellationError {
+                return
+            } catch {
+                LogCenter.err(L("Galerie illisible : \(error.localizedDescription)", "Gallery unreadable: \(error.localizedDescription)"))
+                guard let self, self.reloadRevision == revision else { return }
+                self.reloadTask = nil
+                self.loadingFiles = false
+                return
             }
-            guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
-            self.reloadTask = nil
-            self.loadingFiles = false
-            guard let snapshot else { return }
-            self.files = snapshot.files
-            self.totalBytes = snapshot.totalBytes
         }
     }
 
@@ -395,6 +404,7 @@ struct SavedMediaCount: Codable {
     /// `prefs/friends`. Le compte connecté lui-même (détecté via `prefs/feeds`)
     /// est exclu ; si cette détection échoue, la liste brute est conservée.
     func followedUsers() async throws -> [String] {
+        LogCenter.net(L("Lecture des comptes suivis…", "Reading followed accounts…"))
         await RedditSession.shared.refresh()
         guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
         do {
@@ -404,6 +414,7 @@ struct SavedMediaCount: Codable {
             let own = (try? SavedFeed(preferencesHTML: String(decoding: try await feedsData, as: UTF8.self)))?.username
             try Task.checkCancellation()
             let names = FriendsFeed.parse(friendsHTML)
+            LogCenter.info(L("Comptes suivis : \(names.count) trouvés.", "Followed accounts: \(names.count) found."))
             guard let own else { return names }
             return names.filter { $0.caseInsensitiveCompare(own) != .orderedSame }
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
@@ -421,9 +432,12 @@ struct SavedMediaCount: Codable {
     }
 
     func previewSavedPosts() async throws -> [Post] {
+        LogCenter.info(L("Aperçu des sauvegardés…", "Previewing saved posts…"))
         let feed = try await network.savedFeed()
         try Task.checkCancellation()
-        return try await network.savedPosts(feed, after: nil)
+        let posts = try await network.savedPosts(feed, after: nil)
+        LogCenter.info(L("Aperçu sauvegardés : \(posts.count) posts.", "Saved preview: \(posts.count) posts."))
+        return posts
     }
 
     func previewImageData(_ url: URL) async throws -> Data {
@@ -476,6 +490,7 @@ struct SavedMediaCount: Codable {
     /// position de chaque résultat reste alignée sur la liste demandée.
     func previewMediaList(_ media: [Media]) async throws -> [URL?] {
         guard !media.isEmpty else { return [] }
+        LogCenter.net(L("Aperçu : résolution de \(media.count) médias…", "Preview: resolving \(media.count) media…"))
         var slots = [URL?](repeating: nil, count: media.count)
         var failure: String?
         var next = 0
@@ -503,7 +518,10 @@ struct SavedMediaCount: Codable {
             throw CancellationError()
         }
         // Un échec partiel est toléré : le lecteur ouvre avec les médias obtenus.
-        guard !slots.compactMap({ $0 }).isEmpty else {
+        let got = slots.compactMap({ $0 }).count
+        LogCenter.net(L("Aperçu résolu : \(got)/\(media.count) prêts.", "Preview resolved: \(got)/\(media.count) ready."))
+        if let failure, got == 0 { LogCenter.err(failure) }
+        guard got > 0 else {
             throw NetworkError.invalid(failure ?? L("Média indisponible.", "Media unavailable."))
         }
         return slots
@@ -565,18 +583,29 @@ struct SavedMediaCount: Codable {
             frontier: UserDefaults.standard.string(forKey: Self.frontierKey(canonical)),
             visited: UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         )
+        LogCenter.info(L("Dossier : \(source.folderName), \(checkpoint.visited.count) déjà vus, curseur \(checkpoint.cursor ?? "début"), frontière \(checkpoint.frontier ?? "aucune").", "Folder: \(source.folderName), \(checkpoint.visited.count) seen, cursor \(checkpoint.cursor ?? "start"), frontier \(checkpoint.frontier ?? "none")."))
+        var pageNumber = 0
         let completed = try await FeedTraversal.run(checkpoint: checkpoint,
             validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
             fetch: { after in
                 self.status = L("Recherche…", "Searching…")
-                return try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+                pageNumber += 1
+                let shownAfter = after.map { String($0.suffix(8)) } ?? "début"
+                LogCenter.net(L("Page \(pageNumber) demandée après \(shownAfter)…", "Page \(pageNumber) requested after \(shownAfter)…"))
+                let posts = try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+                LogCenter.net(L("Page \(pageNumber) reçue : \(posts.count) posts.", "Page \(pageNumber) received: \(posts.count) posts."))
+                return posts
             }, process: { posts in
+                LogCenter.info(L("Page \(pageNumber) : préparation de \(posts.count) posts…", "Page \(pageNumber): preparing \(posts.count) posts…"))
                 let downloads = try await self.prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
+                LogCenter.info(L("Page \(pageNumber) : \(downloads.count) nouveaux médias à prendre.", "Page \(pageNumber): \(downloads.count) new media to fetch."))
                 try await self.executeDownloads(downloads, &preparedCount)
+                LogCenter.info(L("Page \(pageNumber) terminée : total préparé \(preparedCount).", "Page \(pageNumber) done: total prepared \(preparedCount)."))
             }, persist: { state in
                 Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
                 Self.persistFrontier(canonical, state.frontier)
+                LogCenter.info(L("Point de reprise : curseur \(state.cursor.map { String($0.suffix(8)) } ?? "fin"), \(state.visited.count) vus.", "Checkpoint: cursor \(state.cursor.map { String($0.suffix(8)) } ?? "end"), \(state.visited.count) seen."))
             })
         if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
             let snapshot = SavedMediaCount(count: preparedCount, computedAt: Date())
@@ -596,8 +625,8 @@ struct SavedMediaCount: Codable {
         if failed > 0 {
             status = ""
             let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
-            errorMessage = L("Certains médias sont inaccessibles ou n’ont pas pu être enregistrés.\n\(kept) médias conservés.",
-                             "Some media files are unavailable or could not be saved.\n\(kept) media files kept.")
+            errorMessage = L("\(failed) médias inaccessibles ou non enregistrés (le plus souvent supprimés par leur hébergeur).\n\(kept) médias conservés.",
+                             "\(failed) media files unavailable or unsaved (most often deleted by their host).\n\(kept) media files kept.")
         }
     }
 
@@ -640,9 +669,12 @@ struct SavedMediaCount: Codable {
     private func executeDownloads(_ downloads: [Download], _ preparedCount: inout Int) async throws {
         preparedCount += downloads.count
         status = ""
+        if downloads.isEmpty { return }
+        LogCenter.net(L("Transfert de \(downloads.count) médias (max \(sessionLimit) à la fois)…", "Transferring \(downloads.count) media (max \(sessionLimit) at once)…"))
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
             try await self.saveIgnoringInaccessible(item)
         }
+        LogCenter.net(L("Transfert du lot terminé.", "Batch transfer done."))
     }
 
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
@@ -678,12 +710,19 @@ struct SavedMediaCount: Codable {
         }
         var downloads: [Download] = []
         var renamedExisting = false
+        var skippedExisting = 0
+        var skippedSeen = 0
+        if !candidates.isEmpty {
+            let resolved = galleryLists.values.reduce(0) { $0 + $1.count }
+            LogCenter.info(L("Galeries : \(candidates.count) à résoudre, \(resolved) médias trouvés.", "Galleries: \(candidates.count) to resolve, \(resolved) media found."))
+        }
         for post in posts {
             var media = MediaExtractor.extract(post.html)
             if media.isEmpty {
                 media = galleryLists[post.id] ?? []
             }
-            for (index, item) in media.enumerated() where seenMedia.insert(item).inserted {
+            for (index, item) in media.enumerated() {
+                guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
                 let ext: String
                 if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
 
@@ -704,6 +743,7 @@ struct SavedMediaCount: Codable {
                 let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
 
                 if fm.fileExists(atPath: destination.path) {
+                    skippedExisting += 1
                     if fm.fileExists(atPath: legacyDestination.path) {
                         try? fm.removeItem(at: legacyDestination)
                         renamedExisting = true
@@ -717,6 +757,9 @@ struct SavedMediaCount: Codable {
                     downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink))
                 }
             }
+        }
+        if skippedExisting > 0 || skippedSeen > 0 {
+            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen."))
         }
         if renamedExisting { reload() }
         return downloads
@@ -734,6 +777,7 @@ struct SavedMediaCount: Codable {
                 if error is CancellationError { throw error }
                 guard Self.isTransient(error), attempt < 2 else { throw error }
                 attempt += 1
+                LogCenter.net(L("Réseau instable, nouvel essai \(attempt)/2 pour \(item.destination.lastPathComponent)…", "Unstable network, retry \(attempt)/2 for \(item.destination.lastPathComponent)…"))
                 try await Task.sleep(for: .seconds(1 << attempt))
             }
         }
@@ -791,6 +835,7 @@ struct SavedMediaCount: Codable {
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
         discovered += 1
+        LogCenter.info(L("Gardé : \(item.destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(item.destination.lastPathComponent) (\(count)/\(discovered))."))
         // A scan started before this save must not overwrite the newly inserted file.
         if reloadTask != nil { reload() }
     }
@@ -925,31 +970,53 @@ struct SavedMediaCount: Codable {
         }
     }
     private func downloadRedgifs(id: String) async throws -> URL {
+        let shortID = String(id.prefix(12))
+        LogCenter.net(L("RedGIFs : fiche \(shortID)…", "RedGIFs: entry \(shortID)…"))
         let bearer = try await redgifsToken()
         struct Response: Decodable { struct Gif: Decodable { struct URLs: Decodable { let hd: URL?; let sd: URL? }; let urls: URLs }; let gif: Gif }
-        let data = try await network.data(URL(string: "https://api.redgifs.com/v2/gifs/\(id)")!, bearer: bearer)
+        let data = try await network.data(RedgifsAPI.gifURL(id: id), bearer: bearer, headers: RedgifsAPI.headers(id: id))
         let urls = try JSONDecoder().decode(Response.self, from: data).gif.urls
-        guard let url = QualityPolicy.redgifsURL(hd: urls.hd, sd: urls.sd), let host = url.host, host == "redgifs.com" || host.hasSuffix(".redgifs.com") else { throw NetworkError.invalid(L("Média RedGIFs indisponible.", "RedGIFs media unavailable.")) }
-        return try await network.download(url)
+        LogCenter.net(L("RedGIFs \(shortID) : HD \(urls.hd != nil ? "oui" : "non"), SD \(urls.sd != nil ? "oui" : "non").", "RedGIFs \(shortID): HD \(urls.hd != nil ? "yes" : "no"), SD \(urls.sd != nil ? "yes" : "no")."))
+        let candidates = QualityPolicy.redgifsCandidates(hd: urls.hd, sd: urls.sd)
+            .filter { url in
+                guard let host = url.host else { return false }
+                return host == "redgifs.com" || host.hasSuffix(".redgifs.com")
+            }
+            .map { url in (label: url.path.lowercased().contains("-mobile") ? "SD" : "HD", url: url) }
+        guard !candidates.isEmpty else {
+            throw NetworkError.invalid(L("Média RedGIFs indisponible.", "RedGIFs media unavailable."))
+        }
+        return try await OrderedFallback.first(candidates) { candidate in
+            LogCenter.net(L("RedGIFs \(shortID) : essai \(candidate.label)…", "RedGIFs \(shortID): trying \(candidate.label)…"))
+            return try await network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
+        }
     }
     private func resolveAndDownload(_ media: Media) async throws -> URL {
         switch media {
-        case .direct(let url): return try await network.download(url)
+        case .direct(let url):
+            LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
+            return try await network.download(url)
         case .redgifs(let id):
             do {
                 return try await downloadRedgifs(id: id)
             } catch NetworkError.refused(let code) where code == 401 {
                 // Token expiré entre le cache et l'appel : un seul refresh + nouvel essai.
+                LogCenter.net(L("RedGIFs : session expirée, nouvel essai…", "RedGIFs: session expired, retrying…"))
                 token = nil
                 return try await downloadRedgifs(id: id)
             }
         case .redditVideo(let base):
+            LogCenter.net(L("Vidéo Reddit : manifeste \(base.host ?? "serveur")…", "Reddit video: manifest \(base.host ?? "server")…"))
             let manifest = base.appendingPathComponent("DASHPlaylist.mpd")
             let tracks = try DASHParser.parse(try await network.data(manifest), relativeTo: manifest)
             guard tracks.video.host == base.host, tracks.audio == nil || tracks.audio?.host == base.host else { throw NetworkError.invalid(L("Manifest vidéo inattendu.", "Unexpected video manifest.")) }
             let video = try await network.download(tracks.video)
-            guard let audioURL = tracks.audio else { return video }
+            guard let audioURL = tracks.audio else {
+                LogCenter.info(L("Vidéo sans piste son, gardée telle quelle.", "Video without audio track, kept as is."))
+                return video
+            }
             defer { try? fm.removeItem(at: video) }
+            LogCenter.net(L("Vidéo + son : assemblage…", "Video + audio: merging…"))
             let audio = try await network.download(audioURL)
             defer { try? fm.removeItem(at: audio) }
             return try await merge(video: video, audio: audio)

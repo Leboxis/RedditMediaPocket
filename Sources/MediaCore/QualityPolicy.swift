@@ -13,8 +13,10 @@ public enum QualityPolicy {
         return parts.url ?? url
     }
 
-    public static func redgifsURL(hd: URL?, sd: URL?) -> URL? {
-        // SD is only chosen if no HD URL is exposed; an HD failure never retries in SD.
-        hd ?? sd
+    /// Candidats de téléchargement RedGIFs dans l'ordre : HD d'abord, SD
+    /// en repli. Un fichier HD mort (404/410 du CDN) ne doit pas déclarer
+    /// le média « inaccessible » si la variante SD survit.
+    public static func redgifsCandidates(hd: URL?, sd: URL?) -> [URL] {
+        [hd, sd].compactMap { $0 }
     }
 }

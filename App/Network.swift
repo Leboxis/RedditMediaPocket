@@ -43,7 +43,7 @@ import MediaCore
         config.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }
-    private func request(_ url: URL, bearer: String?) async throws -> URLRequest {
+    private func request(_ url: URL, bearer: String?, headers: [String: String]? = nil) async throws -> URLRequest {
         guard url.scheme == "https" else { throw NetworkError.invalid(L("Seuls les liens HTTPS sont acceptés.", "Only HTTPS links are accepted.")) }
         let service = RatePolicy.service(for: url.host ?? "Serveur")
         try checkLimit(service)
@@ -54,6 +54,11 @@ import MediaCore
         if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         try Task.checkCancellation()
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
+        if let headers {
+            for (field, value) in headers {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+        }
         return request
     }
     private func check(_ response: URLResponse, requestedURL: URL) throws {
@@ -80,13 +85,16 @@ import MediaCore
             throw NetworkError.limited(service: service, until: date)
         }
     }
-    func data(_ url: URL, bearer: String? = nil) async throws -> Data {
+    func data(_ url: URL, bearer: String? = nil, headers: [String: String]? = nil) async throws -> Data {
         let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
         let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
-        if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 { return cached.data }
-        let req = try await request(url, bearer: bearer)
+        if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 {
+            LogCenter.net(L("Page déjà en mémoire (\(cached.data.count / 1024) Ko), pas de nouvel appel.", "Page already in memory (\(cached.data.count / 1024) KB), no new call."))
+            return cached.data
+        }
+        let req = try await request(url, bearer: bearer, headers: headers)
         guard generation == requestGeneration else { throw CancellationError() }
         let (data, response) = try await session.data(for: req)
         try Task.checkCancellation()
@@ -101,6 +109,7 @@ import MediaCore
     }
 
     func savedFeed(username: String? = nil) async throws -> SavedFeed {
+        LogCenter.net(L("Lecture du lien privé des sauvegardés…", "Reading private saved feed link…"))
         await RedditSession.shared.refresh()
         guard RedditSession.shared.hasSession else { throw FeedError.loginRequired }
         do {
@@ -131,9 +140,9 @@ import MediaCore
             throw NetworkError.invalid(L("Impossible de lire le flux RSS privé des sauvegardés.", "Unable to read the private saved RSS feed."))
         }
     }
-    func download(_ url: URL) async throws -> URL {
+    func download(_ url: URL, headers: [String: String]? = nil) async throws -> URL {
         let generation = requestGeneration
-        let req = try await request(url, bearer: nil)
+        let req = try await request(url, bearer: nil, headers: headers)
         guard generation == requestGeneration else { throw CancellationError() }
         transfers += 1
         defer { transfers -= 1 }
@@ -149,6 +158,8 @@ import MediaCore
             }
             let persistent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
             try FileManager.default.moveItem(at: temp, to: persistent)
+            let sizeKB = (try? persistent.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { $0 / 1024 } ?? 0
+            LogCenter.net(L("Reçu : \(url.host ?? "serveur") (\(mime), \(sizeKB) Ko).", "Received: \(url.host ?? "server") (\(mime), \(sizeKB) KB)."))
             return persistent
         } catch { try? FileManager.default.removeItem(at: temp); throw error }
     }

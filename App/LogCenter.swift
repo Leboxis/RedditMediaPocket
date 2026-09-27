@@ -35,8 +35,9 @@ struct LogEntry: Identifiable, Equatable {
     @Published private(set) var entries: [LogEntry] = []
     @Published private(set) var errorCount = 0
 
-    private static let maxMemory = 1000
+    private static let maxMemory = 2000
     private static let maxFileBytes = 500 * 1024
+    private static let ioQueue = DispatchQueue(label: "LogCenter.io", qos: .utility)
 
     private var fileURL0: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
@@ -97,7 +98,29 @@ struct LogEntry: Identifiable, Equatable {
             entries.removeFirst(entries.count - Self.maxMemory)
         }
         if level == .erreur { errorCount += 1 }
-        appendToDisk(entry)
+        // Écriture fichier hors Main pour ne jamais geler l'écran même avec 500 lignes par run.
+        let line: String = {
+            let f = ISO8601DateFormatter()
+            return "\(f.string(from: entry.date)) [\(entry.level.rawValue)] \(entry.message)\n"
+        }()
+        let url0 = fileURL0
+        let url1 = fileURL1
+        let maxBytes = Self.maxFileBytes
+        Self.ioQueue.async {
+            let fm = FileManager.default
+            try? fm.createDirectory(at: url0.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if let size = (try? fm.attributesOfItem(atPath: url0.path)[.size] as? Int), size > maxBytes {
+                try? fm.removeItem(at: url1)
+                try? fm.moveItem(at: url0, to: url1)
+            }
+            guard let data = line.data(using: .utf8) else { return }
+            if !fm.fileExists(atPath: url0.path) { try? data.write(to: url0) }
+            else if let handle = try? FileHandle(forWritingTo: url0) {
+                try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            }
+        }
     }
 
     func clear() {
@@ -126,31 +149,6 @@ struct LogEntry: Identifiable, Equatable {
         }
         try? text.write(to: tmp, atomically: true, encoding: .utf8)
         return tmp
-    }
-
-    private func appendToDisk(_ entry: LogEntry) {
-        let line: String = {
-            let f = ISO8601DateFormatter()
-            return "\(f.string(from: entry.date)) [\(entry.level.rawValue)] \(entry.message)\n"
-        }()
-        guard let data = line.data(using: .utf8) else { return }
-        let fm = FileManager.default
-        let dir = fileURL0.deletingLastPathComponent()
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        rotateIfNeeded()
-        if !fm.fileExists(atPath: fileURL0.path) { try? data.write(to: fileURL0) }
-        else if let handle = try? FileHandle(forWritingTo: fileURL0) {
-            try? handle.seekToEnd()
-            try? handle.write(contentsOf: data)
-            try? handle.close()
-        }
-    }
-
-    private func rotateIfNeeded() {
-        let fm = FileManager.default
-        guard let size = (try? fm.attributesOfItem(atPath: fileURL0.path)[.size] as? Int), size > Self.maxFileBytes else { return }
-        try? fm.removeItem(at: fileURL1)
-        try? fm.moveItem(at: fileURL0, to: fileURL1)
     }
 
     private func loadFromDisk() {
@@ -215,17 +213,28 @@ struct LogsView: View {
                     ForEach(LogLevel.allCases) { l in Text(l.label).tag(l.rawValue) }
                 }
                 .pickerStyle(.segmented).padding(.horizontal, 12).padding(.vertical, 8)
-                List(logs.filtered(level: level, search: search)) { entry in
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? .red : .secondary).frame(width: 22)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.message).font(.caption).textSelection(.enabled)
-                            Text(entry.date.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                Text(L("\(logs.filtered(level: level, search: search).count) lignes", "\(logs.filtered(level: level, search: search).count) lines"))
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 12)
+                ScrollViewReader { proxy in
+                    List(logs.filtered(level: level, search: search)) { entry in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? .red : .secondary).frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(entry.message).font(.caption).textSelection(.enabled)
+                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .id(entry.id)
+                    }
+                    .listStyle(.plain)
+                    .onChange(of: logs.entries.count) { _ in
+                        if let last = logs.filtered(level: level, search: search).last {
+                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     }
-                    .accessibilityElement(children: .combine)
                 }
-                .listStyle(.plain)
             }
             .searchable(text: $search, prompt: L("Rechercher", "Search"))
             .navigationTitle(L("Journal", "Logs"))

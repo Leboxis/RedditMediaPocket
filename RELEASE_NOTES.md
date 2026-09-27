@@ -1,3 +1,9 @@
+Résilience RedGIFs et message de fin plus précis.
+
+- La fiche RedGIFs est demandée avec les mêmes en-têtes que le lecteur web (Référent/Origine, `views=yes`), comme les implémentations de référence.
+- Si le fichier HD RedGIFs est inaccessible (404/410 du CDN), la variante SD exposée est essayée avant de compter le média « inaccessible ».
+- Le message final cite le nombre exact de médias ignorés et rappelle qu'ils sont le plus souvent supprimés par leur hébergeur ; un HTTP 410 du service RedGIFs signifie un contenu retiré de leur côté.
+
 Erreurs plus lisibles et reprise fiable après une limitation.
 
 - Les erreurs s’affichent dans une fenêtre native, sans message dupliqué au-dessus de la galerie. Les aperçus, la connexion Reddit et kDrive utilisent aussi des alertes.

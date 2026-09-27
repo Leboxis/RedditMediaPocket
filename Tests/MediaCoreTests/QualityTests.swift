@@ -34,11 +34,28 @@ final class QualityTests: XCTestCase {
         let reddit = URL(string: "https://i.redd.it/example.png")!
         XCTAssertEqual(QualityPolicy.originalImageURL(reddit), reddit)
     }
-    func testRedgifsPrefersHD() {
+    func testRedgifsCandidatesFallbackOrder() {
         let hd = URL(string: "https://media.redgifs.com/Example.mp4")!
         let sd = URL(string: "https://media.redgifs.com/Example-mobile.mp4")!
-        XCTAssertEqual(QualityPolicy.redgifsURL(hd: hd, sd: sd), hd)
-        XCTAssertEqual(QualityPolicy.redgifsURL(hd: nil, sd: sd), sd)
-        XCTAssertNil(QualityPolicy.redgifsURL(hd: nil, sd: nil))
+        XCTAssertEqual(QualityPolicy.redgifsCandidates(hd: hd, sd: sd), [hd, sd])
+        XCTAssertEqual(QualityPolicy.redgifsCandidates(hd: nil, sd: sd), [sd])
+        XCTAssertEqual(QualityPolicy.redgifsCandidates(hd: hd, sd: nil), [hd])
+        XCTAssertEqual(QualityPolicy.redgifsCandidates(hd: nil, sd: nil), [])
+    }
+    func testRedgifsAPIURLLowercasesAndAddsViews() {
+        XCTAssertEqual(
+            RedgifsAPI.gifURL(id: "SqueakyHelplessWisent").absoluteString,
+            "https://api.redgifs.com/v2/gifs/squeakyhelplesswisent?views=yes"
+        )
+        XCTAssertEqual(
+            RedgifsAPI.gifURL(id: "ABC123").absoluteString,
+            "https://api.redgifs.com/v2/gifs/abc123?views=yes"
+        )
+    }
+    func testRedgifsAPIHeadersMatchReference() {
+        let headers = RedgifsAPI.headers(id: "abc123")
+        XCTAssertEqual(headers["Referer"], "https://www.redgifs.com/")
+        XCTAssertEqual(headers["Origin"], "https://www.redgifs.com")
+        XCTAssertEqual(headers["x-customheader"], "https://www.redgifs.com/watch/abc123")
     }
 }
