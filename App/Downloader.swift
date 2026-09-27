@@ -245,6 +245,11 @@ struct SavedMediaCount: Codable {
 
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
         try? fm.removeItem(at: folder)
+        // Purge l'historique : sans ça, ré-ajouter la source après suppression
+        // ne re-téléchargerait rien (posts déjà marqués vus).
+        UserDefaults.standard.removeObject(forKey: Self.visitedKey(id))
+        UserDefaults.standard.removeObject(forKey: Self.cursorKey(id))
+        UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
         collections.removeAll { $0.id == id }
         saveCollections()
 

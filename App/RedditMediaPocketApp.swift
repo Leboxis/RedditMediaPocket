@@ -38,6 +38,7 @@ struct ContentView: View {
                 savedHintRow
                 userChipsRow
                 metricsRow
+                statusRow
                 gallerySection
             }
             .navigationTitle("")
@@ -211,6 +212,16 @@ struct ContentView: View {
                 .accessibilityHidden(!showProgress)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+
+    @ViewBuilder private var statusRow: some View {
+        if !model.status.isEmpty {
+            Text(model.status)
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 16).padding(.bottom, 6)
+        }
     }
 
     @ViewBuilder private var gallerySection: some View {
