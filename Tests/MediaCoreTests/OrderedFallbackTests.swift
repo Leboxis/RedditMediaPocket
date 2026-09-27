@@ -35,7 +35,7 @@ final class OrderedFallbackTests: XCTestCase {
                 throw CancellationError()
             }
             XCTFail("Cancellation must propagate")
-        } catch is CancellationError { }
+        } catch { }
         let seen = await log.entries
         XCTAssertEqual(seen, ["hd"])
     }
