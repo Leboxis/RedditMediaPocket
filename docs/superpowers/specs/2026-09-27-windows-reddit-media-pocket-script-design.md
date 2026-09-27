@@ -15,9 +15,9 @@ Le script reprend les décisions de nommage, de pagination, de qualité et de po
 
 ## Emplacement
 
-`scripts/windows/reddit_media_pocket.py` — un seul fichier. Décision arbitrée pour la portabilité (copie, exécution immédiate) et parce que tout le diagnostic se lit dans un seul artefact.
+`scripts/reddit_media_pocket.py` — un seul fichier. Décision arbitrée pour la portabilité (copie, exécution immédiate) et parce que tout le diagnostic se lit dans un seul artefact.
 
-Le dossier `scripts/` contient déjà les utilitaires Python du dépôt, ce qui évite un nouvel arbre de projet.
+Le script vit à plat dans `scripts/`, aux côtés des utilitaires Python déjà présents, et son fichier de test est `scripts/test_reddit_media_pocket.py`. Il est donc couvert par la commande de test existante du dépôt, `python -m unittest discover -s scripts -p 'test_*.py'`, sans configuration supplémentaire.
 
 ## Interface en ligne de commande
 
