@@ -62,7 +62,10 @@ import MediaCore
         // response is never enough on its own: it would stop downloads without
         // any request having been refused.
         guard (200...299).contains(http.statusCode) else {
-            guard http.statusCode == 429 else { throw NetworkError.refused(http.statusCode) }
+            guard http.statusCode == 429 else {
+                LogCenter.err("\(requestedURL.host ?? "Serveur") : HTTP \(http.statusCode).")
+                throw NetworkError.refused(http.statusCode)
+            }
             let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
             // Reddit omits `Retry-After` here and advertises `x-ratelimit-reset`
             // instead. With neither, nothing is recorded and the next start is free.
@@ -73,6 +76,7 @@ import MediaCore
                 limits.record(service: service, until: date)
                 defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
             }
+            LogCenter.err("\(service) : limite atteinte (429).")
             throw NetworkError.limited(service: service, until: date)
         }
     }

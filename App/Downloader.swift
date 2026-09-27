@@ -352,6 +352,7 @@ struct SavedMediaCount: Codable {
     }
 
     func stop() {
+        LogCenter.info(L("Arrêt demandé.", "Stop requested."))
         task?.cancel()
         tokenTask?.cancel()
         tokenTask = nil
@@ -360,19 +361,25 @@ struct SavedMediaCount: Codable {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
         errorMessage = nil
+        LogCenter.info(L("Démarrage : \(sourceKind)/\(username) (limite \(sessionLimit)).", "Starting: \(sourceKind)/\(username) (limit \(sessionLimit))."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
         running = true; discovered = 0; count = 0; status = ""; failed = 0
         task = Task {
             defer { running = false; active = 0; task = nil }
-            do { try await run() }
+            do {
+                try await run()
+                LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés.", "Run finished: \(count) downloaded, \(failed) skipped."))
+            }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
                 if Task.isCancelled || error is CancellationError {
                     status = L("Arrêté", "Stopped")
+                    LogCenter.info(L("Parcours arrêté.", "Run stopped."))
                 } else {
                     status = ""
+                    LogCenter.err(error.localizedDescription)
                     // Count the collection on disk, including earlier runs,
                     // rather than the counter reset at every manual restart.
                     let kept = activeCollection.flatMap {
@@ -750,8 +757,16 @@ struct SavedMediaCount: Codable {
     /// fatales : un refus du serveur arrête la session entière, même au milieu
     /// d'un lot, et l'utilisateur choisit quand relancer.
     private func saveIgnoringInaccessible(_ item: Download) async throws {
-        let saved = try await DownloadFailurePolicy.attempt { try await self.saveWithRetry(item) }
-        if !saved { failed += 1 }
+        do {
+            let saved = try await DownloadFailurePolicy.attempt { try await self.saveWithRetry(item) }
+            if !saved {
+                failed += 1
+                LogCenter.info(L("Média inaccessible, ignoré : \(item.destination.lastPathComponent).", "Inaccessible media, skipped: \(item.destination.lastPathComponent)."))
+            }
+        } catch {
+            LogCenter.err("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
+            throw error
+        }
     }
 
     private func save(_ item: Download) async throws {

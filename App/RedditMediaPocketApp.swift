@@ -279,6 +279,9 @@ struct ContentView: View {
                     .accessibilityLabel(L("Comptes suivis", "Followed accounts"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
+                LogsButton()
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
                     collectionLabel: model.activeCollection?.name ?? "Pocket"

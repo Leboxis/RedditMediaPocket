@@ -236,6 +236,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         completion: @escaping (_ successCount: Int, _ failedCount: Int, _ errorMessage: String?) -> Void
     ) {
         cancel()
+        LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
         completedCount = 0
         totalCount = files.count
@@ -314,9 +315,12 @@ private final class KDriveContinuousUploadController: ObservableObject {
             }()
 
             if Task.isCancelled {
+                LogCenter.kdrive(L("Envoi kDrive annulé.", "kDrive upload cancelled."))
                 completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
                 progress = files.isEmpty ? 0 : 1
+                if failed > 0 { LogCenter.err(L("Envoi kDrive : \(success) réussis, \(failed) échoués.", "kDrive upload: \(success) ok, \(failed) failed.")) }
+                else { LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files.")) }
                 completion(success, failed, summaryMessage)
             }
         }
