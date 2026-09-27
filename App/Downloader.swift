@@ -988,7 +988,7 @@ struct SavedMediaCount: Codable {
         }
         return try await OrderedFallback.first(candidates) { candidate in
             LogCenter.net(L("RedGIFs \(shortID) : essai \(candidate.label)…", "RedGIFs \(shortID): trying \(candidate.label)…"))
-            return try await network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
+            return try await self.network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
         }
     }
     private func resolveAndDownload(_ media: Media) async throws -> URL {
