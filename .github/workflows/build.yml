@@ -36,7 +36,7 @@ jobs:
           xcodebuild -project RedditMediaPocket.xcodeproj -scheme RedditMediaPocket \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
-            MARKETING_VERSION="0.1.${BUILD_NUMBER}" CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" build
+            MARKETING_VERSION="0.2.${BUILD_NUMBER}" CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" build
           mkdir -p dist/Payload
           cp -R build/Build/Products/Release-iphoneos/RedditMediaPocket.app dist/Payload/
           cd dist
@@ -46,7 +46,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          python3 scripts/make_source.py --repo "$REPOSITORY" --version "0.1.${BUILD_NUMBER}" \
+          python3 scripts/make_source.py --repo "$REPOSITORY" --version "0.2.${BUILD_NUMBER}" \
             --ipa dist/RedditMediaPocket.ipa --output dist/apps.json
           cp icon.png dist/icon.png
       - uses: actions/upload-artifact@v4
@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: |
-          TAG="v0.1.${BUILD_NUMBER}"
+          TAG="v0.2.${BUILD_NUMBER}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
           else
