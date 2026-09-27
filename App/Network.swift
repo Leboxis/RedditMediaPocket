@@ -68,7 +68,7 @@ import MediaCore
         // any request having been refused.
         guard (200...299).contains(http.statusCode) else {
             guard http.statusCode == 429 else {
-                LogCenter.err("\(requestedURL.host ?? "Serveur") : HTTP \(http.statusCode).")
+                LogCenter.err("GET \(LogDiagnostics.requestSummary(requestedURL)) → \(LogDiagnostics.requestSummary(http.url ?? requestedURL)) : HTTP \(http.statusCode).")
                 throw NetworkError.refused(http.statusCode)
             }
             let service = RatePolicy.service(for: requestedURL.host ?? "Serveur")
@@ -81,7 +81,7 @@ import MediaCore
                 limits.record(service: service, until: date)
                 defaults.set(limits.deadlines.mapValues { $0.timeIntervalSince1970 }, forKey: "serviceCooldowns")
             }
-            LogCenter.err("\(service) : limite atteinte (429).")
+            LogCenter.err(L("GET \(LogDiagnostics.requestSummary(requestedURL)) : \(service), HTTP 429, reprise \(date.map { $0.formatted() } ?? "non indiquée").", "GET \(LogDiagnostics.requestSummary(requestedURL)): \(service), HTTP 429, retry \(date.map { $0.formatted() } ?? "not specified")."))
             throw NetworkError.limited(service: service, until: date)
         }
     }
@@ -96,9 +96,23 @@ import MediaCore
         }
         let req = try await request(url, bearer: bearer, headers: headers)
         guard generation == requestGeneration else { throw CancellationError() }
-        let (data, response) = try await session.data(for: req)
+        let started = Date()
+        LogCenter.net("GET \(LogDiagnostics.requestSummary(url))…")
+        let result: (Data, URLResponse)
+        do {
+            result = try await session.data(for: req)
+        } catch {
+            if !Task.isCancelled {
+                let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
+                LogCenter.err(L("GET \(LogDiagnostics.requestSummary(url)) : \(code) après \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "GET \(LogDiagnostics.requestSummary(url)): \(code) after \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
+            }
+            throw error
+        }
+        let (data, response) = result
         try Task.checkCancellation()
         guard generation == requestGeneration else { throw CancellationError() }
+        let http = response as? HTTPURLResponse
+        LogCenter.net(L("Réponse \(http?.statusCode ?? 0) de \(LogDiagnostics.requestSummary(response.url ?? url)) : \(data.count) octets, \(response.mimeType ?? "type inconnu"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Response \(http?.statusCode ?? 0) from \(LogDiagnostics.requestSummary(response.url ?? url)): \(data.count) bytes, \(response.mimeType ?? "unknown type"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
         try check(response, requestedURL: url)
         if isRSS, data.count <= 2_000_000 {
             // Reuse successful pages within a run; manual restart clears them.
@@ -115,7 +129,9 @@ import MediaCore
         do {
             let html = try await data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
             try Task.checkCancellation()
-            return try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
+            let feed = try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
+            LogCenter.net(L("Flux sauvegardés trouvé : \(LogDiagnostics.requestSummary(feed.pageURL())).", "Saved feed found: \(LogDiagnostics.requestSummary(feed.pageURL()))."))
+            return feed
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
             throw NetworkError.invalid(L("Reddit refuse l’accès aux flux RSS privés (HTTP \(code)).", "Reddit denied access to private RSS feeds (HTTP \(code))."))
         }

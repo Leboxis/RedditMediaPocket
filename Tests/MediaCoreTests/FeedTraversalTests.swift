@@ -128,12 +128,14 @@ final class FeedTraversalTests: XCTestCase {
     @MainActor func testRepeatedPageStopsWithoutLooping() async throws {
         var requests = 0
         var downloaded: [String] = []
+        var events: [String] = []
         let completed = try await FeedTraversal.run(checkpoint: FeedCheckpoint(), fetch: { _ in
             requests += 1
             return [self.post("t3_one")]
-        }, process: { downloaded += $0.map(\.id) }, persist: { _ in })
+        }, process: { downloaded += $0.map(\.id) }, persist: { _ in }, trace: { events.append($0) })
         XCTAssertTrue(completed)
         XCTAssertEqual(requests, 2)
         XCTAssertEqual(downloaded, ["t3_one"])
+        XCTAssertTrue(events.contains { $0.contains("repeated") || $0.contains("répétée") })
     }
 }
