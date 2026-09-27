@@ -162,7 +162,19 @@ import MediaCore
         guard generation == requestGeneration else { throw CancellationError() }
         transfers += 1
         defer { transfers -= 1 }
-        let (temp, response) = try await session.download(for: req)
+        let started = Date()
+        LogCenter.net(L("Média GET \(LogDiagnostics.requestSummary(url))…", "Media GET \(LogDiagnostics.requestSummary(url))…"))
+        let result: (URL, URLResponse)
+        do {
+            result = try await session.download(for: req)
+        } catch {
+            if !Task.isCancelled {
+                let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
+                LogCenter.err(L("Média \(LogDiagnostics.requestSummary(url)) : \(code) après \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Media \(LogDiagnostics.requestSummary(url)): \(code) after \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
+            }
+            throw error
+        }
+        let (temp, response) = result
         do {
             try Task.checkCancellation()
             guard generation == requestGeneration else { throw CancellationError() }
@@ -175,7 +187,8 @@ import MediaCore
             let persistent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
             try FileManager.default.moveItem(at: temp, to: persistent)
             let sizeKB = (try? persistent.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { $0 / 1024 } ?? 0
-            LogCenter.net(L("Reçu : \(url.host ?? "serveur") (\(mime), \(sizeKB) Ko).", "Received: \(url.host ?? "server") (\(mime), \(sizeKB) KB)."))
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            LogCenter.net(L("Reçu : \(LogDiagnostics.requestSummary(response.url ?? url)) (HTTP \(code), \(mime), \(sizeKB) Ko, \(String(format: "%.1f", Date().timeIntervalSince(started))) s).", "Received: \(LogDiagnostics.requestSummary(response.url ?? url)) (HTTP \(code), \(mime), \(sizeKB) KB, \(String(format: "%.1f", Date().timeIntervalSince(started))) s)."))
             return persistent
         } catch { try? FileManager.default.removeItem(at: temp); throw error }
     }

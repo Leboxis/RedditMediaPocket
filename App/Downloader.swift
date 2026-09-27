@@ -381,7 +381,7 @@ struct SavedMediaCount: Codable {
             defer { running = false; active = 0; task = nil }
             do {
                 try await run()
-                LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés, \(discovered) repérés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped, \(discovered) discovered in \(Int(Date().timeIntervalSince(started))) s."))
+                LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped in \(Int(Date().timeIntervalSince(started))) s."))
             }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil

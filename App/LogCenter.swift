@@ -135,7 +135,7 @@ struct LogEntry: Identifiable, Equatable {
         var lines: [String] = []
         for url in [fileURL1, fileURL0] {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).suffix(500))
+            lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).suffix(Self.maxMemory).map(String.init))
         }
         let tail = lines.suffix(Self.maxMemory)
         let formatter = ISO8601DateFormatter()
