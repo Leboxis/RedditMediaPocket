@@ -20,6 +20,15 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.postTitle("", fallback: "t3_abc"), "t3_abc")
         XCTAssertLessThanOrEqual(FilenamePolicy.postTitle(String(repeating: "é", count: 200)).utf8.count, 180)
     }
+    func testDownloadStemIncludesPostID() {
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "Mon chat dort", postID: "t3_abc123"), "Mon chat dort - abc123")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "Mon chat dort", postID: "abc123"), "Mon chat dort - abc123")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "Do my natural toes look like french tips?", postID: "t3_1ghwxnf"), "Do my natural toes look like french tips - 1ghwxnf")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "Vacances", postID: "t3_abc123", position: 1), "Vacances 1 - abc123")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "Vacances", postID: "t3_abc123", position: 2), "Vacances 2 - abc123")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "", postID: "t3_xyz"), "xyz")
+        XCTAssertEqual(FilenamePolicy.downloadStem(title: "..", postID: "t3_xyz"), "xyz")
+    }
 
     func testKDriveNameMatch() {
         XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "leboxis"))

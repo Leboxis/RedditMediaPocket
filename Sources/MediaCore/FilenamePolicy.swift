@@ -39,6 +39,28 @@ public enum FilenamePolicy {
         return result.isEmpty ? "post" : result
     }
 
+    /// Stem local `Titre - IDcourt` (galerie : `Titre {position} - IDcourt`).
+    /// L'ID est toujours en dernier avant `.ext`, sans préfixe `t3_`, avec un
+    /// seul séparateur ` - `. Le `-` traînant issu de l'assainissement
+    /// (ex. `?` → `-`) est retiré pour éviter `tips- - 1ghwxnf`.
+    public static func downloadStem(title: String, postID: String, position: Int? = nil, maxUTF8Bytes: Int = 180) -> String {
+        var short = postID.hasPrefix("t3_") ? String(postID.dropFirst(3)) : postID
+        short = short.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-")))
+        guard !short.isEmpty else {
+            let base = postTitle(title, maxUTF8Bytes: maxUTF8Bytes)
+            return base.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-")))
+        }
+        let suffix = position.map { " \($0) - \(short)" } ?? " - \(short)"
+        let allowedBase = max(1, maxUTF8Bytes - suffix.utf8.count)
+        var base = postTitle(title, fallback: short, maxUTF8Bytes: allowedBase)
+        base = base.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".-")))
+        if base.isEmpty || base == short { return short }
+        if let position {
+            return "\(base) \(position) - \(short)"
+        }
+        return "\(base) - \(short)"
+    }
+
     /// Nom de fichier sûr pour l'API kDrive, dérivé d'un nom local existant
     /// (qui peut contenir des caractères aujourd'hui interdits côté serveur).
     /// Conserve l'extension, remplace les interdits par `-`, lève les noms

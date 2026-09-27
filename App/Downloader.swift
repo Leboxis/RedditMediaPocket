@@ -705,16 +705,15 @@ struct SavedMediaCount: Codable {
                 let ext: String
                 if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
 
-                let title = FilenamePolicy.postTitle(post.title, fallback: post.id)
-                let numberedTitle = media.count > 1 ? "\(title) - \(index + 1)" : title
-                var filename = "\(numberedTitle).\(ext)"
+                let position: Int? = media.count > 1 ? index + 1 : nil
+                let stem = FilenamePolicy.downloadStem(title: post.title, postID: post.id, position: position)
+                var filename = "\(stem).\(ext)"
                 if !usedFilenames.insert(filename.lowercased()).inserted {
-                    let postID = post.id.replacingOccurrences(of: "t3_", with: "")
-                    filename = "\(numberedTitle) - \(postID).\(ext)"
                     var duplicate = 2
+                    filename = "\(stem)-\(duplicate).\(ext)"
                     while !usedFilenames.insert(filename.lowercased()).inserted {
-                        filename = "\(numberedTitle) - \(postID)-\(duplicate).\(ext)"
                         duplicate += 1
+                        filename = "\(stem)-\(duplicate).\(ext)"
                     }
                 }
 
