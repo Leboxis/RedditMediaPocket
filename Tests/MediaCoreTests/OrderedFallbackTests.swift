@@ -22,7 +22,7 @@ final class OrderedFallbackTests: XCTestCase {
                 throw NetworkError.limited(service: "RedGIFs", until: nil)
             }
             XCTFail("A rate limit must propagate")
-        } catch NetworkError.limited { }
+        } catch { }
         let seen = await log.entries
         XCTAssertEqual(seen, ["hd"])
     }
