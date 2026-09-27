@@ -776,7 +776,7 @@ struct SavedMediaCount: Codable {
         guard let data = try? Data(contentsOf: url),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let type = CGImageSourceGetType(source) else { return }
-        guard let metadata = CGImageMetadataCreateMutable() else { return }
+        let metadata = CGImageMetadataCreateMutable()
         if !author.isEmpty,
            let tag = CGImageMetadataTagCreate(kCGImageMetadataNamespaceTIFF, kCGImageMetadataPrefixTIFF, kCGImagePropertyTIFFArtist, .string, author as CFString) {
             CGImageMetadataSetTagWithPath(metadata, nil, "tiff:Artist" as CFString, tag)
