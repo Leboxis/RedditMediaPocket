@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import AVFoundation
 import CryptoKit
+import ImageIO
 import MediaCore
 
 struct UserCollection: Codable, Identifiable, Equatable {
@@ -482,6 +483,8 @@ struct SavedMediaCount: Codable {
         let media: Media
         let destination: URL
         let postDate: Date?
+        let author: String
+        let postLink: String?
     }
 
     private func run() async throws {
@@ -539,7 +542,7 @@ struct SavedMediaCount: Codable {
                 return try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
             }, process: { posts in
                 let downloads = try await self.prepareDownloads(posts, folder: folder,
-                    seenMedia: &seenMedia, usedFilenames: &usedFilenames)
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
                 try await self.executeDownloads(downloads, &preparedCount)
             }, persist: { state in
                 Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
@@ -619,7 +622,8 @@ struct SavedMediaCount: Codable {
     /// un refus HTTP 429 qui arrête la session comme n'importe quel autre.
     private func prepareDownloads(_ posts: [Post], folder: URL,
                                    seenMedia: inout Set<Media>,
-                                   usedFilenames: inout Set<String>) async throws -> [Download] {
+                                   usedFilenames: inout Set<String>,
+                                   author: String = "") async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
@@ -679,7 +683,8 @@ struct SavedMediaCount: Codable {
                     MediaMetadata.move(from: legacyDestination, to: destination)
                     renamedExisting = true
                 } else {
-                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt))
+                    let postLink = BinaryMetadata.postLink(postID: post.id, link: post.link)
+                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink))
                 }
             }
         }
@@ -734,8 +739,12 @@ struct SavedMediaCount: Codable {
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
+        // Étiquette binaire visible Windows (Auteurs/Commentaires) : fail-safe,
+        // jamais de token privé, GIF/WebP ignorés. Ne fait jamais échouer le save.
+        await Self.embedBinaryMetadata(at: item.destination, author: item.author, postLink: item.postLink)
         // Tri par date du post dans Fichiers/Photos : le fichier porte la
         // date du post (la date de téléchargement reste dans le sidecar).
+        // Reposée après l'injection car la réécriture peut la réinitialiser.
         if let postDate = item.postDate {
             try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: item.destination.path)
         }
@@ -746,6 +755,104 @@ struct SavedMediaCount: Codable {
         discovered += 1
         // A scan started before this save must not overwrite the newly inserted file.
         if reloadTask != nil { reload() }
+    }
+
+    /// Injection binaire fail-safe : JPG/PNG via EXIF sans recompression,
+    /// MP4/MOV via Passthrough. Retourne toujours, ne throw jamais.
+    private static func embedBinaryMetadata(at url: URL, author: String, postLink: String?) async {
+        guard BinaryMetadata.supportsExtension(url.pathExtension) else { return }
+        if Task.isCancelled { return }
+        let payload = BinaryMetadata.payload(author: author, postLink: postLink)
+        guard !payload.author.isEmpty || payload.comment != nil else { return }
+        let ext = url.pathExtension.lowercased()
+        if ["jpg", "jpeg", "png"].contains(ext) {
+            tagImage(at: url, author: payload.author, comment: payload.comment)
+        } else if ["mp4", "mov", "m4v"].contains(ext) {
+            await tagMovie(at: url, author: payload.author, comment: payload.comment)
+        }
+    }
+
+    private static func tagImage(at url: URL, author: String, comment: String?) {
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let type = CGImageSourceGetType(source) else { return }
+        guard let metadata = CGImageMetadataCreateMutable() else { return }
+        if !author.isEmpty,
+           let tag = CGImageMetadataTagCreate(kCGImageMetadataNamespaceTIFF, kCGImageMetadataPrefixTIFF, kCGImagePropertyTIFFArtist, .string, author as CFString) {
+            CGImageMetadataSetTagWithPath(metadata, nil, "tiff:Artist" as CFString, tag)
+        }
+        if let comment, !comment.isEmpty,
+           let tag = CGImageMetadataTagCreate(kCGImageMetadataNamespaceExif, kCGImageMetadataPrefixExif, kCGImagePropertyExifUserComment, .string, comment as CFString) {
+            CGImageMetadataSetTagWithPath(metadata, nil, "exif:UserComment" as CFString, tag)
+        }
+        let options: [String: Any] = [
+            kCGImageDestinationMetadata as String: metadata,
+            kCGImageDestinationMergeMetadata as String: true
+        ]
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, type, 1, nil) else { return }
+        var error: Unmanaged<CFError>?
+        let ok = withUnsafeMutablePointer(to: &error) { ptr in
+            CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, ptr)
+        }
+        guard ok, output.length > 0 else { return }
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try output.write(to: temp, options: .atomic)
+            _ = try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: temp, to: url)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+        }
+    }
+
+    private static func movieMetadataItems(author: String, comment: String?) -> [AVMetadataItem] {
+        var items: [AVMetadataItem] = []
+        if !author.isEmpty {
+            let artist = AVMutableMetadataItem()
+            artist.identifier = .commonIdentifierArtist
+            artist.value = String(author.prefix(256)) as NSString
+            items.append(artist.copy() as! AVMetadataItem)
+        }
+        if let comment, !comment.isEmpty {
+            let value = String(comment.prefix(2048)) as NSString
+            let description = AVMutableMetadataItem()
+            description.identifier = .commonIdentifierDescription
+            description.value = value
+            items.append(description.copy() as! AVMetadataItem)
+            let userComment = AVMutableMetadataItem()
+            userComment.identifier = .iTunesMetadataUserComment
+            userComment.value = value
+            items.append(userComment.copy() as! AVMetadataItem)
+        }
+        return items
+    }
+
+    private static func tagMovie(at url: URL, author: String, comment: String?) async {
+        let items = movieMetadataItems(author: author, comment: comment)
+        guard !items.isEmpty else { return }
+        let asset = AVURLAsset(url: url)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return }
+        let ext = url.pathExtension.lowercased()
+        export.outputFileType = ext == "mov" ? .mov : .mp4
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext.isEmpty ? "mp4" : ext)
+        export.outputURL = temp
+        export.metadata = items
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                export.exportAsynchronously { continuation.resume() }
+            }
+        } onCancel: {
+            export.cancelExport()
+        }
+        guard export.status == .completed else { try? FileManager.default.removeItem(at: temp); return }
+        if Task.isCancelled { try? FileManager.default.removeItem(at: temp); return }
+        do {
+            _ = try? FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: temp, to: url)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+        }
     }
 
     private func redgifsToken() async throws -> String {

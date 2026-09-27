@@ -8,8 +8,9 @@ public struct Post: Identifiable {
     public let title: String
     public let html: String
     public let publishedAt: Date?
-    public init(id: String, title: String, html: String, publishedAt: Date? = nil) {
-        self.id = id; self.title = title; self.html = html; self.publishedAt = publishedAt
+    public let link: String?
+    public init(id: String, title: String, html: String, publishedAt: Date? = nil, link: String? = nil) {
+        self.id = id; self.title = title; self.html = html; self.publishedAt = publishedAt; self.link = link
     }
 }
 
@@ -140,7 +141,7 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     private var inEntry = false
     private var elementStack: [String] = []
     private var element: String { elementStack.last ?? "" }
-    private var id = "", title = "", html = "", published = ""
+    private var id = "", title = "", html = "", published = "", link: String?
     private var isFeed = false
     private static func parseDate(_ text: String) -> Date? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -160,7 +161,10 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     public func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         elementStack.append(name)
         if name == "feed" { isFeed = true }
-        if name == "entry" { inEntry = true; id = ""; title = ""; html = ""; published = "" }
+        if name == "entry" { inEntry = true; id = ""; title = ""; html = ""; published = ""; link = nil }
+        if inEntry, name == "link", link == nil, let href = attributes["href"]?.trimmingCharacters(in: .whitespacesAndNewlines), !href.isEmpty {
+            link = href
+        }
     }
     public func parser(_ parser: XMLParser, foundCharacters text: String) {
         guard inEntry else { return }
@@ -168,7 +172,7 @@ public final class FeedParser: NSObject, XMLParserDelegate {
     }
     public func parser(_ parser: XMLParser, foundCDATA data: Data) { self.parser(parser, foundCharacters: String(decoding: data, as: UTF8.self)) }
     public func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html, publishedAt: Self.parseDate(published))) }; inEntry = false }
+        if name == "entry" { if !id.isEmpty { posts.append(Post(id: id, title: title, html: html, publishedAt: Self.parseDate(published), link: link)) }; inEntry = false }
         _ = elementStack.popLast()
     }
 }

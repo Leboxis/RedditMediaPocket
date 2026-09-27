@@ -98,4 +98,26 @@ final class MediaCoreTests: XCTestCase {
         let tracks = try DASHParser.parse(Data(xml.utf8), relativeTo: URL(string: "https://v.redd.it/id/DASHPlaylist.mpd")!)
         XCTAssertNil(tracks.audio)
     }
+    func testRSSCapturesPostLink() throws {
+        let xml = """
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry><id>t3_abc123</id><title>Hi</title><link href="https://www.reddit.com/r/pics/comments/abc123/hi/"/><content type="html">&lt;a href="https://i.redd.it/example.jpg"&gt;image&lt;/a&gt;</content></entry></feed>
+        """
+        let posts = try FeedParser.parse(Data(xml.utf8))
+        XCTAssertEqual(posts.count, 1)
+        XCTAssertEqual(posts[0].link, "https://www.reddit.com/r/pics/comments/abc123/hi/")
+    }
+    func testPostLinkFallbackFromID() {
+        XCTAssertEqual(BinaryMetadata.postLink(postID: "t3_abc123", link: nil), "https://www.reddit.com/comments/abc123/")
+        XCTAssertEqual(BinaryMetadata.postLink(postID: "abc123", link: "https://www.reddit.com/r/pics/comments/abc123/hi/"), "https://www.reddit.com/r/pics/comments/abc123/hi/")
+        XCTAssertNil(BinaryMetadata.postLink(postID: "", link: nil))
+    }
+    func testBinaryMetadataPayload() {
+        let payload = BinaryMetadata.payload(author: "u/leboxis", postLink: "https://www.reddit.com/comments/abc123/")
+        XCTAssertEqual(payload.author, "u/leboxis")
+        XCTAssertEqual(payload.comment, "https://www.reddit.com/comments/abc123/")
+        XCTAssertTrue(BinaryMetadata.supportsExtension("jpg"))
+        XCTAssertTrue(BinaryMetadata.supportsExtension("mp4"))
+        XCTAssertFalse(BinaryMetadata.supportsExtension("gif"))
+        XCTAssertFalse(BinaryMetadata.supportsExtension("webp"))
+    }
 }
