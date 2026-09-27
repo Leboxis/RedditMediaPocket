@@ -4,10 +4,14 @@ import Foundation
 public struct MediaMetadata: Codable, Equatable {
     public let downloadedAt: Date
     public let postDate: Date?
+    public let author: String?
+    public let postLink: String?
 
-    public init(downloadedAt: Date, postDate: Date?) {
+    public init(downloadedAt: Date, postDate: Date?, author: String? = nil, postLink: String? = nil) {
         self.downloadedAt = downloadedAt
         self.postDate = postDate
+        self.author = author
+        self.postLink = postLink
     }
 
     private static func location(for url: URL) -> URL {

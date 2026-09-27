@@ -84,6 +84,12 @@ struct MediaInfoView: View {
                     } header: { Text(L("Dates", "Dates")) } footer: {
                         Text(L("Les dates non enregistrées ou absentes du flux Reddit sont indisponibles.", "Dates that were not recorded or are missing from the Reddit feed are unavailable."))
                     }
+                    Section {
+                        row(L("Auteur", "Author"), author(details.dates?.author))
+                        row(L("Lien du post", "Post link"), details.dates?.postLink ?? unavailable)
+                    } header: { Text(L("Source", "Source")) } footer: {
+                        Text(L("Lien copiable pour retrouver le post Reddit d'origine.", "Copyable link to find the original Reddit post."))
+                    }
                 } else {
                     ProgressView(L("Lecture des informations…", "Loading information…"))
                 }
@@ -114,5 +120,10 @@ struct MediaInfoView: View {
     private func date(_ value: Date?) -> String {
         guard let value else { return unavailable }
         return value.formatted(Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale))
+    }
+
+    private func author(_ value: String?) -> String {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return unavailable }
+        return value
     }
 }

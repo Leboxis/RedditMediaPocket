@@ -58,6 +58,26 @@ final class LanguageAndMetadataTests: XCTestCase {
         XCTAssertNil(MediaMetadata.read(for: target))
     }
 
+    func testMetadataRoundtripWithAuthorAndPostLink() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("photo.jpg")
+        try Data([0xFF, 0xD8]).write(to: file)
+        let dates = MediaMetadata(downloadedAt: Date(timeIntervalSince1970: 1_700_000_000), postDate: nil, author: "u/leboxis", postLink: "https://www.reddit.com/comments/abc123/")
+        XCTAssertTrue(dates.save(for: file))
+        XCTAssertEqual(MediaMetadata.read(for: file), dates)
+    }
+
+    func testMetadataWithoutAuthorDecodesAsUnavailable() throws {
+        let legacy = """
+        {"downloadedAt":1700000000}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(MediaMetadata.self, from: legacy)
+        XCTAssertNil(decoded.author)
+        XCTAssertNil(decoded.postLink)
+    }
+
     func testNestedXMLContentPreservesText() throws {
         let xml = """
         <feed xmlns="http://www.w3.org/2005/Atom">

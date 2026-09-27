@@ -748,7 +748,7 @@ struct SavedMediaCount: Codable {
         if let postDate = item.postDate {
             try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: item.destination.path)
         }
-        MediaMetadata(downloadedAt: Date(), postDate: item.postDate).save(for: item.destination)
+        MediaMetadata(downloadedAt: Date(), postDate: item.postDate, author: item.author.isEmpty ? nil : item.author, postLink: item.postLink).save(for: item.destination)
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
