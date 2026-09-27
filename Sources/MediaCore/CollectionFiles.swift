@@ -18,8 +18,11 @@ public struct CollectionFiles: Sendable {
             // Dossier absent = premier lancement normal -> vide, pas d'erreur.
             // Autre erreur (droits, pas un dossier) -> on prévient au lieu de dire 0.
             try Task.checkCancellation()
+            if !FileManager.default.fileExists(atPath: folder.path) {
+                return CollectionFiles(files: [], totalBytes: 0)
+            }
             let ns = error as NSError
-            if ns.domain == NSCocoaErrorDomain && ns.code == NSFileNoSuchFileError {
+            if ns.domain == NSCocoaErrorDomain && (ns.code == NSFileNoSuchFileError || ns.code == NSFileReadNoSuchFileError) {
                 return CollectionFiles(files: [], totalBytes: 0)
             }
             throw error
