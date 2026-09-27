@@ -37,7 +37,14 @@ private func savedFeedEntries(from posts: [Post]) -> [SavedFeedEntry] {
 /// sans retéléchargement) et purgés à la fermeture.
 @MainActor final class FeedTempBin: ObservableObject {
     private(set) var urls: [URL] = []
-    func add(_ urls: [URL]) { self.urls.append(contentsOf: urls) }
+    func add(_ urls: [URL]) {
+        self.urls.append(contentsOf: urls)
+        // Décision Jev A bug 12 : borne anti-explosion /tmp (50 derniers gardés).
+        while self.urls.count > 50 {
+            let old = self.urls.removeFirst()
+            try? FileManager.default.removeItem(at: old)
+        }
+    }
     func clear() {
         for url in urls { try? FileManager.default.removeItem(at: url) }
         urls = []
@@ -692,6 +699,12 @@ private struct SavedMediaCard: View {
                     throw NetworkError.invalid(L("Aucun média trouvé dans la galerie.", "No media found in the gallery."))
                 }
                 let slots = try await model.previewMediaList(list)
+                // Décision Jev A bug 12 : si annulé entre la fin du téléchargement
+                // et l'affichage, on jette tout de suite au lieu de perdre les fichiers.
+                if Task.isCancelled {
+                    for url in slots.compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
+                    throw CancellationError()
+                }
                 let urls = slots.compactMap { $0 }
                 guard !urls.isEmpty else {
                     throw NetworkError.invalid(L("Média indisponible.", "Media unavailable."))

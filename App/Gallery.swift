@@ -91,31 +91,41 @@ struct MediaPreview: View {
         self.urls = urls
         _index = State(initialValue: urls.firstIndex(of: selectedURL) ?? 0)
     }
+    private var safeIndex: Int {
+        guard !urls.isEmpty else { return 0 }
+        return min(max(index, 0), urls.count - 1)
+    }
     var body: some View {
+        Group {
+            if urls.isEmpty {
+                Text(L("Aucun média", "No media")).foregroundStyle(.gray)
+            } else {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                     .accessibilityLabel(L("Fermer", "Close"))
                 Button {
-                    if index > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index -= 1 } }
+                    if safeIndex > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index = safeIndex - 1 } }
                 } label: { Image(systemName: "chevron.backward").frame(width: 44, height: 44) }
-                    .disabled(index == 0)
+                    .disabled(safeIndex == 0)
                     .accessibilityLabel(L("Média précédent", "Previous media"))
                 VStack(spacing: 3) {
-                    Text(urls[index].lastPathComponent).font(.subheadline.weight(.medium))
+                    Text(urls[safeIndex].lastPathComponent).font(.subheadline.weight(.medium))
                         .lineLimit(1).truncationMode(.middle)
-                    Text("\(index + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
+                    Text("\(safeIndex + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 Button {
-                    if index < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index += 1 } }
+                    if safeIndex < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index = safeIndex + 1 } }
                 } label: { Image(systemName: "chevron.forward").frame(width: 44, height: 44) }
-                    .disabled(index == urls.count - 1)
+                    .disabled(safeIndex == urls.count - 1)
                     .accessibilityLabel(L("Média suivant", "Next media"))
-                ShareLink(item: urls[index]) {
+                ShareLink(item: urls[safeIndex]) {
                     Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
                 }.accessibilityLabel(L("Partager ce média", "Share this media"))
             }.padding(.horizontal, 8).padding(.vertical, 4)
             MediaPager(urls: urls, index: $index)
+        }
+            }
         }
         .background(Color.black.ignoresSafeArea())
         .foregroundStyle(.white).tint(.white)
@@ -135,14 +145,27 @@ private struct MediaPager: View {
         self._zoomed = State(initialValue: Array(repeating: false, count: urls.count))
     }
 
+    private var clampedIndex: Int {
+        guard !urls.isEmpty else { return 0 }
+        return min(max(index, 0), urls.count - 1)
+    }
+    private var indexZoomed: Bool {
+        guard zoomed.indices.contains(clampedIndex) else { return false }
+        return zoomed[clampedIndex]
+    }
+    private func zoomBinding(at position: Int) -> Binding<Bool> {
+        guard zoomed.indices.contains(position) else { return .constant(false) }
+        return $zoomed[position]
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
             HStack(spacing: 0) {
                 ForEach(urls.indices, id: \.self) { position in
                     Group {
-                        if abs(position - index) <= 1 {
-                            MediaPage(url: urls[position], active: position == index, zoomed: $zoomed[position])
+                        if abs(position - clampedIndex) <= 1 {
+                            MediaPage(url: urls[position], active: position == clampedIndex, zoomed: zoomBinding(at: position))
                         } else {
                             Color.black
                         }
@@ -151,7 +174,7 @@ private struct MediaPager: View {
                 }
             }
             .frame(width: width * CGFloat(max(urls.count, 1)), alignment: .leading)
-            .offset(x: -CGFloat(index) * width + dragOffset)
+            .offset(x: -CGFloat(clampedIndex) * width + dragOffset)
             .contentShape(Rectangle())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 18, coordinateSpace: .named("mediaPager"))
@@ -164,21 +187,21 @@ private struct MediaPager: View {
                         let limit = max(60, width * 0.2)
                         let dx = value.translation.width
                         let predicted = value.predictedEndTranslation.width
-                        var target = index
-                        if (dx < -limit || predicted < -width * 0.6), index < urls.count - 1 { target += 1 }
-                        else if (dx > limit || predicted > width * 0.6), index > 0 { target -= 1 }
+                        var target = clampedIndex
+                        if (dx < -limit || predicted < -width * 0.6), clampedIndex < urls.count - 1 { target += 1 }
+                        else if (dx > limit || predicted > width * 0.6), clampedIndex > 0 { target -= 1 }
                         withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
                             index = target
                             dragOffset = 0
                         }
                     },
-                including: zoomed[index] ? .subviews : .all
+                including: indexZoomed ? .subviews : .all
             )
         }
         .background(Color.black)
         .coordinateSpace(name: "mediaPager")
         .clipped()
-        .onChange(of: zoomed[index]) { _ in dragOffset = 0 }
+        .onChange(of: indexZoomed) { _ in dragOffset = 0 }
         .onChange(of: index) { _ in dragOffset = 0 }
         .onChange(of: urls.count) { _ in
             // urls est une copie stable par présentation ; resync défensive
@@ -186,11 +209,17 @@ private struct MediaPager: View {
             zoomed = Array(repeating: false, count: urls.count)
             if index >= urls.count { index = max(urls.count - 1, 0) }
         }
+        .onAppear {
+            if zoomed.count != urls.count {
+                zoomed = Array(repeating: false, count: urls.count)
+            }
+            if index >= urls.count { index = max(urls.count - 1, 0) }
+        }
     }
 
     private func canPage(_ value: DragGesture.Value, height: CGFloat) -> Bool {
-        guard !zoomed[index], abs(value.translation.width) > abs(value.translation.height) else { return false }
-        if isVideo(urls[index]) {
+        guard !urls.isEmpty, zoomed.indices.contains(clampedIndex), !zoomed[clampedIndex], abs(value.translation.width) > abs(value.translation.height) else { return false }
+        if isVideo(urls[clampedIndex]) {
             // Reserve the native top controls and bottom scrubber. A horizontal
             // swipe in the central picture navigates in either direction.
             return value.startLocation.y > min(80, height * 0.2)

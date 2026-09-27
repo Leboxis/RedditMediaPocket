@@ -18,8 +18,13 @@ private struct MediaDetails {
 
     static func load(_ url: URL) async -> MediaDetails {
         var details = MediaDetails()
-        details.bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
-        details.dates = MediaMetadata.read(for: url)
+        // Petites lectures fichier hors Main : ne bloque pas l'écran (décision Jev A bug 5).
+        let fileInfo = await Task.detached(priority: .utility) { () -> (Int64?, MediaMetadata?) in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
+            return (size, MediaMetadata.read(for: url))
+        }.value
+        details.bytes = fileInfo.0
+        details.dates = fileInfo.1
         if isVideo(url) {
             let asset = AVURLAsset(url: url)
             if let duration = try? await asset.load(.duration), duration.seconds.isFinite, duration.seconds >= 0 {
@@ -37,11 +42,15 @@ private struct MediaDetails {
                 if let fps = try? await track.load(.nominalFrameRate), fps.isFinite, fps > 0 { details.frameRate = fps }
                 if let rate = try? await track.load(.estimatedDataRate), rate.isFinite, rate > 0 { details.bitRate = rate }
             }
-        } else if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-                  let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
-                  let height = properties[kCGImagePropertyPixelHeight] as? NSNumber {
-            details.resolution = "\(width.intValue) × \(height.intValue) px"
+        } else {
+            let resolution = await Task.detached(priority: .utility) { () -> String? in
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                      let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+                      let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return nil }
+                return "\(width.intValue) × \(height.intValue) px"
+            }.value
+            details.resolution = resolution
         }
         return details
     }

@@ -441,6 +441,12 @@ private struct FollowingMediaCard: View {
                     throw NetworkError.invalid(L("Aucun média trouvé dans la galerie.", "No media found in the gallery."))
                 }
                 let slots = try await model.previewMediaList(list)
+                // Décision Jev A bug 12 : si annulé entre la fin du téléchargement
+                // et l'affichage, on jette tout de suite au lieu de perdre les fichiers.
+                if Task.isCancelled {
+                    for url in slots.compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
+                    throw CancellationError()
+                }
                 let urls = slots.compactMap { $0 }
                 guard !urls.isEmpty else {
                     throw NetworkError.invalid(L("Média indisponible.", "Media unavailable."))

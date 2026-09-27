@@ -139,9 +139,28 @@ struct SavedMediaCount: Codable {
         network.$transfers.assign(to: &$transfers)
         loadCollections()
         migrateFolders()
+        Self.cleanupStalePreviewTemps()
         if activeUser == nil { activeUser = liveCollections.first?.id ?? collections.first?.id }
         if let current = collections.first(where: { $0.id == activeUser }) { display(current) }
         reload()
+    }
+
+    /// Décision Jev A bug 12 : carnet + ménage. Les aperçus oubliés (quitte au
+    /// mauvais moment) sont nettoyés au démarrage : fichiers temporaires de
+    /// plus de 24h dans le dossier temporaire.
+    nonisolated static func cleanupStalePreviewTemps() {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+        guard let entries = try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]) else { return }
+        let limit = Date().addingTimeInterval(-24 * 3600)
+        for url in entries {
+            let ext = url.pathExtension.lowercased()
+            guard ["mp4", "mov", "m4v", "jpg", "jpeg", "png", "gif", "webp"].contains(ext) else { continue }
+            if let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+               date < limit {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
@@ -332,7 +351,11 @@ struct SavedMediaCount: Codable {
         }
     }
 
-    func stop() { task?.cancel(); tokenTask?.cancel() }
+    func stop() {
+        task?.cancel()
+        tokenTask?.cancel()
+        tokenTask = nil
+    }
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
@@ -759,7 +782,8 @@ struct SavedMediaCount: Codable {
 
     /// Injection binaire fail-safe : JPG/PNG via EXIF sans recompression,
     /// MP4/MOV via Passthrough. Retourne toujours, ne throw jamais.
-    private static func embedBinaryMetadata(at url: URL, author: String, postLink: String?) async {
+    /// nonisolated : gros travail fichier hors Main pour ne pas geler l'écran (décision Jev A).
+    nonisolated private static func embedBinaryMetadata(at url: URL, author: String, postLink: String?) async {
         guard BinaryMetadata.supportsExtension(url.pathExtension) else { return }
         if Task.isCancelled { return }
         let payload = BinaryMetadata.payload(author: author, postLink: postLink)
@@ -772,7 +796,7 @@ struct SavedMediaCount: Codable {
         }
     }
 
-    private static func tagImage(at url: URL, author: String, comment: String?) {
+    nonisolated private static func tagImage(at url: URL, author: String, comment: String?) {
         guard let data = try? Data(contentsOf: url),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let type = CGImageSourceGetType(source) else { return }
@@ -806,7 +830,7 @@ struct SavedMediaCount: Codable {
         }
     }
 
-    private static func movieMetadataItems(author: String, comment: String?) -> [AVMetadataItem] {
+    nonisolated private static func movieMetadataItems(author: String, comment: String?) -> [AVMetadataItem] {
         var items: [AVMetadataItem] = []
         if !author.isEmpty {
             let artist = AVMutableMetadataItem()
@@ -828,7 +852,7 @@ struct SavedMediaCount: Codable {
         return items
     }
 
-    private static func tagMovie(at url: URL, author: String, comment: String?) async {
+    nonisolated private static func tagMovie(at url: URL, author: String, comment: String?) async {
         let items = movieMetadataItems(author: author, comment: comment)
         guard !items.isEmpty else { return }
         let asset = AVURLAsset(url: url)
@@ -857,17 +881,33 @@ struct SavedMediaCount: Codable {
 
     private func redgifsToken() async throws -> String {
         if let token, Date().timeIntervalSince(tokenDate) < 1800 { return token }
-        if let tokenTask { return try await tokenTask.value }
+        // Décision Jev A bug 11 : si la tâche précédente a été annulée (Stop),
+        // on l'oublie et on recrée proprement au lieu de rejouer l'annulation.
+        if let existing = tokenTask {
+            do {
+                return try await existing.value
+            } catch is CancellationError {
+                tokenTask = nil
+            } catch {
+                throw error
+            }
+        }
         let request = Task { @MainActor in
             struct Auth: Decodable { let token: String }
             let data = try await network.data(URL(string: "https://api.redgifs.com/v2/auth/temporary")!)
             return try JSONDecoder().decode(Auth.self, from: data).token
         }
         tokenTask = request
-        defer { tokenTask = nil }
-        let result = try await request.value
-        token = result; tokenDate = Date()
-        return result
+        do {
+            let result = try await request.value
+            token = result; tokenDate = Date()
+            tokenTask = nil
+            return result
+        } catch {
+            if request.isCancelled { tokenTask = nil }
+            else { tokenTask = nil }
+            throw error
+        }
     }
     private func downloadRedgifs(id: String) async throws -> URL {
         let bearer = try await redgifsToken()
@@ -900,7 +940,8 @@ struct SavedMediaCount: Codable {
             return try await merge(video: video, audio: audio)
         }
     }
-    private func merge(video: URL, audio: URL) async throws -> URL {
+    nonisolated private func merge(video: URL, audio: URL) async throws -> URL {
+        let fm = FileManager.default
         let composition = AVMutableComposition()
         let v = AVURLAsset(url: video), a = AVURLAsset(url: audio)
         guard let sourceV = try await v.loadTracks(withMediaType: .video).first,

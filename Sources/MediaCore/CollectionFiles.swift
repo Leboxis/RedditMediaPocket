@@ -11,9 +11,18 @@ public struct CollectionFiles: Sendable {
         do {
             entries = try FileManager.default.contentsOfDirectory(
                 at: folder, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
+            // Décision Jev A bug 13 : distinguer vide et illisible.
+            // Dossier absent = premier lancement normal -> vide, pas d'erreur.
+            // Autre erreur (droits, pas un dossier) -> on prévient au lieu de dire 0.
             try Task.checkCancellation()
-            return CollectionFiles(files: [], totalBytes: 0)
+            let ns = error as NSError
+            if ns.domain == NSCocoaErrorDomain && ns.code == NSFileNoSuchFileError {
+                return CollectionFiles(files: [], totalBytes: 0)
+            }
+            throw error
         }
         var media: [(url: URL, date: Date)] = []
         var bytes: Int64 = 0
