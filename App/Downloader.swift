@@ -511,6 +511,13 @@ struct SavedMediaCount: Codable {
         upsertCollection(source)
         reload()
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
+        // Durcissement : dossier absent ou vide (suppression hors app) → l'historique
+        // des posts vus est obsolète, on le purge pour que le run re-télécharge tout.
+        if (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.isEmpty ?? true {
+            UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+        }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         var visitedSet = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
         var visitedOrder = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
