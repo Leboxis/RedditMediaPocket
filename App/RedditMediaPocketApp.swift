@@ -40,7 +40,7 @@ struct ContentView: View {
                 metricsRow
                 gallerySection
             }
-            .navigationTitle("Pocket")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
             .onChange(of: scenePhase) { phase in
@@ -131,6 +131,15 @@ struct ContentView: View {
                     .frame(width: 48, height: 48)
                     .foregroundStyle(.white)
                     .background(.orange, in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(alignment: .topTrailing) {
+                        Circle()
+                            .fill(model.running ? Color.green : Color.red)
+                            .frame(width: 10, height: 10)
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                            .offset(x: 3, y: -3)
+                            .accessibilityLabel(L("Téléchargement", "Download"))
+                            .accessibilityValue(model.running ? L("En cours", "In progress") : L("Inactif", "Inactive"))
+                    }
             }
             .disabled(cannotStart)
             .accessibilityLabel(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
@@ -246,16 +255,6 @@ struct ContentView: View {
 
     private var toolbarContent: some ToolbarContent {
         Group {
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 7) {
-                    Text("Pocket").font(.headline)
-                    Circle()
-                        .fill(model.running ? Color.green : Color.red)
-                        .frame(width: 7, height: 7)
-                        .accessibilityLabel(L("Téléchargement", "Download"))
-                        .accessibilityValue(model.running ? L("En cours", "In progress") : L("Inactif", "Inactive"))
-                }
-            }
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { settingsPresented = true } label: { Image(systemName: "gearshape") }
                     .accessibilityLabel(L("Réglages", "Settings"))
