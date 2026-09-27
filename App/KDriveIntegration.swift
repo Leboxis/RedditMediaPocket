@@ -543,7 +543,6 @@ struct KDriveUploadButton: View {
 
 private enum KDriveConnectionStatus {
     case success(String)
-    case error(String)
 }
 
 struct KDriveSettingsSection: View {
@@ -555,6 +554,7 @@ struct KDriveSettingsSection: View {
     @State private var showToken = false
     @State private var isTestingConnection = false
     @State private var connectionStatus: KDriveConnectionStatus?
+    @State private var connectionError: String?
 
     private var configured: Bool {
         !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -627,10 +627,6 @@ struct KDriveSettingsSection: View {
                     Label(L("Connecté : \(name)", "Connected: \(name)"), systemImage: "checkmark.circle.fill")
                         .font(.footnote)
                         .foregroundStyle(.green)
-                case .error(let message):
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
                 }
             }
         } header: {
@@ -638,6 +634,7 @@ struct KDriveSettingsSection: View {
         } footer: {
             Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
         }
+        .errorAlert(connectionError)
         .onChange(of: token) { _ in connectionStatus = nil }
         .onChange(of: driveId) { _ in connectionStatus = nil }
     }
@@ -645,12 +642,13 @@ struct KDriveSettingsSection: View {
     private func testConnection() {
         isTestingConnection = true
         connectionStatus = nil
+        connectionError = nil
         Task { @MainActor in
             do {
                 let name = try await KDriveService.shared.testConnection(token: token, driveId: driveId)
                 connectionStatus = .success(name)
             } catch {
-                connectionStatus = .error(error.localizedDescription)
+                connectionError = error.localizedDescription
             }
             isTestingConnection = false
         }
@@ -725,10 +723,8 @@ struct KDriveFolderPickerView: View {
 
             if isLoading {
                 HStack { Spacer(); ProgressView(); Spacer() }
-            } else if let errorMessage {
+            } else if errorMessage != nil {
                 VStack(alignment: .leading, spacing: 8) {
-                    Label(errorMessage, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
                     Button(L("Réessayer", "Retry")) { loadFolders() }
                 }
             } else {
@@ -796,6 +792,7 @@ struct KDriveFolderPickerView: View {
             .padding()
             .background(.bar)
         }
+        .errorAlert(errorMessage)
         .alert(L("Nouveau dossier", "New folder"), isPresented: $showCreateFolder) {
             TextField(L("Nom du dossier", "Folder name"), text: $newFolderName)
             Button(L("Annuler", "Cancel"), role: .cancel) { }
@@ -944,18 +941,6 @@ struct KDriveUploadSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-
-                    if failedCount > 0 {
-                        Text(L("\(failedCount) échec(s).", "\(failedCount) failure(s)."))
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
-                    }
-                    if let finalError {
-                        Text(finalError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                    }
                 } else {
                     ProgressView(value: service.currentProgress)
                         .progressViewStyle(.linear)
@@ -1003,6 +988,7 @@ struct KDriveUploadSheet: View {
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .errorAlert(finalError)
         .presentationDetents([.medium])
         .interactiveDismissDisabled(service.isUploading)
         .onAppear { startUploadIfNeeded() }

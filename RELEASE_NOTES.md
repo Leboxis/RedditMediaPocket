@@ -1,18 +1,11 @@
-Reprise de la recherche de nouveautés à l'endroit exact où elle s'était arrêtée.
+Erreurs plus lisibles et reprise fiable après une limitation.
 
-- Le flux est relu depuis le début, page par page, jusqu'à la première page entièrement connue : les nouveaux posts sont donc tous vus, sans limite de nombre.
-- Le point d'arrivée de cette lecture est mémorisé après chaque page. Une session interrompue par un HTTP 429 le reprend directement au lieu de conclure qu'elle a déjà tout lu.
-- Un HTTP 429 en pleine recherche de nouveautés abandonnait les posts restants : ils n'étaient plus jamais repris tant qu'ils ne remontaient pas en tête du flux.
-- Le point d'arrivée est effacé dès que le parcours rejoint l'historique, et conservé si les 100 pages ont été consommées sans l'atteindre.
-- Aucun média téléchargé n'est retéléchargé : un fichier déjà présent est toujours sauté.
-
-Un HTTP 429 arrête la session, sans délai imposé.
-
-- Le téléchargement s'arrête au premier refus, flux RSS comme média, et annule les transferts encore en vol ; les fichiers déjà enregistrés sont conservés.
-- Suppression du délai par défaut de 15 minutes et de la lecture des en-têtes `X-Ratelimit` sur les réponses réussies : seul un refus réel limite.
-- Le délai annoncé par le serveur est respecté : `Retry-After`, sinon `x-ratelimit-reset`, mesure à 48 s sur le RSS de Reddit. Sans en-tête, aucun délai n'est inventé.
-- Relancer efface les pauses enregistrées et retente le serveur immédiatement, quitte à retomber sur le même refus.
-- Fin du bandeau de services en pause et du compteur « à reprendre » : plus de parcours partiel, la reprise se fait depuis le curseur.
+- Les erreurs s’affichent dans une fenêtre native, sans message dupliqué au-dessus de la galerie. Les aperçus, la connexion Reddit et kDrive utilisent aussi des alertes.
+- Une erreur de téléchargement indique sa cause et le nombre total de médias conservés dans la collection, y compris les téléchargements précédents.
+- Un HTTP 429 reçu pendant un transfert interrompt le lot sans marquer la page comme terminée. Les fichiers déjà enregistrés sont conservés et ignorés à la reprise.
+- La recherche des nouveautés ne remplace plus le curseur de l’historique. Une page déjà connue ne termine plus prématurément une reprise.
+- Relancer efface les limites et le cache RSS locaux, puis retente réellement le serveur. Les réponses d’une ancienne session ne peuvent plus rétablir une limite. Reddit peut toujours refuser la nouvelle requête.
+- L’ancien historique de chaque collection est reconstruit une fois pour retrouver les posts auparavant marqués comme traités à tort, sans effacer les médias présents.
 
 Sélection automatique du compte pour les sauvegardés.
 

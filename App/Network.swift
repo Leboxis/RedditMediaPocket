@@ -2,26 +2,12 @@ import Foundation
 import Combine
 import MediaCore
 
-enum NetworkError: LocalizedError {
-    case refused(Int), limited(service: String, until: Date?), invalid(String)
-    var errorDescription: String? {
-        switch self {
-        case .refused(let code): return L("Accès refusé (HTTP \(code)). Aucun contournement ni nouvelle tentative automatique.", "Access denied (HTTP \(code)). No bypass or automatic retry.")
-        case .limited(let service, let date):
-            // No server-stated deadline: the user may restart right away, and may
-            // hit the same refusal again. No wait is invented to prevent that.
-            guard let date else { return L("\(service) : trop de demandes. Relance pour réessayer.", "\(service): too many requests. Restart to try again.") }
-            return L("\(service) · réessayer le \(date.formatted(date: .numeric, time: .shortened))", "\(service) · retry on \(date.formatted(date: .numeric, time: .shortened))")
-        case .invalid(let message): return message
-        }
-    }
-}
-
 // Configurable bounded media pipelines; server-stated service limits only.
 @MainActor final class Network: ObservableObject {
     @Published private(set) var transfers = 0
     private let session: URLSession
     private var sessionRevision = -1
+    private var requestGeneration = 0
     private var limits: ServiceLimits
     private var rssCache: [URL: (date: Date, data: Data)] = [:]
     private let defaults = UserDefaults.standard
@@ -37,7 +23,9 @@ enum NetworkError: LocalizedError {
     /// Relance manuelle : oublie les pauses enregistrées (mémoire +
     /// UserDefaults) pour retenter vraiment le serveur.
     func resetRateLimits() {
+        requestGeneration += 1
         limits = ServiceLimits()
+        rssCache.removeAll()
         defaults.removeObject(forKey: "serviceCooldowns")
         defaults.removeObject(forKey: "cooldown")
     }
@@ -48,6 +36,8 @@ enum NetworkError: LocalizedError {
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
         config.urlCredentialStorage = nil
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 1800
         config.httpMaximumConnectionsPerHost = 6
@@ -59,9 +49,10 @@ enum NetworkError: LocalizedError {
         try checkLimit(service)
         // No application-imposed delay: free workers start requests immediately.
         try Task.checkCancellation()
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
         if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        try Task.checkCancellation()
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
         return request
     }
@@ -86,15 +77,19 @@ enum NetworkError: LocalizedError {
         }
     }
     func data(_ url: URL, bearer: String? = nil) async throws -> Data {
+        let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
         let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
         if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 { return cached.data }
         let req = try await request(url, bearer: bearer)
+        guard generation == requestGeneration else { throw CancellationError() }
         let (data, response) = try await session.data(for: req)
+        try Task.checkCancellation()
+        guard generation == requestGeneration else { throw CancellationError() }
         try check(response, requestedURL: url)
         if isRSS, data.count <= 2_000_000 {
-            // Short-lived local reuse avoids repeating page requests on stop/restart.
+            // Reuse successful pages within a run; manual restart clears them.
             if rssCache.count >= 16, let oldest = rssCache.min(by: { $0.value.date < $1.value.date })?.key { rssCache.removeValue(forKey: oldest) }
             rssCache[url] = (Date(), data)
         }
@@ -109,7 +104,7 @@ enum NetworkError: LocalizedError {
             try Task.checkCancellation()
             return try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            throw NetworkError.invalid(L("Reddit refuse l’accès aux flux privés (HTTP \(code)). Ouvre la connexion dans les Réglages, vérifie le compte et les flux RSS privés dans prefs/feeds, puis relance.", "Reddit denied access to private feeds (HTTP \(code)). Open sign-in in Settings, check your account and private RSS feeds in prefs/feeds, then try again."))
+            throw NetworkError.invalid(L("Reddit refuse l’accès aux flux RSS privés (HTTP \(code)).", "Reddit denied access to private RSS feeds (HTTP \(code))."))
         }
     }
 
@@ -124,21 +119,24 @@ enum NetworkError: LocalizedError {
             if case NetworkError.limited = error { throw error }
             if case NetworkError.refused(let code) = error {
                 if (300...399).contains(code) {
-                    throw NetworkError.invalid(L("Redirection du flux privé non prise en charge (HTTP \(code)). La destination ne correspond pas au flux des sauvegardés du compte ; téléchargement arrêté pour protéger le lien privé.", "Unsupported private feed redirect (HTTP \(code)). The destination does not match the account’s saved feed; download stopped to protect the private link."))
+                    throw NetworkError.invalid(L("Redirection du flux privé refusée : destination incompatible (HTTP \(code)).", "Private feed redirect refused: incompatible destination (HTTP \(code))."))
                 }
-                throw NetworkError.invalid(L("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)). Vérifie la session et l’activation des flux RSS privés dans prefs/feeds. Aucune nouvelle tentative automatique.", "Reddit denied access to the private saved feed (HTTP \(code)). Check your session and enable private RSS feeds in prefs/feeds. No automatic retry."))
+                throw NetworkError.invalid(L("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)).", "Reddit denied access to the private saved feed (HTTP \(code))."))
             }
             // URLSession errors can contain the private URL: never expose its token.
-            throw NetworkError.invalid(L("Impossible de lire le flux privé des sauvegardés. Vérifie la connexion et les flux RSS privés dans les préférences Reddit, puis relance.", "Unable to read the private saved feed. Check your connection and private RSS feeds in Reddit preferences, then try again."))
+            throw NetworkError.invalid(L("Impossible de lire le flux RSS privé des sauvegardés.", "Unable to read the private saved RSS feed."))
         }
     }
     func download(_ url: URL) async throws -> URL {
+        let generation = requestGeneration
         let req = try await request(url, bearer: nil)
+        guard generation == requestGeneration else { throw CancellationError() }
         transfers += 1
         defer { transfers -= 1 }
         let (temp, response) = try await session.download(for: req)
         do {
             try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
             guard response.url?.scheme == "https" else { throw NetworkError.invalid(L("Redirection non HTTPS refusée.", "Non-HTTPS redirect refused.")) }
             try check(response, requestedURL: url)
             let mime = response.mimeType ?? ""

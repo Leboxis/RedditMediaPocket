@@ -49,12 +49,13 @@ struct RedditLogin: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = RedditSession.shared
     @State private var message = ""
+    @State private var errorMessage: String?
     @State private var showsFeedPreferences = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary).padding(10) }
-                RedditWebLogin(message: $message, showsFeedPreferences: showsFeedPreferences)
+                RedditWebLogin(errorMessage: $errorMessage, showsFeedPreferences: showsFeedPreferences)
                     .id(showsFeedPreferences)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -73,14 +74,15 @@ struct RedditLogin: View {
                 }
             }
         }
+        .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
         .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 
 private struct RedditWebLogin: UIViewControllerRepresentable {
-    @Binding var message: String
+    @Binding var errorMessage: String?
     let showsFeedPreferences: Bool
-    func makeCoordinator() -> Coordinator { Coordinator(message: $message) }
+    func makeCoordinator() -> Coordinator { Coordinator(errorMessage: $errorMessage) }
     func makeUIViewController(context: Context) -> UIViewController {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = RedditSession.shared.store
@@ -106,12 +108,12 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
         for case let view as WKWebView in controller.view.subviews { view.stopLoading(); view.navigationDelegate = nil }
     }
     final class Coordinator: NSObject, WKNavigationDelegate {
-        @Binding var message: String
-        init(message: Binding<String>) { _message = message }
+        @Binding var errorMessage: String?
+        init(errorMessage: Binding<String?>) { _errorMessage = errorMessage }
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.targetFrame?.isMainFrame != false else { decisionHandler(.allow); return }
             guard let url = navigationAction.request.url, RedditCookiePolicy.allows(url) else {
-                message = L("Utilise la connexion Reddit par identifiant et mot de passe.", "Sign in to Reddit with your username and password.")
+                errorMessage = L("Utilise la connexion Reddit par identifiant et mot de passe.", "Sign in to Reddit with your username and password.")
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow)
@@ -122,11 +124,15 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
             }
             decisionHandler(.allow)
         }
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            errorMessage = nil
+        }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             Task { @MainActor in await RedditSession.shared.refresh() }
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            message = L("Connexion indisponible. Ferme puis réessaie.", "Sign-in unavailable. Close and try again.")
+            guard (error as? URLError)?.code != .cancelled else { return }
+            errorMessage = L("Connexion indisponible. Ferme puis réessaie.", "Sign-in unavailable. Close and try again.")
         }
     }
 }

@@ -157,13 +157,10 @@ struct SavedPostsView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage {
+                } else if errorMessage != nil {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 36)).foregroundStyle(.orange)
-                        Text(errorMessage)
-                            .font(.footnote).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
                             .buttonStyle(.borderedProminent)
                     }
@@ -225,6 +222,7 @@ struct SavedPostsView: View {
             }
         }
         .tint(.orange)
+        .errorAlert(errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, posts == nil { await load() }
         }
@@ -355,6 +353,7 @@ private struct FeedCard: View, Equatable {
     @State private var full: UIImage?
     @State private var videoURL: URL?
     @State private var failed = false
+    @State private var errorMessage: String?
 
     static func ==(lhs: FeedCard, rhs: FeedCard) -> Bool {
         lhs.entry.id == rhs.entry.id && lhs.isActive == rhs.isActive
@@ -379,20 +378,20 @@ private struct FeedCard: View, Equatable {
                 ZStack {
                     Image(uiImage: thumb).resizable().scaledToFit()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    VStack(spacing: 8) {
-                        Spacer()
-                        ProgressView().tint(.white)
-                        Text(L("Chargement HD…", "Loading HD…"))
-                            .font(.caption2).foregroundStyle(.white.opacity(0.7))
-                        Spacer()
+                    if !failed {
+                        VStack(spacing: 8) {
+                            Spacer()
+                            ProgressView().tint(.white)
+                            Text(L("Chargement HD…", "Loading HD…"))
+                                .font(.caption2).foregroundStyle(.white.opacity(0.7))
+                            Spacer()
+                        }
                     }
                 }
                 .transition(.opacity)
             } else if failed {
                 VStack(spacing: 8) {
                     Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
-                    Text(L("Média indisponible", "Media unavailable"))
-                        .font(.caption).foregroundStyle(.white.opacity(0.6))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -422,6 +421,7 @@ private struct FeedCard: View, Equatable {
             .drawingGroup()
         }
         .clipped()
+        .errorAlert(isActive ? errorMessage : nil, onDismiss: { errorMessage = nil })
         .animation(.smooth(duration: 0.25), value: stageKey)
         .task(id: entry.id) { await load() }
     }
@@ -443,7 +443,9 @@ private struct FeedCard: View, Equatable {
         do {
             let urls = try await preload.resolve(entry: entry)
             guard !Task.isCancelled else { return }
-            guard let url = urls.first else { failed = true; return }
+            guard let url = urls.first else {
+                throw NetworkError.invalid(L("Média indisponible sur le serveur.", "Media unavailable on the server."))
+            }
             let isVid: Bool = {
                 if let media = entry.media {
                     switch media {
@@ -466,10 +468,16 @@ private struct FeedCard: View, Equatable {
                     return UIImage(cgImage: cg)
                 }.value
                 guard !Task.isCancelled else { return }
-                if let image { full = image } else { failed = true }
+                guard let image else {
+                    throw NetworkError.invalid(L("Impossible de décoder cette image.", "Unable to decode this image."))
+                }
+                full = image
             }
         } catch {
-            if !Task.isCancelled { failed = true }
+            if !Task.isCancelled, !(error is CancellationError) {
+                failed = true
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }
@@ -650,10 +658,8 @@ private struct SavedMediaCard: View {
                     .accessibilityLabel(L("Aperçu uniquement", "Preview only"))
                     .accessibilityAddTraits(.isImage)
             }
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-            }
         }
+        .errorAlert(errorMessage)
         .task(id: imageURL) {
             image = nil
             imageLoaded = false
@@ -697,7 +703,7 @@ private struct SavedMediaCard: View {
                 selection = SavedPreviewSelection(urls: urls, selected: selected)
             } catch {
                 clearTemporaryFiles()
-                if !Task.isCancelled { errorMessage = error.localizedDescription }
+                if !Task.isCancelled, !(error is CancellationError) { errorMessage = error.localizedDescription }
             }
         }
         .fullScreenCover(item: $selection, onDismiss: clearTemporaryFiles) { preview in

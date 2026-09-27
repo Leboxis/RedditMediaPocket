@@ -347,18 +347,14 @@ struct SavedMediaCount: Codable {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
                 if Task.isCancelled || error is CancellationError {
                     status = L("Arrêté", "Stopped")
-                } else if case NetworkError.limited(let service, let until) = error {
-                    let kept = L("\(count) médias conservés", "\(count) media files kept")
-                    let msg = until.map { date in
-                        L("\(service) : trop de demandes, téléchargement arrêté. \(kept). Relance après \(date.formatted(date: .numeric, time: .shortened)) pour continuer.",
-                          "\(service): too many requests, download stopped. \(kept). Restart after \(date.formatted(date: .numeric, time: .shortened)) to continue.")
-                    } ?? L("\(service) : trop de demandes, téléchargement arrêté. \(kept). Relance pour réessayer.",
-                           "\(service): too many requests, download stopped. \(kept). Restart to try again.")
-                    status = msg
-                    errorMessage = msg
                 } else {
-                    status = error.localizedDescription
-                    errorMessage = error.localizedDescription
+                    status = ""
+                    // Count the collection on disk, including earlier runs,
+                    // rather than the counter reset at every manual restart.
+                    let kept = activeCollection.flatMap {
+                        try? CollectionFiles.scan(root.appendingPathComponent($0.folderName, isDirectory: true)).files.count
+                    } ?? files.count
+                    errorMessage = error.localizedDescription + "\n" + L("\(kept) médias conservés.", "\(kept) media files kept.")
                 }
             }
         }
@@ -519,88 +515,36 @@ struct SavedMediaCount: Codable {
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
         }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        var visitedSet = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
-        var visitedOrder = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
+        // Older versions swallowed media 429s and marked incomplete pages as
+        // visited. Re-scan once; existing files are skipped by prepareDownloads.
+        let migrationKey = "resumePolicyVersion.\(canonical)"
+        if UserDefaults.standard.integer(forKey: migrationKey) < 2 {
+            UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+            UserDefaults.standard.set(2, forKey: migrationKey)
+        }
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
-        // Phase 1 — nouveautés : le flux est antéchronologique, les posts
-        // publiés depuis la dernière exécution sont devant. On part du début
-        // et on s'arrête à la première page entièrement déjà vue : tout ce
-        // qui suit est connu. Sans historique, on saute cette phase.
-        if !visitedSet.isEmpty {
-            // Les nouveaux posts n'apparaissent qu'en tête de flux, donc la tête
-            // est relue jusqu'à être entièrement connue. Une tête connue ne veut
-            // pas dire « parcours fini » : si une session précédente s'était
-            // arrêtée plus loin, on saute à ce point de lecture. Sans ce saut,
-            // une relance conclut à tort qu'elle a tout vu et abandonne les
-            // posts restants jusqu'à ce qu'ils remontent en tête du flux.
-            var checkAfter: String? = nil
-            var frontier = UserDefaults.standard.string(forKey: Self.frontierKey(canonical))
-            var jumped = frontier == nil
-            var capped = true
-            // Plafond de sécurité : 100 pages. Le RSS anonyme tronque de toute façon
-            // bien avant (page répétée, curseur non reconnu, 429) ; voir README.
-            for _ in 1...100 {
-                try Task.checkCancellation()
-                status = L("Recherche des nouveautés…", "Checking for new posts…")
-                let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: checkAfter)
-                let fresh = posts.filter { Self.insertVisited($0.id, &visitedSet, &visitedOrder) }
-                if !fresh.isEmpty {
-                    let downloads = try await prepareDownloads(fresh, folder: folder,
-                                                      seenMedia: &seenMedia, usedFilenames: &usedFilenames)
-                    try await executeDownloads(downloads, &preparedCount)
-                }
-                // Curseur publié après la page traitée, jamais avant : il désigne
-                // la page suivante, donc une page interrompue n'est jamais relue
-                // comme nouvelle et le parcours ne peut pas boucler sur lui.
-                guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { capped = false; break }
-                checkAfter = last
-                Self.persistResumeState(canonical: canonical, cursor: last, visited: visitedOrder)
-                Self.persistFrontier(canonical, checkAfter)
-                // Page entièrement connue : on a rejoint l'historique, sauf si
-                // le point de lecture mémorisé est plus loin.
-                if fresh.isEmpty {
-                    if !jumped, let resume = frontier, Self.validPageCursor(resume, privateFeed: privateFeed) {
-                        jumped = true
-                        checkAfter = resume
-                        Self.persistFrontier(canonical, resume)
-                        continue
-                    }
-                    capped = false
-                    break
-                }
-            }
-            // Le parcours a rejoint l'historique ou s'est arrêté pour de bon :
-            // le point de lecture ne sert plus. Conservé seulement si les 100
-            // pages ont été consommées sans rejoindre l'historique.
-            if !capped { Self.persistFrontier(canonical, nil) }
-        }
-        // Phase 2 — reprise : on repart du curseur persisté (fin de la
-        // dernière page traitée) au lieu de rescanner depuis le début.
-        // Sans curseur (jamais interrompu), parcours normal depuis le début.
-        var after: String? = UserDefaults.standard.string(forKey: Self.cursorKey(canonical))
-        var completed = false
-        for _ in 1...100 {
-            try Task.checkCancellation()
-            status = L("Recherche…", "Searching…")
-            let posts = try await fetchPosts(source: source, privateFeed: privateFeed, after: after)
-            let fresh = posts.filter { Self.insertVisited($0.id, &visitedSet, &visitedOrder) }
-            if fresh.isEmpty { completed = true; break }
-            let downloads = try await prepareDownloads(fresh, folder: folder,
-                                              seenMedia: &seenMedia, usedFilenames: &usedFilenames)
-            try await executeDownloads(downloads, &preparedCount)
-            // Saved listings can contain comments as well as posts.
-            guard let last = posts.last?.id, Self.validPageCursor(last, privateFeed: privateFeed) else { completed = true; break }
-            after = last
-            Self.persistResumeState(canonical: canonical, cursor: after, visited: visitedOrder)
-        }
-        // Parcours terminé : on efface le curseur (une prochaine exécution
-        // ne fera que la phase nouveautés) mais on garde les posts vus.
-        // En cas d'erreur/arrêt, le curseur reste pour la reprise.
-        if completed {
-            Self.persistResumeState(canonical: canonical, cursor: nil, visited: visitedOrder)
-        }
+        let checkpoint = FeedCheckpoint(
+            cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)),
+            frontier: UserDefaults.standard.string(forKey: Self.frontierKey(canonical)),
+            visited: UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
+        )
+        let completed = try await FeedTraversal.run(checkpoint: checkpoint,
+            validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
+            fetch: { after in
+                self.status = L("Recherche…", "Searching…")
+                return try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+            }, process: { posts in
+                let downloads = try await self.prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames)
+                try await self.executeDownloads(downloads, &preparedCount)
+            }, persist: { state in
+                Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
+                Self.persistFrontier(canonical, state.frontier)
+            })
         if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
             let snapshot = SavedMediaCount(count: preparedCount, computedAt: Date())
             if let data = try? JSONEncoder().encode(snapshot) {
@@ -615,10 +559,12 @@ struct SavedMediaCount: Codable {
             status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
         } else if failed == 0 {
             status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
-        } else {
-            var summary = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
-            summary += L(" · \(failed) inaccessible\(failed > 1 ? "s" : "")", " · \(failed) unavailable")
-            status = summary
+        }
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("Certains médias sont inaccessibles ou n’ont pas pu être enregistrés.\n\(kept) médias conservés.",
+                             "Some media files are unavailable or could not be saved.\n\(kept) media files kept.")
         }
     }
 
@@ -627,16 +573,6 @@ struct SavedMediaCount: Codable {
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
     /// été parcourues, pour reprendre là où une session interrompue s'est arrêtée.
     private static func frontierKey(_ canonical: String) -> String { "newPostsFrontier.\(canonical)" }
-
-    /// Insère un post dans l'historique ordonné. Un `Set` garantit la recherche en
-    /// O(1) ; l'ordre d'insertion est conservé dans `order` pour que la
-    /// troncature persistée enlève les plus anciens, pas un sous-ensemble
-    /// arbitraire.
-    private static func insertVisited(_ id: String, _ set: inout Set<String>, _ order: inout [String]) -> Bool {
-        guard set.insert(id).inserted else { return false }
-        order.append(id)
-        return true
-    }
 
     /// Marque-page persisté par collection : curseur de la dernière page
     /// traitée + posts déjà vus (borné). `cursor: nil` efface la reprise
@@ -786,13 +722,8 @@ struct SavedMediaCount: Codable {
     /// fatales : un refus du serveur arrête la session entière, même au milieu
     /// d'un lot, et l'utilisateur choisit quand relancer.
     private func saveIgnoringInaccessible(_ item: Download) async throws {
-        do { try await saveWithRetry(item) }
-        catch {
-            if error is CancellationError { throw error }
-            try Task.checkCancellation()
-            failed += 1
-            print("Pocket: média inaccessible ignoré (\(item.media.key)) : \(error.localizedDescription)")
-        }
+        let saved = try await DownloadFailurePolicy.attempt { try await self.saveWithRetry(item) }
+        if !saved { failed += 1 }
     }
 
     private func save(_ item: Download) async throws {

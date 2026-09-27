@@ -101,20 +101,13 @@ private struct KDriveCollectionUploadFlow: View {
                     .navigationTitle("Infomaniak kDrive")
                     .navigationBarTitleDisplayMode(.inline)
                 }
-            } else if let errorMessage {
+            } else if errorMessage != nil {
                 NavigationStack {
                     VStack(spacing: 18) {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 44))
                             .foregroundStyle(.orange)
-                        Text(L("Impossible de préparer le dossier", "Could not prepare folder"))
-                            .font(.headline)
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
                         Spacer()
                         Button(L("Réessayer", "Retry")) {
                             prepareCollectionFolder()
@@ -135,6 +128,7 @@ private struct KDriveCollectionUploadFlow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .errorAlert(errorMessage)
         .task {
             prepareCollectionFolder()
         }
@@ -208,6 +202,7 @@ private struct KDriveCollectionUploadFlow: View {
                 pendingFiles = filtered
                 isPreparing = false
             } catch {
+                uploadDirectoryId = nil
                 isPreparing = false
                 errorMessage = error.localizedDescription
             }
@@ -524,18 +519,6 @@ private struct KDriveContinuousUploadSheet: View {
                             .font(.subheadline)
                             .foregroundStyle(.green)
                     }
-
-                    if failedCount > 0 {
-                        Text(L("\(failedCount) échec(s).", "\(failedCount) failure(s)."))
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
-                    }
-                    if let finalError {
-                        Text(finalError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .multilineTextAlignment(.center)
-                    }
                 } else {
                     ProgressView(value: uploader.progress)
                         .progressViewStyle(.linear)
@@ -587,6 +570,7 @@ private struct KDriveContinuousUploadSheet: View {
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .errorAlert(finalError)
         .presentationDetents([.medium])
         .interactiveDismissDisabled(uploader.isUploading)
         .onAppear { startUploadIfNeeded() }

@@ -81,8 +81,8 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les 
 
 - Trois médias simultanés, remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
-- Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts encore en vol. Les médias déjà enregistrés sont conservés. Aucun délai n’est inventé : l’app attend celui annoncé par le serveur (`Retry-After`, sinon `x-ratelimit-reset`) et n’affiche une heure de reprise que s’il existe. S’il n’existe pas, le message indique seulement qu’une relance est possible. Dans tous les cas, relancer efface les pauses enregistrées et retente le serveur immédiatement, quitte à retomber sur le même refus. Les erreurs portant sur un seul média absent (HTTP 404) restent ignorées et le parcours continue.
-- Reprise par fichiers complets : relancer le pseudo saute les URLs déjà enregistrées. Un transfert interrompu recommence depuis le début. Le parcours RSS repart de la première page.
+- Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts en vol. L’alerte indique uniquement la cause (service et code HTTP) et le nombre total de médias conservés dans la collection. Les limites annoncées par le serveur sont mémorisées, mais une relance manuelle efface ces limites et le cache RSS puis retente le réseau ; un refus réel du serveur peut donc se reproduire.
+- Les curseurs des nouveautés et de l’historique restent distincts. Seule une page complètement traitée est validée ; une page interrompue est reprise et les fichiers complets déjà présents sont ignorés. L’ancien historique est reconstruit une fois par collection pour récupérer les posts marqués à tort comme terminés par les versions précédentes.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
 - Garder l'application au premier plan. Le prototype n'implémente pas de service de téléchargement en arrière-plan.
 - Vérifier l'espace libre et télécharger les médias que l'on a le droit de conserver.
@@ -172,7 +172,7 @@ Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tro
 
 ## Galerie compacte et zones tactiles
 
-Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs fatales apparaissent dans une alerte ponctuelle ; un refus HTTP 429 y affiche le délai du serveur quand il existe, sinon la seule invitation à relancer.
+Les compteurs sont regroupés sur une ligne de texte sans panneau de fond. La ligne de transfert, son spinner et son espace réservé sont supprimés. Les erreurs apparaissent dans une alerte ponctuelle, sans duplication dans la ligne d’état au-dessus des médias. Un échec de téléchargement indique seulement sa cause et le nombre total de médias conservés dans la collection. Les erreurs des aperçus, de la connexion et de kDrive sont également présentées dans des alertes natives.
 
 Chaque bouton de galerie définit une zone tactile rectangulaire et les overlays décoratifs ne participent pas au hit-testing. Le découpage visuel seul de scaledToFill ne suffisait pas à borner la zone tactile. Vérifier sur iPhone les touchers près du bord supérieur d’une vidéo et du bord inférieur de la carte qui la précède.
 

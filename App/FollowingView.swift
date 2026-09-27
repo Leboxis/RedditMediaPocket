@@ -63,13 +63,10 @@ struct FollowingView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage {
+                } else if errorMessage != nil {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 36)).foregroundStyle(.orange)
-                        Text(errorMessage)
-                            .font(.footnote).foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
                             .buttonStyle(.borderedProminent)
                     }
@@ -161,6 +158,7 @@ struct FollowingView: View {
                 }
         }
         .tint(.orange)
+        .errorAlert(kDriveError ?? errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, friends == nil { await load() }
         }
@@ -231,13 +229,10 @@ struct FollowingUserPosts: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let errorMessage {
+            } else if errorMessage != nil {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 36)).foregroundStyle(.orange)
-                    Text(errorMessage)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
                     Button(L("Réessayer", "Retry")) { retryCount += 1 }
                         .buttonStyle(.borderedProminent)
                 }
@@ -274,6 +269,7 @@ struct FollowingUserPosts: View {
                 .accessibilityLabel(L("Tout télécharger", "Download all"))
             }
         }
+        .errorAlert(errorMessage)
         .task(id: retryCount) {
             if posts == nil { await load() }
         }
@@ -410,10 +406,8 @@ private struct FollowingMediaCard: View {
                     .accessibilityLabel(L("Aperçu uniquement", "Preview only"))
                     .accessibilityAddTraits(.isImage)
             }
-            if let errorMessage {
-                Text(errorMessage).font(.caption).foregroundStyle(.secondary)
-            }
         }
+        .errorAlert(errorMessage)
         .task(id: imageURL) {
             image = nil
             imageLoaded = false
@@ -460,7 +454,7 @@ private struct FollowingMediaCard: View {
                 selection = FollowingPreviewSelection(urls: urls, selected: selected)
             } catch {
                 clearTemporaryFiles()
-                if !Task.isCancelled { errorMessage = error.localizedDescription }
+                if !Task.isCancelled, !(error is CancellationError) { errorMessage = error.localizedDescription }
             }
         }
         .fullScreenCover(item: $selection, onDismiss: clearTemporaryFiles) { preview in
