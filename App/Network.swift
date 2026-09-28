@@ -117,7 +117,17 @@ import MediaCore
         LogCenter.net("GET \(LogDiagnostics.requestSummary(url))…")
         let result: (Data, URLResponse)
         do {
-            result = try await session.data(for: req)
+            if url.host?.lowercased() == "x-fetish.tube", url.path.hasPrefix("/albums/") {
+                // Gallery pages issue signed image URLs. Fetching them over
+                // IPv4 keeps their source address consistent with get_image
+                // and the IPv4-only storage host.
+                LogCenter.net("X-Fetish : page en IPv4…")
+                let (body, response) = try await XFetishIPv4Pages.data(for: url,
+                    headers: req.allHTTPHeaderFields ?? [:])
+                result = (body, response)
+            } else {
+                result = try await session.data(for: req)
+            }
         } catch {
             if !Task.isCancelled {
                 let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
