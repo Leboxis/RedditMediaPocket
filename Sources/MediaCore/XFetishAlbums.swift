@@ -79,6 +79,10 @@ public enum XFetishAlbums {
         return parts.url!
     }
 
+    public static func extraImagesHeaders(album: Album) -> [String: String] {
+        ["X-Requested-With": "XMLHttpRequest", "Referer": album.url.absoluteString]
+    }
+
     public static func parseListing(_ data: Data, model: String, page: Int) throws -> ListingPage {
         let html = String(decoding: data, as: UTF8.self)
         guard let listingHTML = divSection(id: "list_albums_common_albums_list", in: html) else {
