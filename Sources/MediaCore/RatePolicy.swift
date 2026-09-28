@@ -7,6 +7,7 @@ public enum RatePolicy {
         if host == "reddit.com" || host.hasSuffix(".reddit.com") || host == "redd.it" || host.hasSuffix(".redd.it") { return "Reddit" }
         if host == "redgifs.com" || host.hasSuffix(".redgifs.com") { return "RedGIFs" }
         if host == "imgur.com" || host.hasSuffix(".imgur.com") { return "Imgur" }
+        if host == "x-fetish.tube" || host.hasSuffix(".x-fetish.tube") { return "X-Fetish" }
         return host
     }
 

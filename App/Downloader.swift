@@ -9,11 +9,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var name: String
     var isSubreddit = false
     var isSaved = false
+    var isXFetish = false
     var archived = false
     var lastRun: Date?
     /// Clé canonique : `u/pseudo`, `r/sub` ou `saved/pseudo`.
     var id: String {
         if isSaved { return "saved/\(name)" }
+        if isXFetish { return "x/\(name)" }
         return (isSubreddit ? "r/" : "u/") + name
     }
     var displayName: String { isSaved ? "Saved" : id }
@@ -21,14 +23,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// dans les pseudos : aucune collection existante ne peut entrer en collision.
     var folderName: String {
         if isSaved { return "saved.\(name)" }
+        if isXFetish { return "x.\(name)" }
         return isSubreddit ? "r.\(name)" : name
     }
 
-    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, archived, lastRun }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, archived, lastRun }
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
+        self.isXFetish = isXFetish
         self.archived = archived
         self.lastRun = lastRun
     }
@@ -37,6 +41,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         name = try container.decode(String.self, forKey: .name)
         isSubreddit = try container.decodeIfPresent(Bool.self, forKey: .isSubreddit) ?? false
         isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
+        isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
     }
@@ -75,15 +80,16 @@ struct SavedMediaCount: Codable {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
     @Published private(set) var sessionLimit = 3
-    /// Sélecteur de source : `u` profil, `r` subreddit, `saved` éléments sauvegardés
+    /// Sélecteur de source : `u` profil, `r` subreddit, `saved` éléments sauvegardés,
+    /// `x` albums publics d'un profil X-Fetish.
     /// du compte connecté. Le cœur ignore la saisie ; pour u/ et r/,
     /// un texte contenant déjà `/` garde la priorité.
     @Published var sourceKind: String = {
         let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
-        return ["u", "r", "saved"].contains(saved) ? saved : "u"
+        return SourceKind(rawValue: saved) == nil ? "u" : saved
     }() {
         didSet {
-            let valid = ["u", "r", "saved"].contains(sourceKind) ? sourceKind : "u"
+            let valid = SourceKind(rawValue: sourceKind) == nil ? "u" : sourceKind
             if valid != sourceKind { sourceKind = valid; return }
             UserDefaults.standard.set(valid, forKey: "sourceKind")
         }
@@ -165,7 +171,7 @@ struct SavedMediaCount: Codable {
 
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
     private func display(_ collection: UserCollection) {
-        sourceKind = collection.isSaved ? "saved" : (collection.isSubreddit ? "r" : "u")
+        sourceKind = collection.isSaved ? "saved" : (collection.isXFetish ? "x" : (collection.isSubreddit ? "r" : "u"))
         username = collection.name
     }
 
@@ -186,6 +192,7 @@ struct SavedMediaCount: Codable {
                 case .user(let name): sourceKind = "u"; username = name
                 case .subreddit(let name): sourceKind = "r"; username = name
                 case .saved(let name): sourceKind = "saved"; username = name
+                case .xFetish(let name): sourceKind = "x"; username = name
                 }
             } else {
                 username = last
@@ -214,6 +221,8 @@ struct SavedMediaCount: Codable {
                 collections.append(UserCollection(name: sub, isSubreddit: true))
             } else if folder.hasPrefix("saved."), let owner = try? MediaExtractor.username(String(folder.dropFirst(6))) {
                 collections.append(UserCollection(name: owner, isSaved: true))
+            } else if folder.hasPrefix("x."), let model = try? XFetishAlbums.modelName(String(folder.dropFirst(2))) {
+                collections.append(UserCollection(name: model, isXFetish: true))
             } else {
                 collections.append(UserCollection(name: folder))
             }
@@ -239,6 +248,7 @@ struct SavedMediaCount: Codable {
             case .user(let name): sourceKind = "u"; username = name
             case .subreddit(let name): sourceKind = "r"; username = name
             case .saved(let name): sourceKind = "saved"; username = name
+            case .xFetish(let name): sourceKind = "x"; username = name
             }
         } else {
             username = id
@@ -255,6 +265,7 @@ struct SavedMediaCount: Codable {
             case .user(let name): collections.append(UserCollection(name: name))
             case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
             case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
+            case .xFetish(let name): collections.append(UserCollection(name: name, isXFetish: true))
             }
         }
         saveCollections()
@@ -569,6 +580,10 @@ struct SavedMediaCount: Codable {
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
         }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        if case .xFetish(let model) = source {
+            try await runXFetish(model: model, canonical: canonical, folder: folder)
+            return
+        }
         // Older versions swallowed media 429s and marked incomplete pages as
         // visited. Re-scan once; existing files are skipped by prepareDownloads.
         let migrationKey = "resumePolicyVersion.\(canonical)"
@@ -643,6 +658,84 @@ struct SavedMediaCount: Codable {
         }
     }
 
+    /// X-Fetish has no RSS cursor. Rescan every public album on each run so a
+    /// new image in an older album is found; stable image IDs skip files on disk.
+    private func runXFetish(model: String, canonical: String, folder: URL) async throws {
+        var page = 1
+        var scannedPages = Set<Int>()
+        var scannedAlbums = Set<String>()
+        var seenMedia = Set<Media>()
+        var usedFilenames = Set<String>()
+        var preparedCount = 0
+        let existingImageIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.xFetishImageID(inFileName: $0.lastPathComponent)
+        })
+
+        while true {
+            try Task.checkCancellation()
+            guard scannedPages.insert(page).inserted, scannedPages.count <= 500 else {
+                throw XFetishError.tooManyPages
+            }
+            status = L("Recherche des albums X-Fetish…", "Finding X-Fetish albums…")
+            let listingData = try await network.data(XFetishAlbums.listingURL(model: model, page: page))
+            let listing = try XFetishAlbums.parseListing(listingData, model: model, page: page)
+            LogCenter.info(L("X-Fetish : page \(page), \(listing.albums.count) albums.", "X-Fetish: page \(page), \(listing.albums.count) albums."))
+
+            for album in listing.albums {
+                try Task.checkCancellation()
+                guard scannedAlbums.insert(album.id).inserted else { continue }
+                status = L("Album \(scannedAlbums.count) : \(album.title)", "Album \(scannedAlbums.count): \(album.title)")
+                let galleryData = try await network.data(album.url)
+                let gallery = try XFetishAlbums.parseGallery(galleryData, album: album)
+                var images = gallery.images
+                var imageIDs = Set(images.map(\.id))
+
+                if gallery.extraPages > 0 {
+                    for extraPage in 1...gallery.extraPages {
+                        try Task.checkCancellation()
+                        let fragment = try await network.data(XFetishAlbums.extraImagesURL(album: album, page: extraPage))
+                        let extraImages = XFetishAlbums.parseImages(fragment, albumID: album.id)
+                        guard !extraImages.isEmpty else { throw XFetishError.invalidGallery }
+                        for image in extraImages where imageIDs.insert(image.id).inserted {
+                            images.append(image)
+                        }
+                    }
+                }
+                LogCenter.info(L("X-Fetish : album \(album.id), \(images.count) images.", "X-Fetish: album \(album.id), \(images.count) images."))
+
+                var mediaOverrides: [String: [Media]] = [:]
+                let newImages = images.filter { !existingImageIDs.contains("xf-\(album.id)-\($0.id)") }
+                let posts = newImages.map { image -> Post in
+                    let id = "xf-\(album.id)-\(image.id)"
+                    mediaOverrides[id] = [.direct(image.url)]
+                    return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides)
+                try await executeDownloads(downloads, &preparedCount)
+            }
+
+            guard let next = listing.nextPage else { break }
+            guard next > page else { throw XFetishError.invalidListing }
+            page = next
+        }
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("X-Fetish : \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images préparées.", "X-Fetish: \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images prepared."))
+        if failed == 0 {
+            status = count == 0 ? L("Aucune nouvelle image accessible", "No new accessible images") : L("\(count) images téléchargées", "\(count) images downloaded")
+        } else {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) images inaccessibles ou non enregistrées.\n\(kept) médias conservés.",
+                             "\(failed) images unavailable or unsaved.\n\(kept) media files kept.")
+        }
+    }
+
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
     private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
@@ -698,9 +791,10 @@ struct SavedMediaCount: Codable {
     private func prepareDownloads(_ posts: [Post], folder: URL,
                                    seenMedia: inout Set<Media>,
                                    usedFilenames: inout Set<String>,
-                                   author: String = "") async throws -> [Download] {
+                                   author: String = "",
+                                   mediaOverrides: [String: [Media]] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
-        let candidates = posts.filter { MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
+        let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
             try await withThrowingTaskGroup(of: (String, [Media]).self) { group in
                 for post in candidates {
@@ -730,7 +824,7 @@ struct SavedMediaCount: Codable {
             LogCenter.info(L("Galeries : \(candidates.count) à résoudre, \(resolved) médias trouvés.", "Galleries: \(candidates.count) to resolve, \(resolved) media found."))
         }
         for post in posts {
-            var media = MediaExtractor.extract(post.html)
+            var media = mediaOverrides[post.id] ?? MediaExtractor.extract(post.html)
             if media.isEmpty {
                 media = galleryLists[post.id] ?? []
             }
