@@ -694,8 +694,12 @@ struct SavedMediaCount: Codable {
                     for extraPage in 1...gallery.extraPages {
                         try Task.checkCancellation()
                         let fragment = try await network.data(XFetishAlbums.extraImagesURL(album: album, page: extraPage))
-                        let extraImages = XFetishAlbums.parseImages(fragment, albumID: album.id)
-                        guard !extraImages.isEmpty else { throw XFetishError.invalidGallery }
+                        guard let extraImages = try XFetishAlbums.parseExtraImages(fragment, albumID: album.id,
+                                                                                  hasEarlierImages: !images.isEmpty) else {
+                            LogCenter.info(L("X-Fetish : album \(album.id), page supplémentaire vide, fin de la galerie.",
+                                             "X-Fetish: album \(album.id), empty extra page, end of gallery."))
+                            break
+                        }
                         for image in extraImages where imageIDs.insert(image.id).inserted {
                             images.append(image)
                         }

@@ -151,6 +151,10 @@ public enum XFetishAlbums {
     }
 
     public static func parseExtraImages(_ data: Data, albumID: String, hasEarlierImages: Bool) throws -> [Image]? {
+        if data.isEmpty {
+            guard hasEarlierImages else { throw XFetishError.invalidGallery }
+            return nil
+        }
         let images = parseImages(data, albumID: albumID)
         guard !images.isEmpty else { throw XFetishError.invalidGallery }
         return images
