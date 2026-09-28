@@ -136,4 +136,58 @@ final class XFetishAlbumsTests: XCTestCase {
             XCTAssertTrue(error is XFetishIPv4Error)
         }
     }
+
+    func testIPv4RedirectPreservesSignedLocation() throws {
+        let source = URL(string: "https://x-fetish.tube/get_image/10/example/")!
+        let destination = "https://storage4.x-fetish.tube/remote_control.php?file=a%2Fb.jpg&acctoken=test%2Btoken"
+        let headers = Data("HTTP/1.1 302 Found\r\nlOcAtIoN: \(destination)\r\nContent-Length: 0".utf8)
+        XCTAssertEqual(try XFetishIPv4.redirectURL(headerData: headers, from: source).absoluteString, destination)
+        let relative = Data("HTTP/1.0 307 Temporary Redirect\r\nLocation: /next?acctoken=test".utf8)
+        XCTAssertEqual(try XFetishIPv4.redirectURL(headerData: relative, from: source).absoluteString,
+                       "https://x-fetish.tube/next?acctoken=test")
+    }
+
+    func testIPv4UnexpectedStatusIsReportedWithoutServerSecrets() {
+        let source = URL(string: "https://x-fetish.tube/get_image/10/example/?token=source-secret")!
+        for code in [103, 200, 403, 429, 503] {
+            let headers = Data("HTTP/1.1 \(code) reason-secret\r\nLocation: https://storage4.x-fetish.tube/?acctoken=location-secret".utf8)
+            XCTAssertThrowsError(try XFetishIPv4.redirectURL(headerData: headers, from: source)) { error in
+                guard case XFetishIPv4Error.unexpectedStatus(let received) = error else {
+                    return XCTFail("Expected an explicit HTTP status, got \(type(of: error))")
+                }
+                XCTAssertEqual(received, code)
+                XCTAssertTrue(error.localizedDescription.contains("\(code)"))
+                XCTAssertFalse(error.localizedDescription.contains("secret"))
+            }
+        }
+    }
+
+    func testIPv4MissingLocationIsDistinctFromMalformedResponse() {
+        let source = URL(string: "https://x-fetish.tube/get_image/10/example/")!
+        for headers in ["HTTP/1.1 302 Found", "HTTP/1.1 302 Found\r\nLocation: "] {
+            XCTAssertThrowsError(try XFetishIPv4.redirectURL(headerData: Data(headers.utf8), from: source)) { error in
+                guard case XFetishIPv4Error.missingLocation(302) = error else {
+                    return XCTFail("Expected missing Location")
+                }
+            }
+        }
+        for headers in ["", "not-http 302 Found\r\nLocation: /next", "HTTP/1.1 invalid"] {
+            XCTAssertThrowsError(try XFetishIPv4.redirectURL(headerData: Data(headers.utf8), from: source)) { error in
+                guard case XFetishIPv4Error.invalidResponse = error else {
+                    return XCTFail("Expected malformed response")
+                }
+            }
+        }
+    }
+
+    func testIPv4NonHTTPSLocationIsRejectedWithoutTokenDisclosure() {
+        let source = URL(string: "https://x-fetish.tube/get_image/10/example/")!
+        let headers = Data("HTTP/1.1 302 Found\r\nLocation: http://storage4.x-fetish.tube/?acctoken=private-token".utf8)
+        XCTAssertThrowsError(try XFetishIPv4.redirectURL(headerData: headers, from: source)) { error in
+            guard case XFetishIPv4Error.invalidLocation = error else {
+                return XCTFail("Expected invalid Location")
+            }
+            XCTAssertFalse(error.localizedDescription.contains("private-token"))
+        }
+    }
 }
