@@ -7,7 +7,7 @@ public enum LogDiagnostics {
         let replacements: [(String, String)] = [
             (#"(?i)\b(?:Cookie|Set-Cookie)\s*:\s*[^\r\n]*"#, "[cookie masqué]"),
             (#"(?i)\b(Authorization\s*:\s*(?:Bearer|Basic)\s+|Bearer\s+)[^\s,;]+"#, "$1[masqué]"),
-            (#"(?i)\b((?:feed|user|token|access_token|refresh_token|client_secret|api_key|reddit_session|password|session)\s*=\s*)[^\s&;#\"'<>]+"#, "$1[masqué]")
+            (#"(?i)\b((?:feed|user|i-acctoken|acctoken|token|access_token|refresh_token|client_secret|api_key|reddit_session|password|session)\s*=\s*)[^\s&;#\"'<>]+"#, "$1[masqué]")
         ]
         for (pattern, replacement) in replacements {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
@@ -22,6 +22,10 @@ public enum LogDiagnostics {
         var details: [String] = []
         let items = parts.queryItems ?? []
         if items.contains(where: { $0.name == "feed" }) { details.append(L("flux privé", "private feed")) }
+        // X-Fetish : présence du jeton sans sa valeur, pour diagnostiquer un 403
+        // sans jamais exposer le secret.
+        if items.contains(where: { $0.name == "i-acctoken" }) { details.append("token=oui") }
+        if items.contains(where: { $0.name == "acctoken" }) { details.append("acctoken=oui") }
         for key in ["limit", "after"] {
             if let value = items.first(where: { $0.name == key })?.value {
                 let safe = value.range(of: #"^[A-Za-z0-9_]{1,64}$"#, options: .regularExpression) != nil

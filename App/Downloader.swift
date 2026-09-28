@@ -546,6 +546,7 @@ struct SavedMediaCount: Codable {
         let postDate: Date?
         let author: String
         let postLink: String?
+        let headers: [String: String]?
     }
 
     private func run() async throws {
@@ -708,15 +709,19 @@ struct SavedMediaCount: Codable {
                 LogCenter.info(L("X-Fetish : album \(album.id), \(images.count) images.", "X-Fetish: album \(album.id), \(images.count) images."))
 
                 var mediaOverrides: [String: [Media]] = [:]
+                var mediaHeaders: [String: [String: String]] = [:]
                 let newImages = images.filter { !existingImageIDs.contains("xf-\(album.id)-\($0.id)") }
                 let posts = newImages.map { image -> Post in
                     let id = "xf-\(album.id)-\(image.id)"
-                    mediaOverrides[id] = [.direct(image.url)]
+                    let media = Media.direct(image.url)
+                    mediaOverrides[id] = [media]
+                    // Anti-hotlink : le stockage exige le Referer de l'album.
+                    mediaHeaders[media.key] = XFetishAPI.headers(referer: album.url)
                     return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
                 }
                 let downloads = try await prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames,
-                    author: canonical, mediaOverrides: mediaOverrides)
+                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
                 try await executeDownloads(downloads, &preparedCount)
             }
 
@@ -796,7 +801,8 @@ struct SavedMediaCount: Codable {
                                    seenMedia: inout Set<Media>,
                                    usedFilenames: inout Set<String>,
                                    author: String = "",
-                                   mediaOverrides: [String: [Media]] = [:]) async throws -> [Download] {
+                                   mediaOverrides: [String: [Media]] = [:],
+                                   mediaHeaders: [String: [String: String]] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
@@ -865,7 +871,7 @@ struct SavedMediaCount: Codable {
                     renamedExisting = true
                 } else {
                     let postLink = BinaryMetadata.postLink(postID: post.id, link: post.link)
-                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink))
+                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink, headers: mediaHeaders[item.key]))
                 }
             }
         }
@@ -936,7 +942,7 @@ struct SavedMediaCount: Codable {
         try Task.checkCancellation()
         active += 1
         defer { active -= 1 }
-        let temporary = try await resolveAndDownload(item.media)
+        let temporary = try await resolveAndDownload(item.media, headers: item.headers)
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
@@ -1110,11 +1116,11 @@ struct SavedMediaCount: Codable {
             return try await self.network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
         }
     }
-    private func resolveAndDownload(_ media: Media) async throws -> URL {
+    private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil) async throws -> URL {
         switch media {
         case .direct(let url):
             LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
-            return try await network.download(url)
+            return try await network.download(url, headers: headers)
         case .redgifs(let id):
             do {
                 return try await downloadRedgifs(id: id)

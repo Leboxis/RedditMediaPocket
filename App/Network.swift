@@ -51,6 +51,16 @@ import MediaCore
         try Task.checkCancellation()
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
+        if XFetishAPI.isXFetish(url) {
+            // Anti-hotlink `storage*.x-fetish.tube/remote_control.php` (HTTP 403
+            // sans Referer) : valeurs par défaut navigateur, surchargeables par
+            // `headers` (ex. Referer = page album d'origine).
+            let defaults = XFetishAPI.headers()
+            let provided = Set((headers ?? [:]).keys.map { $0.lowercased() })
+            for (field, value) in defaults where !provided.contains(field.lowercased()) {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
+        }
         if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         try Task.checkCancellation()
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }

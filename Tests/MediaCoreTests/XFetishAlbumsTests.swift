@@ -104,4 +104,25 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertThrowsError(try XFetishAlbums.parseListing(Data("<html>blocked</html>".utf8), model: "example", page: 1))
         XCTAssertThrowsError(try XFetishAlbums.parseGallery(Data("<html>blocked</html>".utf8), album: album))
     }
+
+    func testAPIHeadersUseAlbumRefererAndBrowserAccept() {
+        let album = URL(string: "https://x-fetish.tube/albums/3948/example/")!
+        let headers = XFetishAPI.headers(referer: album)
+        XCTAssertEqual(headers["Referer"], album.absoluteString)
+        XCTAssertEqual(headers["Origin"], "https://x-fetish.tube")
+        XCTAssertTrue(headers["Accept"]?.contains("image/") == true)
+        XCTAssertTrue(XFetishAPI.isXFetish(album))
+        XCTAssertTrue(XFetishAPI.isXFetish(URL(string: "https://storage4.x-fetish.tube/remote_control.php?file=a.jpg&acctoken=b")!))
+        XCTAssertFalse(XFetishAPI.isXFetish(URL(string: "https://www.reddit.com/")!))
+        let defaults = XFetishAPI.headers()
+        XCTAssertEqual(defaults["Referer"], "https://x-fetish.tube/")
+    }
+
+    func testStorageRedirectKeepsQueryForNonCredentialHosts() {
+        let source = URL(string: "https://x-fetish.tube/get_image/10/abc/sources/3000/3948/2652884.jpg/?i-acctoken=tok123")!
+        let destination = URL(string: "https://storage4.x-fetish.tube/remote_control.php?file=abc.jpg&acctoken=tok456")!
+        let followed = SavedFeed.redirectURL(from: source, to: destination)
+        XCTAssertEqual(followed?.absoluteString, destination.absoluteString)
+        XCTAssertTrue(followed?.query?.contains("acctoken=tok456") == true)
+    }
 }

@@ -152,6 +152,21 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
             redirected.url = url
             redirected.setValue(nil, forHTTPHeaderField: "Cookie")
             if url.host != response.url?.host { redirected.setValue(nil, forHTTPHeaderField: "Authorization") }
+            // Anti-hotlink X-Fetish : conserve le Referer d'album sur le
+            // stockage, sinon `remote_control.php` répond HTTP 403.
+            if XFetishAPI.isXFetish(url) {
+                let current = task.currentRequest ?? task.originalRequest
+                if redirected.value(forHTTPHeaderField: "Referer") == nil,
+                   let referer = current?.value(forHTTPHeaderField: "Referer") {
+                    redirected.setValue(referer, forHTTPHeaderField: "Referer")
+                }
+                if redirected.value(forHTTPHeaderField: "Referer") == nil {
+                    redirected.setValue("https://x-fetish.tube/", forHTTPHeaderField: "Referer")
+                }
+                if redirected.value(forHTTPHeaderField: "Origin") == nil {
+                    redirected.setValue(current?.value(forHTTPHeaderField: "Origin") ?? "https://x-fetish.tube", forHTTPHeaderField: "Origin")
+                }
+            }
             if let cookie = await RedditSession.shared.cookieHeader(for: url) {
                 redirected.setValue(cookie, forHTTPHeaderField: "Cookie")
             }
