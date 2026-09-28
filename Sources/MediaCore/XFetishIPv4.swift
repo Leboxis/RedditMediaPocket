@@ -14,7 +14,7 @@ public enum XFetishIPv4Error: LocalizedError {
         case .connectionFailed:
             return L("Connexion IPv4 X-Fetish impossible.", "X-Fetish IPv4 connection failed.")
         case .invalidResponse:
-            return L("Redirection X-Fetish illisible.", "Unreadable X-Fetish redirect.")
+            return L("Réponse X-Fetish illisible.", "Unreadable X-Fetish response.")
         case .unexpectedStatus(let code):
             return L("Requête get_image en IPv4 : HTTP \(code), redirection attendue.",
                      "IPv4 get_image request: HTTP \(code), expected a redirect.")
