@@ -150,6 +150,12 @@ public enum XFetishAlbums {
         return images
     }
 
+    public static func parseExtraImages(_ data: Data, albumID: String, hasEarlierImages: Bool) throws -> [Image]? {
+        let images = parseImages(data, albumID: albumID)
+        guard !images.isEmpty else { throw XFetishError.invalidGallery }
+        return images
+    }
+
     private static func numeric(_ value: String) -> Bool {
         imageIDRegex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) != nil
     }
