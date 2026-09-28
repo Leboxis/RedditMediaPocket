@@ -33,6 +33,7 @@ final class RatePolicyTests: XCTestCase {
     func testServicesAreIsolatedAndCDNsShareLimits() {
         XCTAssertEqual(RatePolicy.service(for: "i.redd.it"), RatePolicy.service(for: "www.reddit.com"))
         XCTAssertEqual(RatePolicy.service(for: "api.redgifs.com"), RatePolicy.service(for: "media.redgifs.com"))
+        XCTAssertEqual(RatePolicy.service(for: "x-fetish.tube"), RatePolicy.service(for: "storage4.x-fetish.tube"))
         XCTAssertNotEqual(RatePolicy.service(for: "redgifs.com.example.com"), "RedGIFs")
         var limits = ServiceLimits()
         let now = Date()

@@ -116,7 +116,8 @@ struct ContentView: View {
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
-                TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") : L("pseudo", "username"), text: $model.username)
+                TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") :
+                          (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("pseudo", "username")), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -234,7 +235,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel(L("Galerie vide", "Empty gallery"))
-            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/ ou ♥)", "Choose a source (u/, r/ or ♥)"))
+            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, ♥ ou x/)", "Choose a source (u/, r/, ♥ or x/)"))
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -284,7 +285,7 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection?.name ?? "Pocket"
+                    collectionLabel: model.activeCollection.map { $0.isXFetish ? $0.id : $0.name } ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -311,7 +312,7 @@ struct ContentView: View {
         let active = model.activeUser == collection.id
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))
                 Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }
@@ -340,20 +341,20 @@ struct ContentView: View {
 }
 
 /// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
-/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → ♥.
+/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → ♥ → x/.
 private struct SourceKindToggle: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Binding var kind: String
     @State private var halfFlip = false
 
     private func next(_ current: String) -> String {
-        current == "u" ? "r" : (current == "r" ? "saved" : "u")
+        SourceKind(rawValue: current)?.next.rawValue ?? SourceKind.user.rawValue
     }
     private func face(_ current: String) -> String {
-        current == "r" ? "r/" : (current == "saved" ? "♥" : "u/")
+        current == "r" ? "r/" : (current == "saved" ? "♥" : (current == "x" ? "x/" : "u/"))
     }
     private func spoken(_ current: String) -> String {
-        current == "r" ? "subreddit" : (current == "saved" ? L("sauvegardés", "saved") : L("profil", "profile"))
+        current == "r" ? "subreddit" : (current == "saved" ? L("sauvegardés", "saved") : (current == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("profil", "profile")))
     }
 
     var body: some View {

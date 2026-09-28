@@ -26,31 +26,32 @@ public enum Media: Hashable, Sendable {
 }
 
 public enum FeedError: LocalizedError {
-    case invalidFeed, invalidUsername, invalidSubreddit, loginRequired, unsupportedVideo
+    case invalidFeed, invalidUsername, invalidSubreddit, invalidXFetishProfile, loginRequired, unsupportedVideo
     public var errorDescription: String? {
         switch self {
         case .unsupportedVideo: return L("Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée.", "Segmented video manifest unsupported; no lower-quality version downloaded.")
         case .invalidFeed: return L("Réponse RSS invalide : Reddit peut refuser cet accès anonyme.", "Invalid RSS response: Reddit may deny anonymous access.")
         case .invalidUsername: return L("Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo).", "Invalid username (3 to 20 letters, digits, hyphens or underscores, e.g. u/username).")
         case .invalidSubreddit: return L("Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics).", "Invalid subreddit (2 to 21 letters, digits or underscores, e.g. r/pics).")
+        case .invalidXFetishProfile: return L("Profil X-Fetish invalide. Saisis le nom indiqué après /models/ dans son adresse.", "Invalid X-Fetish profile. Enter the name shown after /models/ in its address.")
         case .loginRequired: return L("Connecte-toi à Reddit dans les Réglages, puis relance : les éléments sauvegardés exigent une session.", "Sign in to Reddit in Settings, then try again: saved posts require a session.")
         }
     }
 }
 
-/// Source d'un parcours RSS : profil utilisateur, subreddit ou éléments
-/// sauvegardés du compte connecté. Les trois exposent le même format Atom,
-/// donc le même `FeedParser` s'applique. Pour `saved`, résoudre le lien privé
-/// avec `SavedFeed` depuis les préférences du compte connecté avant le parcours.
+/// Identité d'une collection. Les trois sources Reddit exposent Atom et
+/// utilisent `FeedParser`. X-Fetish passe par `XFetishAlbums` et son parcours
+/// séparé. Pour `saved`, résoudre le lien privé avec `SavedFeed`.
 public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)
     case saved(String)
+    case xFetish(String)
 
     /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
     public static let subredditSorts = ["new", "hot", "top"]
 
-    /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo` ou un pseudo nu
+    /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,6 +65,9 @@ public enum FeedSource: Hashable, Sendable {
         if lower.hasPrefix("u/") {
             return try .user(MediaExtractor.username(String(trimmed.dropFirst(2))))
         }
+        if lower.hasPrefix("x/") {
+            return try .xFetish(XFetishAlbums.modelName(String(trimmed.dropFirst(2))))
+        }
         return try .user(MediaExtractor.username(trimmed))
     }
 
@@ -75,13 +79,14 @@ public enum FeedSource: Hashable, Sendable {
         return name
     }
 
-    /// Identifiant canonique stable (`u/pseudo`, `r/sub` ou `saved/pseudo`),
+    /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo` ou `x/profil`),
     /// utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
         case .subreddit(let name): return "r/\(name)"
         case .saved(let name): return "saved/\(name)"
+        case .xFetish(let name): return "x/\(name)"
         }
     }
 
@@ -92,23 +97,26 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// Dossier de stockage. Les préfixes `r.` et `saved.` (point interdit dans
-    /// les pseudos) évitent toute collision entre profil, subreddit et sauvegardés.
+    /// Dossier de stockage. Les préfixes `r.`, `saved.` et `x.` (point interdit
+    /// dans les pseudos Reddit) évitent les collisions entre sources.
     public var folderName: String {
         switch self {
         case .user(let name): return name
         case .subreddit(let name): return "r.\(name)"
         case .saved(let name): return "saved.\(name)"
+        case .xFetish(let name): return "x.\(name)"
         }
     }
 
-    /// URL RSS publique (non authentifiée pour saved ; utiliser SavedFeed).
+    /// URL de départ publique (RSS pour Reddit, liste d'albums pour X-Fetish).
     /// `after` est le curseur `t3_…` du dernier post vu.
     /// `sort` ne s'applique qu'aux subreddits (`new`, `hot`, `top` + `t=month`).
     public func feedURL(sort: String = "new", after: String? = nil) -> URL {
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
         if let after { items.append(URLQueryItem(name: "after", value: after)) }
         switch self {
+        case .xFetish(let name):
+            return XFetishAlbums.listingURL(model: name, page: 1)
         case .user(let name):
             var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
             components.queryItems = items

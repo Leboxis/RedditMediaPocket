@@ -156,7 +156,7 @@ public enum FilenamePolicy {
         // et `saved/foo` produiraient le même dossier `Foo` et leurs médias
         // se surécriraient dans kDrive.
         var typePrefix = ""
-        if parts.count > 1, let first = parts.first?.lowercased(), ["u", "r", "saved"].contains(first) {
+        if parts.count > 1, let first = parts.first?.lowercased(), ["u", "r", "saved", "x"].contains(first) {
             typePrefix = String(first.prefix(1)).uppercased()
         }
         if let last = parts.last { base = last }
