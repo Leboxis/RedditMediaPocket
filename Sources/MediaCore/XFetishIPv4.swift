@@ -80,28 +80,13 @@ public enum XFetishIPv4 {
 
         return try await withCheckedThrowingContinuation { cont in
             var resumed = false
+            var buffer = Data()
             func resume(_ result: Result<URL, Error>) {
                 guard !resumed else { return }
                 resumed = true
                 conn.cancel()
                 cont.resume(with: result)
             }
-            conn.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    conn.send(content: requestData, completion: .contentProcessed { error in
-                        if let error { resume(.failure(error)); return }
-                        receiveHeaders()
-                    })
-                case .failed(let error):
-                    resume(.failure(error))
-                case .cancelled:
-                    resume(.failure(XFetishIPv4Error.connectionFailed))
-                default:
-                    break
-                }
-            }
-            var buffer = Data()
             func receiveHeaders() {
                 conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, isComplete, error in
                     if let error { resume(.failure(error)); return }
@@ -141,6 +126,21 @@ public enum XFetishIPv4 {
                         resume(.failure(XFetishIPv4Error.invalidResponse)); return
                     }
                     receiveHeaders()
+                }
+            }
+            conn.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    conn.send(content: requestData, completion: .contentProcessed { error in
+                        if let error { resume(.failure(error)); return }
+                        receiveHeaders()
+                    })
+                case .failed(let error):
+                    resume(.failure(error))
+                case .cancelled:
+                    resume(.failure(XFetishIPv4Error.connectionFailed))
+                default:
+                    break
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
