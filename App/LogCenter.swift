@@ -35,8 +35,8 @@ struct LogEntry: Identifiable, Equatable {
     @Published private(set) var entries: [LogEntry] = []
     @Published private(set) var errorCount = 0
 
-    private static let maxMemory = 2000
-    private static let maxFileBytes = 500 * 1024
+    private static let maxMemory = 10_000
+    private static let maxFileBytes = 2 * 1024 * 1024
     private static let ioQueue = DispatchQueue(label: "LogCenter.io", qos: .utility)
 
     private var fileURL0: URL {
@@ -67,28 +67,7 @@ struct LogEntry: Identifiable, Equatable {
 
     /// Ne jamais enregistrer de secret : jetons, cookies, liens privés.
     nonisolated static func sanitize(_ message: String) -> String {
-        var out = message
-        // Masque feed=xxx, user=xxx, token=xxx, Bearer xxx
-        for key in ["feed=", "user=", "token=", "Bearer "] {
-            while let range = out.range(of: key, options: .caseInsensitive) {
-                let start = range.upperBound
-                var end = start
-                while end < out.endIndex && !out[end].isWhitespace && out[end] != "&" && out[end] != ";" {
-                    end = out.index(after: end)
-                }
-                if start < end {
-                    out.replaceSubrange(start..<end, with: "[masqué]")
-                } else {
-                    break
-                }
-                if out.count > 2000 { break }
-            }
-        }
-        if out.lowercased().contains("cookie") {
-            out = "[cookie masqué] " + out.prefix(200).description
-        }
-        if out.count > 500 { out = String(out.prefix(500)) + "…" }
-        return out
+        LogDiagnostics.sanitize(message)
     }
 
     private func addSync(level: LogLevel, message: String) {
@@ -156,7 +135,7 @@ struct LogEntry: Identifiable, Equatable {
         var lines: [String] = []
         for url in [fileURL1, fileURL0] {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
-            lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init).suffix(500))
+            lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).suffix(Self.maxMemory).map(String.init))
         }
         let tail = lines.suffix(Self.maxMemory)
         let formatter = ISO8601DateFormatter()

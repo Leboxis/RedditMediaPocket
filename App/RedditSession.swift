@@ -142,7 +142,11 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let destination = request.url, let source = response.url,
-              let url = SavedFeed.redirectURL(from: source, to: destination) else { completionHandler(nil); return }
+              let url = SavedFeed.redirectURL(from: source, to: destination) else {
+            LogCenter.err(L("Redirection refusée depuis \(LogDiagnostics.requestSummary(response.url ?? request.url ?? URL(string: "https://reddit.com/")!)) : destination incompatible.", "Redirect denied from \(LogDiagnostics.requestSummary(response.url ?? request.url ?? URL(string: "https://reddit.com/")!)): incompatible destination."))
+            completionHandler(nil); return
+        }
+        LogCenter.net(L("Redirection : \(LogDiagnostics.requestSummary(source)) → \(LogDiagnostics.requestSummary(url)).", "Redirect: \(LogDiagnostics.requestSummary(source)) → \(LogDiagnostics.requestSummary(url))."))
         Task { @MainActor in
             var redirected = request
             redirected.url = url

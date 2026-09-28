@@ -370,7 +370,9 @@ struct SavedMediaCount: Codable {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
         errorMessage = nil
-        LogCenter.info(L("Démarrage : \(sourceKind)/\(username) (limite \(sessionLimit)).", "Starting: \(sourceKind)/\(username) (limit \(sessionLimit))."))
+        let target = sourceKind == "saved" ? "saved/" : "\(sourceKind)/\(username)"
+        let started = Date()
+        LogCenter.info(L("Démarrage : \(target), \(sessionLimit) transferts simultanés.", "Starting: \(target), \(sessionLimit) simultaneous transfers."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
@@ -379,16 +381,16 @@ struct SavedMediaCount: Codable {
             defer { running = false; active = 0; task = nil }
             do {
                 try await run()
-                LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés.", "Run finished: \(count) downloaded, \(failed) skipped."))
+                LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped in \(Int(Date().timeIntervalSince(started))) s."))
             }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
                 if Task.isCancelled || error is CancellationError {
                     status = L("Arrêté", "Stopped")
-                    LogCenter.info(L("Parcours arrêté.", "Run stopped."))
+                    LogCenter.info(L("Parcours arrêté après \(Int(Date().timeIntervalSince(started))) s : \(count) fichiers conservés pendant cette session.", "Run stopped after \(Int(Date().timeIntervalSince(started))) s: \(count) files kept during this run."))
                 } else {
                     status = ""
-                    LogCenter.err(error.localizedDescription)
+                    LogCenter.err(L("Parcours interrompu après \(Int(Date().timeIntervalSince(started))) s (\(count) conservés, \(failed) ignorés) : \(error.localizedDescription)", "Run failed after \(Int(Date().timeIntervalSince(started))) s (\(count) kept, \(failed) skipped): \(error.localizedDescription)"))
                     // Count the collection on disk, including earlier runs,
                     // rather than the counter reset at every manual restart.
                     let kept = activeCollection.flatMap {
@@ -561,6 +563,7 @@ struct SavedMediaCount: Codable {
         // Durcissement : dossier absent ou vide (suppression hors app) → l'historique
         // des posts vus est obsolète, on le purge pour que le run re-télécharge tout.
         if (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.isEmpty ?? true {
+            LogCenter.info(L("Dossier absent ou vide : reprise précédente effacée.", "Folder missing or empty: previous checkpoint cleared."))
             UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
@@ -570,6 +573,7 @@ struct SavedMediaCount: Codable {
         // visited. Re-scan once; existing files are skipped by prepareDownloads.
         let migrationKey = "resumePolicyVersion.\(canonical)"
         if UserDefaults.standard.integer(forKey: migrationKey) < 2 {
+            LogCenter.info(L("Migration de reprise : ancien historique effacé pour revérifier les médias.", "Checkpoint migration: old history cleared to recheck media."))
             UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
@@ -592,7 +596,15 @@ struct SavedMediaCount: Codable {
                 pageNumber += 1
                 let shownAfter = after.map { String($0.suffix(8)) } ?? "début"
                 LogCenter.net(L("Page \(pageNumber) demandée après \(shownAfter)…", "Page \(pageNumber) requested after \(shownAfter)…"))
-                let posts = try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+                let posts: [Post]
+                do {
+                    posts = try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+                } catch {
+                    if !(error is CancellationError) {
+                        LogCenter.err(L("Page \(pageNumber) interrompue après \(shownAfter) : \(error.localizedDescription). Reprise conservée au dernier point validé.", "Page \(pageNumber) failed after \(shownAfter): \(error.localizedDescription). Checkpoint kept at the last completed page."))
+                    }
+                    throw error
+                }
                 LogCenter.net(L("Page \(pageNumber) reçue : \(posts.count) posts.", "Page \(pageNumber) received: \(posts.count) posts."))
                 return posts
             }, process: { posts in
@@ -605,8 +617,9 @@ struct SavedMediaCount: Codable {
             }, persist: { state in
                 Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
                 Self.persistFrontier(canonical, state.frontier)
-                LogCenter.info(L("Point de reprise : curseur \(state.cursor.map { String($0.suffix(8)) } ?? "fin"), \(state.visited.count) vus.", "Checkpoint: cursor \(state.cursor.map { String($0.suffix(8)) } ?? "end"), \(state.visited.count) seen."))
-            })
+                LogCenter.info(L("Point de reprise : curseur \(state.cursor.map { String($0.suffix(8)) } ?? "fin"), frontière \(state.frontier.map { String($0.suffix(8)) } ?? "aucune"), \(state.visited.count) vus.", "Checkpoint: cursor \(state.cursor.map { String($0.suffix(8)) } ?? "end"), frontier \(state.frontier.map { String($0.suffix(8)) } ?? "none"), \(state.visited.count) seen."))
+            }, trace: { LogCenter.info($0) })
+        LogCenter.info(L("Parcours des pages : \(pageNumber) lues, \(completed ? "complet" : "limite atteinte"), \(preparedCount) médias préparés.", "Page scan: \(pageNumber) read, \(completed ? "complete" : "limit reached"), \(preparedCount) media prepared."))
         if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
             let snapshot = SavedMediaCount(count: preparedCount, computedAt: Date())
             if let data = try? JSONEncoder().encode(snapshot) {
@@ -802,7 +815,15 @@ struct SavedMediaCount: Codable {
     /// d'un lot, et l'utilisateur choisit quand relancer.
     private func saveIgnoringInaccessible(_ item: Download) async throws {
         do {
-            let saved = try await DownloadFailurePolicy.attempt { try await self.saveWithRetry(item) }
+            let saved = try await DownloadFailurePolicy.attempt {
+                do { try await self.saveWithRetry(item) }
+                catch {
+                    if !(error is CancellationError) && !DownloadFailurePolicy.isTransient(error) {
+                        LogCenter.net("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
+                    }
+                    throw error
+                }
+            }
             if !saved {
                 failed += 1
                 LogCenter.info(L("Média inaccessible, ignoré : \(item.destination.lastPathComponent).", "Inaccessible media, skipped: \(item.destination.lastPathComponent)."))
