@@ -81,6 +81,24 @@ final class XFetishAlbumsTests: XCTestCase {
                        ["2652884", "2652885"])
     }
 
+    func testEmptyAdditionalPageEndsGalleryAfterInitialImages() throws {
+        // The public album 6264 advertises one extra page after showing all 9
+        // photos; that request returns HTTP 200 with a zero-byte body.
+        XCTAssertNil(try XFetishAlbums.parseExtraImages(Data(), albumID: "6264", hasEarlierImages: true))
+    }
+
+    func testEmptyAdditionalPageCannotHideAnEmptyGallery() {
+        XCTAssertThrowsError(try XFetishAlbums.parseExtraImages(Data(), albumID: "6264", hasEarlierImages: false))
+        XCTAssertThrowsError(try XFetishAlbums.parseExtraImages(Data("<html>blocked</html>".utf8),
+                                                              albumID: "6264", hasEarlierImages: true))
+    }
+
+    func testAdditionalPageKeepsOriginalImageLinks() throws {
+        let fragment = Data("<a rel=\"screenshots\" href=\"/get_image/10/abc/sources/3000/3948/2652885.jpg/\">Two</a>".utf8)
+        XCTAssertEqual(try XFetishAlbums.parseExtraImages(fragment, albumID: "3948", hasEarlierImages: true)?.map(\.id),
+                       ["2652885"])
+    }
+
     func testMalformedPagesAreNotTreatedAsEmptyAlbums() {
         let album = XFetishAlbums.Album(id: "3948", title: "Example", url: URL(string: "https://x-fetish.tube/albums/3948/example/")!)
         XCTAssertThrowsError(try XFetishAlbums.parseListing(Data("<html>blocked</html>".utf8), model: "example", page: 1))
