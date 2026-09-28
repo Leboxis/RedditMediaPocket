@@ -126,4 +126,14 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(followed?.absoluteString, destination.absoluteString)
         XCTAssertTrue(followed?.query?.contains("acctoken=tok456") == true)
     }
+
+    func testIPv4StorageRejectsNonGetImage() async {
+        let url = URL(string: "https://x-fetish.tube/albums/1/a/")!
+        do {
+            _ = try await XFetishIPv4.storageURL(for: url, userAgent: "t", referer: "r")
+            XCTFail("should reject non-get_image")
+        } catch {
+            XCTAssertTrue(error is XFetishIPv4Error)
+        }
+    }
 }

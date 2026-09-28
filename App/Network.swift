@@ -174,6 +174,20 @@ import MediaCore
         }
     }
     func download(_ url: URL, headers: [String: String]? = nil) async throws -> URL {
+        // X-Fetish `get_image` : forçage IPv4 (le stockage est IPv4-only, le
+        // token est lié à l'IP ; en IPv6 le 403 est systématique).
+        if XFetishAPI.isXFetish(url), url.path.lowercased().contains("/get_image/") {
+            do {
+                let referer = headers?.first(where: { $0.key.lowercased() == "referer" })?.value
+                    ?? "https://x-fetish.tube/"
+                let storage = try await XFetishIPv4.storageURL(for: url, userAgent: XFetishAPI.userAgent, referer: referer)
+                LogCenter.net(L("IPv4 : \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage)).", "IPv4: \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage))."))
+                return try await download(storage, headers: headers)
+            } catch {
+                if error is CancellationError { throw error }
+                LogCenter.err(L("IPv4 X-Fetish indisponible, repli URLSession : \(error.localizedDescription).", "X-Fetish IPv4 unavailable, URLSession fallback: \(error.localizedDescription)."))
+            }
+        }
         let generation = requestGeneration
         let req = try await request(url, bearer: nil, headers: headers)
         guard generation == requestGeneration else { throw CancellationError() }
