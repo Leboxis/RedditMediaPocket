@@ -50,7 +50,14 @@ import MediaCore
         // No application-imposed delay: free workers start requests immediately.
         try Task.checkCancellation()
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
+        if XFetishAPI.isXFetish(url) {
+            // Le stockage refuse l'UA applicatif (HTTP 403 même avec token +
+            // Referer) : UA Safari iPhone identique pour galerie et médias,
+            // sinon le jeton lié à l'UA serait invalidé.
+            request.setValue(XFetishAPI.userAgent, forHTTPHeaderField: "User-Agent")
+        } else {
+            request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
+        }
         if XFetishAPI.isXFetish(url) {
             // Anti-hotlink `storage*.x-fetish.tube/remote_control.php` (HTTP 403
             // sans Referer) : valeurs par défaut navigateur, surchargeables par

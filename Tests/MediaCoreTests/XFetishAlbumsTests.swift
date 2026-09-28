@@ -111,6 +111,7 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(headers["Referer"], album.absoluteString)
         XCTAssertEqual(headers["Origin"], "https://x-fetish.tube")
         XCTAssertTrue(headers["Accept"]?.contains("image/") == true)
+        XCTAssertTrue(XFetishAPI.userAgent.contains("Safari"))
         XCTAssertTrue(XFetishAPI.isXFetish(album))
         XCTAssertTrue(XFetishAPI.isXFetish(URL(string: "https://storage4.x-fetish.tube/remote_control.php?file=a.jpg&acctoken=b")!))
         XCTAssertFalse(XFetishAPI.isXFetish(URL(string: "https://www.reddit.com/")!))

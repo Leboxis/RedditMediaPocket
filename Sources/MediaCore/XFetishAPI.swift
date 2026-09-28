@@ -13,6 +13,9 @@ public enum XFetishAPI {
 
     /// `Referer` = page album d'origine (anti-hotlink), `Origin` = domaine
     /// principal, `Accept` = image. Ne contient jamais le jeton.
+    /// UA navigateur : le stockage refuse l'UA applicatif (HTTP 403).
+    public static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
     public static func headers(referer: URL? = nil) -> [String: String] {
         [
             "Referer": referer?.absoluteString ?? "https://x-fetish.tube/",
