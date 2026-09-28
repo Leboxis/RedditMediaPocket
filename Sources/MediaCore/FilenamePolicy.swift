@@ -61,6 +61,22 @@ public enum FilenamePolicy {
         return "\(base) - \(short)"
     }
 
+    /// Recover the immutable album/image key from an existing X-Fetish image.
+    /// Album titles can change, so the download scan compares this key rather
+    /// than the full filename when deciding whether an image is already saved.
+    public static func xFetishImageID(inFileName filename: String) -> String? {
+        let file = URL(fileURLWithPath: filename)
+        guard ["jpg", "jpeg", "png", "webp", "gif"].contains(file.pathExtension.lowercased()) else { return nil }
+        let stem = file.deletingPathExtension().lastPathComponent
+        guard let marker = stem.range(of: " - xf-", options: .backwards) else { return nil }
+        let parts = stem[marker.upperBound...].split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              parts.allSatisfy({ part in
+                  !part.isEmpty && part.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 })
+              }) else { return nil }
+        return "xf-\(parts[0])-\(parts[1])"
+    }
+
     /// Nom de fichier sûr pour l'API kDrive, dérivé d'un nom local existant
     /// (qui peut contenir des caractères aujourd'hui interdits côté serveur).
     /// Conserve l'extension, remplace les interdits par `-`, lève les noms
@@ -145,19 +161,20 @@ public enum FilenamePolicy {
 
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
-    /// Accepte aussi les anciens libellés `u/pseudo`, `r/sub`, `saved/pseudo`.
+    /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`.
     public static func kDriveFolderName(_ raw: String, fallback: String = "Pocket", maxUTF8Bytes: Int = 100) -> String {
         var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let labelSeparators = CharacterSet(charactersIn: "/／\\＼")
         let parts = base.components(separatedBy: labelSeparators)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        // Le préfixe de type (u/, r/, saved/) est conservé : sans lui, `u/foo`
+        // Le préfixe de type est conservé : sans lui, `u/foo`
         // et `saved/foo` produiraient le même dossier `Foo` et leurs médias
-        // se surécriraient dans kDrive.
+        // se surécriraient dans kDrive. X-Fetish inclut un espace afin de ne
+        // jamais coïncider avec un pseudo Reddit tel que `u/xfoo`.
         var typePrefix = ""
         if parts.count > 1, let first = parts.first?.lowercased(), ["u", "r", "saved", "x"].contains(first) {
-            typePrefix = String(first.prefix(1)).uppercased()
+            typePrefix = first == "x" ? "X-Fetish " : String(first.prefix(1)).uppercased()
         }
         if let last = parts.last { base = last }
         if base.isEmpty { base = fallback }

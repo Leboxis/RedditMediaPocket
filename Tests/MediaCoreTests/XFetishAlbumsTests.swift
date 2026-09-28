@@ -9,6 +9,16 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(SourceKind.xFetish.next, .user)
     }
 
+    func testExistingImageIDSurvivesAlbumRename() {
+        let oldName = "Original title - xf-3948-2652884.jpg"
+        let newName = "Renamed album - xf-3948-2652884.jpg"
+        XCTAssertEqual(FilenamePolicy.xFetishImageID(inFileName: oldName), "xf-3948-2652884")
+        XCTAssertEqual(FilenamePolicy.xFetishImageID(inFileName: newName),
+                       FilenamePolicy.xFetishImageID(inFileName: oldName))
+        XCTAssertNil(FilenamePolicy.xFetishImageID(inFileName: "Other - xf-3948-2652884.mp4"))
+        XCTAssertNil(FilenamePolicy.xFetishImageID(inFileName: "Other - xf-3948-abc.jpg"))
+    }
+
     func testProfileSourceUsesDistinctCollectionAndListing() throws {
         let source = try FeedSource.parse(" X/ItWasAlwaysMySolesVIP ")
         XCTAssertEqual(source, .xFetish("itwasalwaysmysolesvip"))

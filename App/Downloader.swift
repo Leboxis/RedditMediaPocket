@@ -667,6 +667,9 @@ struct SavedMediaCount: Codable {
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
+        let existingImageIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.xFetishImageID(inFileName: $0.lastPathComponent)
+        })
 
         while true {
             try Task.checkCancellation()
@@ -701,7 +704,8 @@ struct SavedMediaCount: Codable {
                 LogCenter.info(L("X-Fetish : album \(album.id), \(images.count) images.", "X-Fetish: album \(album.id), \(images.count) images."))
 
                 var mediaOverrides: [String: [Media]] = [:]
-                let posts = images.map { image -> Post in
+                let newImages = images.filter { !existingImageIDs.contains("xf-\(album.id)-\($0.id)") }
+                let posts = newImages.map { image -> Post in
                     let id = "xf-\(album.id)-\(image.id)"
                     mediaOverrides[id] = [.direct(image.url)]
                     return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
