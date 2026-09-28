@@ -81,6 +81,15 @@ final class XFetishAlbumsTests: XCTestCase {
                        ["2652884", "2652885"])
     }
 
+    func testExtraImageFragmentCarriesAjaxContext() {
+        let album = XFetishAlbums.Album(id: "6264", title: "Example",
+            url: URL(string: "https://x-fetish.tube/albums/6264/example/")!)
+        let headers = XFetishAlbums.extraImagesHeaders(album: album)
+
+        XCTAssertEqual(headers["X-Requested-With"], "XMLHttpRequest")
+        XCTAssertEqual(headers["Referer"], "https://x-fetish.tube/albums/6264/example/")
+    }
+
     func testMalformedPagesAreNotTreatedAsEmptyAlbums() {
         let album = XFetishAlbums.Album(id: "3948", title: "Example", url: URL(string: "https://x-fetish.tube/albums/3948/example/")!)
         XCTAssertThrowsError(try XFetishAlbums.parseListing(Data("<html>blocked</html>".utf8), model: "example", page: 1))
