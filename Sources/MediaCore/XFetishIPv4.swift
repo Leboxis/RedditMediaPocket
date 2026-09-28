@@ -4,6 +4,7 @@ import Network
 /// Échec explicite du forçage IPv4 pour X-Fetish.
 public enum XFetishIPv4Error: LocalizedError {
     case noIPv4, connectionFailed, invalidResponse
+    case unexpectedStatus(Int), missingLocation(Int), invalidLocation
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,15 @@ public enum XFetishIPv4Error: LocalizedError {
             return L("Connexion IPv4 X-Fetish impossible.", "X-Fetish IPv4 connection failed.")
         case .invalidResponse:
             return L("Redirection X-Fetish illisible.", "Unreadable X-Fetish redirect.")
+        case .unexpectedStatus(let code):
+            return L("Requête get_image en IPv4 : HTTP \(code), redirection attendue.",
+                     "IPv4 get_image request: HTTP \(code), expected a redirect.")
+        case .missingLocation(let code):
+            return L("Redirection IPv4 HTTP \(code) sans en-tête Location.",
+                     "IPv4 HTTP \(code) redirect has no Location header.")
+        case .invalidLocation:
+            return L("Destination de redirection IPv4 invalide ou non HTTPS.",
+                     "IPv4 redirect destination is invalid or not HTTPS.")
         }
     }
 }
@@ -24,6 +34,38 @@ public enum XFetishIPv4Error: LocalizedError {
 /// systématique). Ce client force IPv4 pour `get_image` afin que le jeton
 /// corresponde à l'IP du stockage.
 public enum XFetishIPv4 {
+    /// Decode only the header block. Errors contain no server-supplied text or
+    /// URLs: Location and even the HTTP reason phrase may contain credentials.
+    static func redirectURL(headerData: Data, from source: URL) throws -> URL {
+        guard let text = String(data: headerData, encoding: .utf8)
+                ?? String(data: headerData, encoding: .isoLatin1) else {
+            throw XFetishIPv4Error.invalidResponse
+        }
+        let lines = text.components(separatedBy: "\r\n")
+        let status = (lines.first ?? "").split(separator: " ")
+        guard status.count >= 2, ["HTTP/1.0", "HTTP/1.1"].contains(String(status[0])),
+              status[1].count == 3, let code = Int(status[1]), (100...599).contains(code) else {
+            throw XFetishIPv4Error.invalidResponse
+        }
+        guard (300...399).contains(code) else {
+            throw XFetishIPv4Error.unexpectedStatus(code)
+        }
+        let location = lines.dropFirst().compactMap { line -> String? in
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "location" else { return nil }
+            return parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        }.first
+        guard let location, !location.isEmpty else {
+            throw XFetishIPv4Error.missingLocation(code)
+        }
+        guard let url = URL(string: location, relativeTo: source)?.absoluteURL,
+              url.scheme == "https", url.host != nil else {
+            throw XFetishIPv4Error.invalidLocation
+        }
+        return url
+    }
+
     /// Première adresse IPv4 (A) de l'hôte, sans jamais toucher aux AAAA.
     public static func resolveIPv4(_ host: String) throws -> String {
         var hints = addrinfo()
@@ -93,30 +135,11 @@ public enum XFetishIPv4 {
                     if let data { buffer.append(data) }
                     if let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
                         let headerData = buffer[..<range.lowerBound]
-                        guard let headerText = String(data: headerData, encoding: .utf8) ?? String(data: headerData, encoding: .isoLatin1) else {
-                            resume(.failure(XFetishIPv4Error.invalidResponse)); return
+                        do {
+                            resume(.success(try redirectURL(headerData: Data(headerData), from: getImage)))
+                        } catch {
+                            resume(.failure(error))
                         }
-                        let lines = headerText.components(separatedBy: "\r\n")
-                        guard let statusLine = lines.first,
-                              let code = Int(statusLine.split(separator: " ").dropFirst().first.map(String.init) ?? ""),
-                              (300...399).contains(code) else {
-                            resume(.failure(XFetishIPv4Error.invalidResponse)); return
-                        }
-                        var location: String?
-                        for line in lines.dropFirst() {
-                            let parts = line.split(separator: ":", maxSplits: 1)
-                            guard parts.count == 2 else { continue }
-                            if parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "location" {
-                                location = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                                break
-                            }
-                        }
-                        guard let raw = location, !raw.isEmpty,
-                              let url = URL(string: raw, relativeTo: getImage)?.absoluteURL,
-                              url.scheme == "https" else {
-                            resume(.failure(XFetishIPv4Error.invalidResponse)); return
-                        }
-                        resume(.success(url))
                         return
                     }
                     if isComplete {
