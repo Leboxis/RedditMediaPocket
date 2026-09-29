@@ -40,7 +40,6 @@ struct ContentView: View {
                 userChipsRow
                 metricsRow
                 transferBarRow
-                activeTransfersRow
                 statusRow
                 gallerySection
             }
@@ -249,34 +248,6 @@ struct ContentView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(L("Téléchargement X-Fetish", "X-Fetish download"))
                 .accessibilityValue("\(unit.done)/\(unit.total)")
-        }
-    }
-
-    /// Un encart par média en cours de transfert. Sans longueur annoncée par
-    /// le serveur, la barre reste indéterminée et seul le volume transféré est
-    /// affiché : afficher un pourcentage sur une taille inconnue serait faux.
-    @ViewBuilder private var activeTransfersRow: some View {
-        if isXFetishInput, !model.activeTransfers.isEmpty {
-            VStack(spacing: 5) {
-                ForEach(model.activeTransfers) { transfer in
-                    VStack(spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(transfer.id).font(.caption2).foregroundStyle(.secondary)
-                                .lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 4)
-                            Text(transfer.label).font(.caption2.monospacedDigit())
-                                .foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        if transfer.expected > 0 {
-                            ProgressView(value: transfer.fraction)
-                                .progressViewStyle(.linear).tint(.orange)
-                        } else {
-                            ProgressView().progressViewStyle(.linear).tint(.orange)
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, 16).padding(.bottom, 6)
         }
     }
 
