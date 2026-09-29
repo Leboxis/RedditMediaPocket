@@ -182,7 +182,6 @@ public enum FilenamePolicy {
             else if first == "rg" { typePrefix = "Rg" }
             else if ["u", "r", "saved"].contains(first) { typePrefix = String(first.prefix(1)).uppercased() }
         }
-        }
         if let last = parts.last { base = last }
         if base.isEmpty { base = fallback }
         base = typePrefix + base
