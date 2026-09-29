@@ -35,6 +35,7 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 inputRow
                 sortRow
+                xFetishRow
                 savedHintRow
                 userChipsRow
                 metricsRow
@@ -161,6 +162,11 @@ struct ContentView: View {
         return false
     }
 
+    private var isXFetishInput: Bool {
+        if let source = model.resolvedSource, case .xFetish = source { return true }
+        return false
+    }
+
     @ViewBuilder private var sortRow: some View {
         if isSubredditInput {
             Picker(L("Tri du subreddit", "Subreddit sort"), selection: $model.subSort) {
@@ -172,6 +178,20 @@ struct ContentView: View {
             .disabled(model.running)
             .padding(.horizontal, 16).padding(.bottom, 10)
             .accessibilityLabel(L("Tri du subreddit", "Subreddit sort"))
+        }
+    }
+
+    @ViewBuilder private var xFetishRow: some View {
+        if isXFetishInput {
+            Picker(L("Médias X-Fetish", "X-Fetish media"), selection: $model.xFetishMediaKind) {
+                Text(L("Images", "Images")).tag(XFetishMediaKind.images)
+                Text(L("Vidéos", "Videos")).tag(XFetishMediaKind.videos)
+                Text(L("Les deux", "Both")).tag(XFetishMediaKind.both)
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.running)
+            .padding(.horizontal, 16).padding(.bottom, 10)
+            .accessibilityLabel(L("Médias X-Fetish", "X-Fetish media"))
         }
     }
 

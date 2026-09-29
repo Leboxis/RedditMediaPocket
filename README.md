@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `♥` (sauvegardés Reddit) et `x/` (albums d'un profil X-Fetish). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `♥` (sauvegardés Reddit) et `x/` (albums et vidéos d'un profil X-Fetish). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias.
 
 ## État réel
 
@@ -12,7 +12,11 @@ Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencon
 
 Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`) pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
-Albums X-Fetish (`x/`) : saisir uniquement le nom dans l'adresse du profil après `/models/`, par exemple `itwasalwaysmysolesvip` pour `https://x-fetish.tube/models/itwasalwaysmysolesvip/`. L'application parcourt les pages d'albums publics et les images originales de chaque album, y compris celles derrière « Show More ». Elle ne prend pas les vidéos, photos de profil, miniatures ni albums privés. Une collection distincte `x/nom` est créée dans le dossier `x.nom`. Relancer le téléchargement vérifie aussi les anciens albums pour découvrir de nouvelles images ; les fichiers déjà présents sont ignorés. L'accès dépend de la disponibilité des pages publiques du site.
+Albums X-Fetish (`x/`) : saisir uniquement le nom dans l'adresse du profil après `/models/`, par exemple `itwasalwaysmysolesvip` pour `https://x-fetish.tube/models/itwasalwaysmysolesvip/`. Un sélecteur **Images / Vidéos / Les deux** apparaît sous le champ de saisie ; il est mémorisé et vaut « Images » par défaut. Une collection distincte `x/nom` est créée dans le dossier `x.nom`, quel que soit le sélecteur.
+
+Images : l'application parcourt les pages d'albums publics et les images originales de chaque album, y compris celles derrière « Show More ». Elle ne prend pas les photos de profil, miniatures ni albums privés.
+
+Vidéos : l'application parcourt les pages `/models/<nom>/videos/` puis ouvre chaque page `/video/<id>/`, dont le script du lecteur publie la route signée `get_file` (le jeton `v-acctoken` est lié à l'adresse IP et expire vite : une vidéo déjà enregistrée n'est plus re-ouverte). Les pages `/video/` et les médias `get_file` passent par l'IPv4 forcé, comme `get_image`, car le stockage `storage*.x-fetish.tube` est IPv4-only. Le même dossier `x.nom` accueille les deux types ; les clés `xf-<album>-<image>` et `xfv-<video>` permettent de ne jamais retélécharger un fichier déjà présent, quel que soit le sélecteur utilisé. Relancer vérifie les anciens albums et les anciennes vidéos. L'accès dépend de la disponibilité des pages publiques du site.
 
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
 

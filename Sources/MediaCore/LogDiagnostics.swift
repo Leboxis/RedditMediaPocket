@@ -26,6 +26,7 @@ public enum LogDiagnostics {
         // sans jamais exposer le secret.
         if items.contains(where: { $0.name == "i-acctoken" }) { details.append("token=oui") }
         if items.contains(where: { $0.name == "acctoken" }) { details.append("acctoken=oui") }
+        if items.contains(where: { $0.name == "v-acctoken" }) { details.append("v-acctoken=oui") }
         for key in ["limit", "after"] {
             if let value = items.first(where: { $0.name == key })?.value {
                 let safe = value.range(of: #"^[A-Za-z0-9_]{1,64}$"#, options: .regularExpression) != nil

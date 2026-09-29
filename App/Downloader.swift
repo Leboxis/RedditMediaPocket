@@ -117,8 +117,21 @@ struct SavedMediaCount: Codable {
             UserDefaults.standard.set(valid, forKey: "subSort")
         }
     }
-    @Published var active = 0
-    @Published private(set) var transfers = 0
+    /// Médias X-Fetish retenus : images d'album seules (défaut historique),
+    /// vidéos seules, ou les deux. `x/nom` reste une seule collection : le
+    /// dossier et le dossier kDrive ne changent pas.
+    @Published var xFetishMediaKind: XFetishMediaKind = {
+        guard let raw = UserDefaults.standard.string(forKey: XFetishMediaKind.defaultsKey),
+              let kind = XFetishMediaKind(rawValue: raw) else { return .images }
+        return kind
+    }() {
+        didSet {
+            let valid = XFetishMediaKind(rawValue: xFetishMediaKind.rawValue) ?? .images
+            if valid != xFetishMediaKind { xFetishMediaKind = valid; return }
+            UserDefaults.standard.set(valid.rawValue, forKey: XFetishMediaKind.defaultsKey)
+        }
+    }
+    @Published var active = 0    @Published private(set) var transfers = 0
     private var failed = 0
     private let network = Network()
     private let previewCache: NSCache<NSURL, NSData> = {
@@ -659,18 +672,73 @@ struct SavedMediaCount: Codable {
         }
     }
 
-    /// X-Fetish has no RSS cursor. Rescan every public album on each run so a
-    /// new image in an older album is found; stable image IDs skip files on disk.
+    /// X-Fetish has no RSS cursor. Rescan every public page on each run so new
+    /// media in an older album or a new video is found; stable `xf-…` / `xfv-…`
+    /// keys skip the files already on disk.
     private func runXFetish(model: String, canonical: String, folder: URL) async throws {
-        var page = 1
-        var scannedPages = Set<Int>()
-        var scannedAlbums = Set<String>()
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
-        let existingImageIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
-            FilenamePolicy.xFetishImageID(inFileName: $0.lastPathComponent)
+        // A single scan feeds both keys: switching the selector must not make
+        // already-saved files look new, and vice versa.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.xFetishMediaID(inFileName: $0.lastPathComponent)
         })
+
+        if xFetishMediaKind.includesImages {
+            try await runXFetishAlbums(model: model, canonical: canonical, folder: folder,
+                                       savedImageIDs: Set(savedIDs.filter { $0.hasPrefix("xf-") }),
+                                       seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                       preparedCount: &preparedCount)
+        }
+        if xFetishMediaKind.includesVideos {
+            try await runXFetishVideos(model: model, canonical: canonical, folder: folder,
+                                       savedVideoIDs: Set(savedIDs.filter { $0.hasPrefix("xfv-") }),
+                                       seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                       preparedCount: &preparedCount)
+        }
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("X-Fetish : \(preparedCount) médias préparés.", "X-Fetish: \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            switch xFetishMediaKind {
+            case .images:
+                errorMessage = L("\(failed) images inaccessibles ou non enregistrées.\n\(kept) médias conservés.",
+                                 "\(failed) images unavailable or unsaved.\n\(kept) media files kept.")
+            case .videos:
+                errorMessage = L("\(failed) vidéos inaccessibles ou non enregistrées.\n\(kept) médias conservés.",
+                                 "\(failed) videos unavailable or unsaved.\n\(kept) media files kept.")
+            case .both:
+                errorMessage = L("\(failed) médias inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                                 "\(failed) media unavailable or unsaved.\n\(kept) media files kept.")
+            }
+            return
+        }
+        switch xFetishMediaKind {
+        case .images:
+            status = count == 0 ? L("Aucune nouvelle image accessible", "No new accessible images")
+                                : L("\(count) images téléchargées", "\(count) images downloaded")
+        case .videos:
+            status = count == 0 ? L("Aucune nouvelle vidéo accessible", "No new accessible videos")
+                                : L("\(count) vidéos téléchargées", "\(count) videos downloaded")
+        case .both:
+            status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media")
+                                : L("\(count) médias téléchargés", "\(count) media downloaded")
+        }
+    }
+
+    private func runXFetishAlbums(model: String, canonical: String, folder: URL,
+                                  savedImageIDs: Set<String>,
+                                  seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                  preparedCount: inout Int) async throws {
+        var page = 1
+        var scannedPages = Set<Int>()
+        var scannedAlbums = Set<String>()
 
         while true {
             try Task.checkCancellation()
@@ -696,7 +764,7 @@ struct SavedMediaCount: Codable {
                         try Task.checkCancellation()
                         let fragment = try await network.data(XFetishAlbums.extraImagesURL(album: album, page: extraPage))
                         guard let extraImages = try XFetishAlbums.parseExtraImages(fragment, albumID: album.id,
-                                                                                  hasEarlierImages: !images.isEmpty) else {
+                                                                                   hasEarlierImages: !images.isEmpty) else {
                             LogCenter.info(L("X-Fetish : album \(album.id), page supplémentaire vide, fin de la galerie.",
                                              "X-Fetish: album \(album.id), empty extra page, end of gallery."))
                             break
@@ -710,7 +778,7 @@ struct SavedMediaCount: Codable {
 
                 var mediaOverrides: [String: [Media]] = [:]
                 var mediaHeaders: [String: [String: String]] = [:]
-                let newImages = images.filter { !existingImageIDs.contains("xf-\(album.id)-\($0.id)") }
+                let newImages = images.filter { !savedImageIDs.contains("xf-\(album.id)-\($0.id)") }
                 let posts = newImages.map { image -> Post in
                     let id = "xf-\(album.id)-\(image.id)"
                     let media = Media.direct(image.url)
@@ -730,19 +798,57 @@ struct SavedMediaCount: Codable {
             page = next
         }
 
-        if let index = collections.firstIndex(where: { $0.id == canonical }) {
-            collections[index].lastRun = Date()
-            saveCollections()
+        LogCenter.info(L("X-Fetish albums : \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images préparées.", "X-Fetish albums: \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images prepared."))
+    }
+
+    /// The signed `get_file` route only lives inside the player script of the
+    /// video page and expires quickly, so each not-yet-saved video page is read
+    /// again on every run. Saved `xfv-…` keys skip both the page and the file.
+    private func runXFetishVideos(model: String, canonical: String, folder: URL,
+                                  savedVideoIDs: Set<String>,
+                                  seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                  preparedCount: inout Int) async throws {
+        var page = 1
+        var scannedPages = Set<Int>()
+        var scannedVideos = Set<String>()
+
+        while true {
+            try Task.checkCancellation()
+            guard scannedPages.insert(page).inserted, scannedPages.count <= 500 else {
+                throw XFetishError.tooManyPages
+            }
+            status = L("Recherche des vidéos X-Fetish…", "Finding X-Fetish videos…")
+            let listingData = try await network.data(XFetishVideos.listingURL(model: model, page: page))
+            let listing = try XFetishVideos.parseListing(listingData, model: model, page: page)
+            LogCenter.info(L("X-Fetish vidéos : page \(page), \(listing.videos.count) vidéos.", "X-Fetish videos: page \(page), \(listing.videos.count) videos."))
+
+            for video in listing.videos {
+                try Task.checkCancellation()
+                guard scannedVideos.insert(video.id).inserted else { continue }
+                let id = "xfv-\(video.id)"
+                guard !savedVideoIDs.contains(id) else { continue }
+                status = L("Vidéo \(scannedVideos.count) : \(video.title)", "Video \(scannedVideos.count): \(video.title)")
+                let pageData = try await network.data(video.url)
+                let fileURL = try XFetishVideos.parseFileURL(pageData, video: video)
+                let media = Media.direct(fileURL)
+                var mediaOverrides: [String: [Media]] = [:]
+                var mediaHeaders: [String: [String: String]] = [:]
+                mediaOverrides[id] = [media]
+                // Anti-hotlink : le stockage exige le Referer de la page vidéo.
+                mediaHeaders[media.key] = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
+                let downloads = try await prepareDownloads(
+                    [Post(id: id, title: video.title, html: "", link: video.url.absoluteString)],
+                    folder: folder, seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
+                try await executeDownloads(downloads, &preparedCount)
+            }
+
+            guard let next = listing.nextPage else { break }
+            guard next > page else { throw XFetishVideoError.invalidListing }
+            page = next
         }
-        LogCenter.info(L("X-Fetish : \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images préparées.", "X-Fetish: \(scannedPages.count) pages, \(scannedAlbums.count) albums, \(preparedCount) images prepared."))
-        if failed == 0 {
-            status = count == 0 ? L("Aucune nouvelle image accessible", "No new accessible images") : L("\(count) images téléchargées", "\(count) images downloaded")
-        } else {
-            status = ""
-            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
-            errorMessage = L("\(failed) images inaccessibles ou non enregistrées.\n\(kept) médias conservés.",
-                             "\(failed) images unavailable or unsaved.\n\(kept) media files kept.")
-        }
+
+        LogCenter.info(L("X-Fetish vidéos : \(scannedPages.count) pages, \(scannedVideos.count) vidéos, \(preparedCount) médias préparés.", "X-Fetish videos: \(scannedPages.count) pages, \(scannedVideos.count) videos, \(preparedCount) media prepared."))
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }

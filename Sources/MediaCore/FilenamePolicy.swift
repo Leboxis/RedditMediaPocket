@@ -61,20 +61,23 @@ public enum FilenamePolicy {
         return "\(base) - \(short)"
     }
 
-    /// Recover the immutable album/image key from an existing X-Fetish image.
-    /// Album titles can change, so the download scan compares this key rather
-    /// than the full filename when deciding whether an image is already saved.
-    public static func xFetishImageID(inFileName filename: String) -> String? {
+    /// Recover the immutable album/image or video key from an existing X-Fetish
+    /// file. Titles can change, so the download scan compares this key rather
+    /// than the full filename when deciding whether a file is already saved.
+    /// Images use `xf-<album>-<image>`, videos use `xfv-<video>`.
+    public static func xFetishMediaID(inFileName filename: String) -> String? {
         let file = URL(fileURLWithPath: filename)
-        guard ["jpg", "jpeg", "png", "webp", "gif"].contains(file.pathExtension.lowercased()) else { return nil }
+        guard ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()) else { return nil }
         let stem = file.deletingPathExtension().lastPathComponent
-        guard let marker = stem.range(of: " - xf-", options: .backwards) else { return nil }
+        guard let marker = [" - xfv-", " - xf-"].compactMap({ stem.range(of: $0, options: .backwards) })
+                .max(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
         let parts = stem[marker.upperBound...].split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count == 2,
+        guard !parts.isEmpty, parts.count <= 2,
               parts.allSatisfy({ part in
                   !part.isEmpty && part.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 })
               }) else { return nil }
-        return "xf-\(parts[0])-\(parts[1])"
+        let prefix = stem[marker.lowerBound...].hasPrefix(" - xfv-") ? "xfv-" : "xf-"
+        return prefix + parts.joined(separator: "-")
     }
 
     /// Nom de fichier sûr pour l'API kDrive, dérivé d'un nom local existant

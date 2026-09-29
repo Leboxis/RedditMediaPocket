@@ -16,8 +16,8 @@ public enum XFetishIPv4Error: LocalizedError {
         case .invalidResponse:
             return L("Réponse X-Fetish illisible.", "Unreadable X-Fetish response.")
         case .unexpectedStatus(let code):
-            return L("Requête get_image en IPv4 : HTTP \(code), redirection attendue.",
-                     "IPv4 get_image request: HTTP \(code), expected a redirect.")
+            return L("Requête média signée X-Fetish en IPv4 : HTTP \(code), redirection attendue.",
+                     "IPv4 X-Fetish signed media request: HTTP \(code), expected a redirect.")
         case .missingLocation(let code):
             return L("Redirection IPv4 HTTP \(code) sans en-tête Location.",
                      "IPv4 HTTP \(code) redirect has no Location header.")
@@ -31,9 +31,15 @@ public enum XFetishIPv4Error: LocalizedError {
 /// `x-fetish.tube` a des AAAA Cloudflare mais `storage*.x-fetish.tube` est
 /// IPv4-only (pas de AAAA). Sur iPhone IPv6, la galerie sort en IPv6 et le
 /// stockage en IPv4 : le `acctoken` lié à l'IP est alors invalide (HTTP 403
-/// systématique). Ce client force IPv4 pour `get_image` afin que le jeton
-/// corresponde à l'IP du stockage.
+/// systématique). Ce client force IPv4 pour `get_image` (images d'album) et
+/// `get_file` (vidéos) afin que le jeton corresponde à l'IP du stockage.
 public enum XFetishIPv4 {
+    /// Routes signées que le site fait échanger contre une URL de stockage.
+    public static func isSignedMediaRoute(_ url: URL) -> Bool {
+        let path = url.path.lowercased()
+        return XFetishAPI.isXFetish(url) && (path.contains("/get_image/") || path.contains("/get_file/"))
+    }
+
     /// Signed image routes require the original escaping and trailing slash.
     static func requestTarget(for url: URL) throws -> String {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
@@ -101,22 +107,24 @@ public enum XFetishIPv4 {
         throw XFetishIPv4Error.noIPv4
     }
 
-    /// `GET get_image` en IPv4 forcé, sans suivre le corps : retourne le
-    /// `Location` (URL `remote_control.php?file=…&acctoken=…` liée à l'IPv4).
-    public static func storageURL(for getImage: URL, userAgent: String, referer: String) async throws -> URL {
-        guard let host = getImage.host, XFetishAPI.isXFetish(getImage),
-              getImage.path.lowercased().contains("/get_image/") else {
+    /// `GET get_image` / `GET get_file` en IPv4 forcé, sans suivre le corps :
+    /// retourne le `Location` (URL `remote_control.php?file=…&acctoken=…` liée
+    /// à l'IPv4).
+    public static func storageURL(for media: URL, userAgent: String, referer: String) async throws -> URL {
+        guard let host = media.host, isSignedMediaRoute(media) else {
             throw XFetishIPv4Error.invalidResponse
         }
         let ipv4 = try resolveIPv4(host)
-        let target = try requestTarget(for: getImage)
+        let target = try requestTarget(for: media)
+        let accept = media.path.lowercased().contains("/get_file/")
+            ? XFetishAPI.videoAccept : XFetishAPI.imageAccept
         let requestLines = [
             "GET \(target) HTTP/1.1",
             "Host: \(host)",
             "User-Agent: \(userAgent)",
             "Referer: \(referer)",
             "Origin: https://x-fetish.tube",
-            "Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept: \(accept)",
             "Connection: close",
             "", "",
         ]
@@ -144,7 +152,7 @@ public enum XFetishIPv4 {
                     if let range = buffer.range(of: Data("\r\n\r\n".utf8)) {
                         let headerData = buffer[..<range.lowerBound]
                         do {
-                            resume(.success(try redirectURL(headerData: Data(headerData), from: getImage)))
+                            resume(.success(try redirectURL(headerData: Data(headerData), from: media)))
                         } catch {
                             resume(.failure(error))
                         }

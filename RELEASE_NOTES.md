@@ -1,3 +1,10 @@
+Choix des médias X-Fetish : images, vidéos ou les deux.
+
+- Un sélecteur segmenté apparaît sous le champ de saisie en mode `x/`. Il est mémorisé et vaut « Images » par défaut, sans changer le comportement des installations existantes.
+- « Vidéos » parcourt les pages `/models/<nom>/videos/` puis chaque page `/video/<id>/`, dont le lecteur publie la route signée `get_file`. Les clés `xf-<album>-<image>` et `xfv-<vidéo>` partagent le même dossier `x.nom` : un média déjà présent n'est jamais retéléchargé, quel que soit le sélecteur.
+- Les pages `/video/` et les médias `get_file` passent par l'IPv4 forcé, comme `get_image` : le stockage `storage*.x-fetish.tube` est IPv4-only et le jeton `v-acctoken` est lié à l'adresse IP.
+- Correction associée : les identifiants d'album et de vidéo sont construits à partir du titre du média et dépassaient souvent la limite de 80 caractères ; ces médias étaient silencieusement ignorés. La limite ne s'applique qu'au nom du profil saisi.
+
 Résilience RedGIFs et message de fin plus précis.
 
 - La fiche RedGIFs est demandée avec les mêmes en-têtes que le lecteur web (Référent/Origine, `views=yes`), comme les implémentations de référence.

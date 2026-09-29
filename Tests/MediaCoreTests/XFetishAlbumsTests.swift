@@ -23,11 +23,14 @@ final class XFetishAlbumsTests: XCTestCase {
     func testExistingImageIDSurvivesAlbumRename() {
         let oldName = "Original title - xf-3948-2652884.jpg"
         let newName = "Renamed album - xf-3948-2652884.jpg"
-        XCTAssertEqual(FilenamePolicy.xFetishImageID(inFileName: oldName), "xf-3948-2652884")
-        XCTAssertEqual(FilenamePolicy.xFetishImageID(inFileName: newName),
-                       FilenamePolicy.xFetishImageID(inFileName: oldName))
-        XCTAssertNil(FilenamePolicy.xFetishImageID(inFileName: "Other - xf-3948-2652884.mp4"))
-        XCTAssertNil(FilenamePolicy.xFetishImageID(inFileName: "Other - xf-3948-abc.jpg"))
+        XCTAssertEqual(FilenamePolicy.xFetishMediaID(inFileName: oldName), "xf-3948-2652884")
+        XCTAssertEqual(FilenamePolicy.xFetishMediaID(inFileName: newName),
+                       FilenamePolicy.xFetishMediaID(inFileName: oldName))
+        XCTAssertEqual(FilenamePolicy.xFetishMediaID(inFileName: "Title - xfv-708259.mp4"), "xfv-708259")
+        XCTAssertEqual(FilenamePolicy.xFetishMediaID(inFileName: "Title - xf-3948-2652884.webp"), "xf-3948-2652884")
+        XCTAssertNil(FilenamePolicy.xFetishMediaID(inFileName: "Other - xf-3948-abc.jpg"))
+        XCTAssertNil(FilenamePolicy.xFetishMediaID(inFileName: "title without a key.jpg"))
+        XCTAssertNil(FilenamePolicy.xFetishMediaID(inFileName: "Some post - xf-3948-2652884.txt"))
     }
 
     func testProfileSourceUsesDistinctCollectionAndListing() throws {
@@ -122,6 +125,10 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(headers["Referer"], album.absoluteString)
         XCTAssertEqual(headers["Origin"], "https://x-fetish.tube")
         XCTAssertTrue(headers["Accept"]?.contains("image/") == true)
+        let videoHeaders = XFetishAPI.headers(referer: album, accept: XFetishAPI.videoAccept)
+        XCTAssertEqual(videoHeaders["Accept"], XFetishAPI.videoAccept)
+        XCTAssertTrue(XFetishAPI.videoAccept.hasPrefix("video/"))
+        XCTAssertEqual(videoHeaders["Referer"], album.absoluteString)
         XCTAssertTrue(XFetishAPI.userAgent.contains("Safari"))
         XCTAssertTrue(XFetishAPI.isXFetish(album))
         XCTAssertTrue(XFetishAPI.isXFetish(URL(string: "https://storage4.x-fetish.tube/remote_control.php?file=a.jpg&acctoken=b")!))
@@ -138,14 +145,26 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertTrue(followed?.query?.contains("acctoken=tok456") == true)
     }
 
-    func testIPv4StorageRejectsNonGetImage() async {
+    func testIPv4StorageRejectsNonSignedRoute() async {
         let url = URL(string: "https://x-fetish.tube/albums/1/a/")!
+        XCTAssertFalse(XFetishIPv4.isSignedMediaRoute(url))
         do {
             _ = try await XFetishIPv4.storageURL(for: url, userAgent: "t", referer: "r")
-            XCTFail("should reject non-get_image")
+            XCTFail("should reject non-signed route")
         } catch {
             XCTAssertTrue(error is XFetishIPv4Error)
         }
+    }
+
+    func testIPv4StorageAcceptsImageAndVideoSignedRoutes() {
+        XCTAssertTrue(XFetishIPv4.isSignedMediaRoute(
+            URL(string: "https://x-fetish.tube/get_image/10/abc/sources/3000/3948/2652884.jpg/?i-acctoken=t")!))
+        XCTAssertTrue(XFetishIPv4.isSignedMediaRoute(
+            URL(string: "https://x-fetish.tube/get_file/11/abcdef01/708000/708259/708259_single_hd_vertical.mp4/?v-acctoken=t")!))
+        XCTAssertFalse(XFetishIPv4.isSignedMediaRoute(
+            URL(string: "https://x-fetish.tube/contents/videos_screenshots/708000/708259/preview.jpg")!))
+        XCTAssertFalse(XFetishIPv4.isSignedMediaRoute(
+            URL(string: "https://storage4.x-fetish.tube/remote_control.php?file=a.mp4&acctoken=b")!))
     }
 
     func testIPv4RedirectPreservesSignedLocation() throws {

@@ -111,16 +111,21 @@ import MediaCore
             LogCenter.net(L("Page déjà en mémoire (\(cached.data.count / 1024) Ko), pas de nouvel appel.", "Page already in memory (\(cached.data.count / 1024) KB), no new call."))
             return cached.data
         }
-        let req = try await request(url, bearer: bearer, headers: headers)
+        // Album and video pages hand out signed get_image / get_file routes.
+        let isXFetishSite = url.host?.lowercased() == "x-fetish.tube"
+        let isXFetishVideoPage = isXFetishSite && url.path.hasPrefix("/video/")
+        let isXFetishSignedPage = isXFetishVideoPage || (isXFetishSite && url.path.hasPrefix("/albums/"))
+        var effectiveHeaders = headers ?? [:]
+        if isXFetishVideoPage { effectiveHeaders["Accept"] = XFetishAPI.videoAccept }
+        let req = try await request(url, bearer: bearer, headers: effectiveHeaders)
         guard generation == requestGeneration else { throw CancellationError() }
         let started = Date()
         LogCenter.net("GET \(LogDiagnostics.requestSummary(url))…")
         let result: (Data, URLResponse)
         do {
-            if url.host?.lowercased() == "x-fetish.tube", url.path.hasPrefix("/albums/") {
-                // Gallery pages issue signed image URLs. Fetching them over
-                // IPv4 keeps their source address consistent with get_image
-                // and the IPv4-only storage host.
+            if isXFetishSignedPage {
+                // Fetching them over IPv4 keeps their source address consistent
+                // with the signed route and the IPv4-only storage host.
                 LogCenter.net("X-Fetish : page en IPv4…")
                 let (body, response) = try await XFetishIPv4Pages.data(for: url,
                     headers: req.allHTTPHeaderFields ?? [:])
@@ -184,9 +189,9 @@ import MediaCore
         }
     }
     func download(_ url: URL, headers: [String: String]? = nil) async throws -> URL {
-        // X-Fetish `get_image` : forçage IPv4 (le stockage est IPv4-only, le
-        // token est lié à l'IP ; en IPv6 le 403 est systématique).
-        if XFetishAPI.isXFetish(url), url.path.lowercased().contains("/get_image/") {
+        // X-Fetish `get_image` / `get_file` : forçage IPv4 (le stockage est
+        // IPv4-only, le token est lié à l'IP ; en IPv6 le 403 est systématique).
+        if XFetishIPv4.isSignedMediaRoute(url) {
             do {
                 let referer = headers?.first(where: { $0.key.lowercased() == "referer" })?.value
                     ?? "https://x-fetish.tube/"
