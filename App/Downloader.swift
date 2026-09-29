@@ -131,7 +131,8 @@ struct SavedMediaCount: Codable {
             UserDefaults.standard.set(valid.rawValue, forKey: XFetishMediaKind.defaultsKey)
         }
     }
-    @Published var active = 0    @Published private(set) var transfers = 0
+    @Published var active = 0
+    @Published private(set) var transfers = 0
     private var failed = 0
     private let network = Network()
     private let previewCache: NSCache<NSURL, NSData> = {
