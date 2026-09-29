@@ -1055,8 +1055,8 @@ struct SavedMediaCount: Codable {
                 renamedExisting = true
             } else {
                 downloads.append(Download(media: item, destination: destination,
-                    postDate: nil, author: author, headers: nil,
-                    postLink: "https://www.redgifs.com/users/\(author.split(separator: "/").last.map(String.init) ?? "")"))
+                    postDate: nil, author: author,
+                    postLink: "https://www.redgifs.com/users/\(author.split(separator: "/").last.map(String.init) ?? "")", headers: nil))
             }
         }
         if skippedExisting > 0 || skippedSeen > 0 {
