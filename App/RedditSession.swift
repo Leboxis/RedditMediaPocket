@@ -138,7 +138,9 @@ private struct RedditWebLogin: UIViewControllerRepresentable {
 }
 
 // Rebuild cookies for each redirect, preventing forwarding to a media CDN or third party.
-final class SafeRedirects: NSObject, URLSessionTaskDelegate {
+// Not final: TransferProgressDelegate inherits it to add byte progress without
+// losing the X-Fetish Referer carry-over.
+class SafeRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard let destination = request.url, let source = response.url,
@@ -172,6 +174,31 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
             }
             completionHandler(redirected)
         }
+    }
+}
+
+/// Reports the bytes received for a single download task.
+///
+/// It inherits `SafeRedirects` deliberately: when a task delegate is supplied,
+/// URLSession routes *task-level* messages to it instead of the session
+/// delegate, and the X-Fetish `Referer` carry-over is a task-level message. A
+/// standalone progress delegate would therefore lose it and the storage host
+/// would answer HTTP 403 on every media.
+///
+/// `totalBytesExpectedToWrite` is negative when the server announces no
+/// Content-Length (chunked transfer): callers must not turn that into a
+/// percentage.
+final class TransferProgressDelegate: SafeRedirects, URLSessionDownloadDelegate {
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+
+    init(onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
     }
 }
 

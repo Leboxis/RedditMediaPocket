@@ -188,7 +188,12 @@ import MediaCore
             throw NetworkError.invalid(L("Impossible de lire le flux RSS privé des sauvegardés.", "Unable to read the private saved RSS feed."))
         }
     }
-    func download(_ url: URL, headers: [String: String]? = nil) async throws -> URL {
+    /// - Parameter progress: optional byte-level reporter, called with
+    ///   (bytes received, expected bytes). `expected` is negative when the
+    ///   server announces no length. Without it the session delegate handles the
+    ///   task alone, exactly as before.
+    func download(_ url: URL, headers: [String: String]? = nil,
+                  progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> URL {
         // X-Fetish `get_image` / `get_file` : forçage IPv4 (le stockage est
         // IPv4-only, le token est lié à l'IP ; en IPv6 le 403 est systématique).
         if XFetishIPv4.isSignedMediaRoute(url) {
@@ -209,7 +214,7 @@ import MediaCore
             }
             if let storage {
                 LogCenter.net(L("IPv4 : \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage)).", "IPv4: \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage))."))
-                return try await download(storage, headers: headers)
+                return try await download(storage, headers: headers, progress: progress)
             }
         }
         let generation = requestGeneration
@@ -221,7 +226,9 @@ import MediaCore
         LogCenter.net(L("Média GET \(LogDiagnostics.requestSummary(url))…", "Media GET \(LogDiagnostics.requestSummary(url))…"))
         let result: (URL, URLResponse)
         do {
-            result = try await session.download(for: req)
+            // Kept alive here: URLSession holds the delegate only for the task.
+            let taskDelegate = progress.map { TransferProgressDelegate(onProgress: $0) }
+            result = try await session.download(for: req, delegate: taskDelegate)
         } catch {
             if !Task.isCancelled {
                 let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))

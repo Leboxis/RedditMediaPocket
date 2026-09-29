@@ -75,6 +75,36 @@ struct SavedMediaCount: Codable {
         var fraction: Double { total > 0 ? min(1, Double(done) / Double(total)) : 0 }
     }
     @Published private(set) var transferUnit: TransferUnit?
+    /// Un entrée par média en cours de transfert, dans l'ordre d'arrivée.
+    /// `expected` vaut 0 quand le serveur n'annonce pas de longueur : la barre
+    /// est alors indéterminée et seul le volume transféré est connu.
+    struct ActiveTransfer: Identifiable, Equatable {
+        let id: String
+        var written: Int64 = 0
+        var expected: Int64 = 0
+        var fraction: Double { expected > 0 ? min(1, Double(written) / Double(expected)) : 0 }
+        var label: String {
+            let volume = ByteCountFormatter.string(fromByteCount: written, countStyle: .file)
+            guard expected > 0 else { return volume }
+            return "\(Int((fraction * 100).rounded())) % · \(volume)"
+        }
+    }
+    @Published private(set) var activeTransfers: [ActiveTransfer] = []
+
+    private func beginTransfer(_ name: String) {
+        guard !activeTransfers.contains(where: { $0.id == name }) else { return }
+        activeTransfers.append(ActiveTransfer(id: name))
+    }
+
+    private func updateTransfer(_ name: String, written: Int64, expected: Int64) {
+        guard let index = activeTransfers.firstIndex(where: { $0.id == name }) else { return }
+        activeTransfers[index].written = written
+        if expected > 0 { activeTransfers[index].expected = expected }
+    }
+
+    private func endTransfer(_ name: String) {
+        activeTransfers.removeAll { $0.id == name }
+    }
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
 
     private static func savedMediaCountKey(_ canonical: String) -> String { "savedMediaCount.\(canonical)" }
@@ -1100,7 +1130,13 @@ struct SavedMediaCount: Codable {
         try Task.checkCancellation()
         active += 1
         defer { active -= 1 }
-        let temporary = try await resolveAndDownload(item.media, headers: item.headers)
+        let name = item.destination.lastPathComponent
+        beginTransfer(name)
+        defer { endTransfer(name) }
+        let temporary = try await resolveAndDownload(item.media, headers: item.headers) { written, expected in
+            // Rapporté depuis la file du délégué : publication sur le main actor.
+            Task { @MainActor in self.updateTransfer(name, written: written, expected: expected) }
+        }
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
@@ -1273,11 +1309,15 @@ struct SavedMediaCount: Codable {
             return try await self.network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
         }
     }
-    private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil) async throws -> URL {
+    /// `progress` n'est transmis que pour un média direct : RedGIFs assemble
+    /// deux requêtes et Reddit une vidéo puis un son, où un pourcentage par
+    /// fichier ne voudrait rien dire.
+    private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil,
+                                    progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> URL {
         switch media {
         case .direct(let url):
             LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
-            return try await network.download(url, headers: headers)
+            return try await network.download(url, headers: headers, progress: progress)
         case .redgifs(let id):
             do {
                 return try await downloadRedgifs(id: id)
