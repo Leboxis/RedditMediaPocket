@@ -119,7 +119,8 @@ struct ContentView: View {
                 Spacer()
             } else {
                 TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") :
-                          (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("pseudo", "username")), text: $model.username)
+                          (model.sourceKind == "rg" ? L("pseudo RedGifs", "RedGifs username") :
+                            (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("pseudo", "username"))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -271,7 +272,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel(L("Galerie vide", "Empty gallery"))
-            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, ♥ ou x/)", "Choose a source (u/, r/, ♥ or x/)"))
+            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, RG, ♥ ou x/)", "Choose a source (u/, r/, RG, ♥ or x/)"))
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -321,7 +322,7 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection.map { $0.isXFetish ? $0.id : $0.name } ?? "Pocket"
+                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs) ? $0.id : $0.name } ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -348,7 +349,7 @@ struct ContentView: View {
         let active = model.activeUser == collection.id
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))))
                 Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }
@@ -377,7 +378,7 @@ struct ContentView: View {
 }
 
 /// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
-/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → ♥ → x/.
+/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → RG → ♥ → x/.
 private struct SourceKindToggle: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Binding var kind: String
@@ -387,10 +388,18 @@ private struct SourceKindToggle: View {
         SourceKind(rawValue: current)?.next.rawValue ?? SourceKind.user.rawValue
     }
     private func face(_ current: String) -> String {
-        current == "r" ? "r/" : (current == "saved" ? "♥" : (current == "x" ? "x/" : "u/"))
+        if current == "r" { return "r/" }
+        if current == "rg" { return "RG" }
+        if current == "saved" { return "♥" }
+        if current == "x" { return "x/" }
+        return "u/"
     }
     private func spoken(_ current: String) -> String {
-        current == "r" ? "subreddit" : (current == "saved" ? L("sauvegardés", "saved") : (current == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("profil", "profile")))
+        if current == "r" { return "subreddit" }
+        if current == "rg" { return "RedGifs" }
+        if current == "saved" { return L("sauvegardés", "saved") }
+        if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
+        return L("profil", "profile")
     }
 
     var body: some View {

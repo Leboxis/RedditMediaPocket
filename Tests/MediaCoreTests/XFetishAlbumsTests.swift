@@ -13,9 +13,10 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(try XFetishIPv4.requestTarget(for: url), "/get_image/a%2Fb/image.jpg/?token=x%26y")
     }
 
-    func testSourceButtonCyclesThroughAllFourKinds() {
+    func testSourceButtonCyclesThroughAllFiveKinds() {
         XCTAssertEqual(SourceKind.user.next, .subreddit)
-        XCTAssertEqual(SourceKind.subreddit.next, .saved)
+        XCTAssertEqual(SourceKind.subreddit.next, .redGifs)
+        XCTAssertEqual(SourceKind.redGifs.next, .saved)
         XCTAssertEqual(SourceKind.saved.next, .xFetish)
         XCTAssertEqual(SourceKind.xFetish.next, .user)
     }

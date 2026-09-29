@@ -47,17 +47,31 @@ public enum FeedSource: Hashable, Sendable {
     case subreddit(String)
     case saved(String)
     case xFetish(String)
+    case redgifsUser(String)
 
     /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
     public static let subredditSorts = ["new", "hot", "top"]
 
-    /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil` ou un pseudo nu
+    /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
+    /// `rg/pseudo` (ou `g/`), URL `redgifs.com/users/pseudo` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         if lower.hasPrefix("saved/") {
             return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
+        }
+        if lower.hasPrefix("rg/") {
+            return try .redgifsUser(RedgifsAPI.username(String(trimmed.dropFirst(3))))
+        }
+        if lower.hasPrefix("g/") {
+            return try .redgifsUser(RedgifsAPI.username(String(trimmed.dropFirst(2))))
+        }
+        if lower.contains("redgifs.com/users/") {
+            let after = lower.components(separatedBy: "redgifs.com/users/").last ?? ""
+            let name = after.split(separator: "/").first.map(String.init) ?? ""
+            let clean = name.split(separator: "?").first.map(String.init) ?? ""
+            return try .redgifsUser(RedgifsAPI.username(clean))
         }
         if lower.hasPrefix("r/") {
             return try .subreddit(subredditName(String(trimmed.dropFirst(2))))
@@ -79,14 +93,15 @@ public enum FeedSource: Hashable, Sendable {
         return name
     }
 
-    /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo` ou `x/profil`),
-    /// utilisé comme clé de collection.
+    /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
+    /// `x/profil` ou `rg/pseudo`), utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
         case .subreddit(let name): return "r/\(name)"
         case .saved(let name): return "saved/\(name)"
         case .xFetish(let name): return "x/\(name)"
+        case .redgifsUser(let name): return "rg/\(name)"
         }
     }
 
@@ -97,20 +112,24 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// Dossier de stockage. Les préfixes `r.`, `saved.` et `x.` (point interdit
-    /// dans les pseudos Reddit) évitent les collisions entre sources.
+    /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.` et `redgifs.`
+    /// (point interdit dans les pseudos Reddit) évitent les collisions
+    /// entre sources.
     public var folderName: String {
         switch self {
         case .user(let name): return name
         case .subreddit(let name): return "r.\(name)"
         case .saved(let name): return "saved.\(name)"
         case .xFetish(let name): return "x.\(name)"
+        case .redgifsUser(let name): return "redgifs.\(name)"
         }
     }
 
     /// URL de départ publique (RSS pour Reddit, liste d'albums pour X-Fetish).
     /// `after` est le curseur `t3_…` du dernier post vu.
     /// `sort` ne s'applique qu'aux subreddits (`new`, `hot`, `top` + `t=month`).
+    /// Les comptes RedGifs utilisent l'API `users/<pseudo>/search`
+    /// (pas de RSS) : `after` y est ignoré, page 1 par défaut.
     public func feedURL(sort: String = "new", after: String? = nil) -> URL {
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
         if let after { items.append(URLQueryItem(name: "after", value: after)) }
@@ -140,6 +159,8 @@ public enum FeedSource: Hashable, Sendable {
                 components.queryItems = items
             }
             return components.url!
+        case .redgifsUser(let name):
+            return RedgifsAPI.userSearchURL(username: name, page: 1)
         }
     }
 }

@@ -164,7 +164,7 @@ public enum FilenamePolicy {
 
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
-    /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`.
+    /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`, `rg/pseudo`.
     public static func kDriveFolderName(_ raw: String, fallback: String = "Pocket", maxUTF8Bytes: Int = 100) -> String {
         var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let labelSeparators = CharacterSet(charactersIn: "/／\\＼")
@@ -175,9 +175,13 @@ public enum FilenamePolicy {
         // et `saved/foo` produiraient le même dossier `Foo` et leurs médias
         // se surécriraient dans kDrive. X-Fetish inclut un espace afin de ne
         // jamais coïncider avec un pseudo Reddit tel que `u/xfoo`.
+        // RedGifs utilise `Rg` (distinct de `R` des subreddits).
         var typePrefix = ""
-        if parts.count > 1, let first = parts.first?.lowercased(), ["u", "r", "saved", "x"].contains(first) {
-            typePrefix = first == "x" ? "X-Fetish " : String(first.prefix(1)).uppercased()
+        if parts.count > 1, let first = parts.first?.lowercased() {
+            if first == "x" { typePrefix = "X-Fetish " }
+            else if first == "rg" { typePrefix = "Rg" }
+            else if ["u", "r", "saved"].contains(first) { typePrefix = String(first.prefix(1)).uppercased() }
+        }
         }
         if let last = parts.last { base = last }
         if base.isEmpty { base = fallback }

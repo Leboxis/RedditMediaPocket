@@ -10,29 +10,34 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var isSubreddit = false
     var isSaved = false
     var isXFetish = false
+    var isRedGifs = false
     var archived = false
     var lastRun: Date?
-    /// Clé canonique : `u/pseudo`, `r/sub` ou `saved/pseudo`.
+    /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil` ou `rg/pseudo`.
     var id: String {
+        if isRedGifs { return "rg/\(name)" }
         if isSaved { return "saved/\(name)" }
         if isXFetish { return "x/\(name)" }
         return (isSubreddit ? "r/" : "u/") + name
     }
     var displayName: String { isSaved ? "Saved" : id }
-    /// Dossier de stockage. Les points de `r.…` et `saved.…` sont interdits
-    /// dans les pseudos : aucune collection existante ne peut entrer en collision.
+    /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…` et
+    /// `redgifs.…` sont interdits dans les pseudos : aucune collection
+    /// existante ne peut entrer en collision.
     var folderName: String {
+        if isRedGifs { return "redgifs.\(name)" }
         if isSaved { return "saved.\(name)" }
         if isXFetish { return "x.\(name)" }
         return isSubreddit ? "r.\(name)" : name
     }
 
-    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, archived, lastRun }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, isRedGifs, archived, lastRun }
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
         self.isXFetish = isXFetish
+        self.isRedGifs = isRedGifs
         self.archived = archived
         self.lastRun = lastRun
     }
@@ -42,6 +47,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isSubreddit = try container.decodeIfPresent(Bool.self, forKey: .isSubreddit) ?? false
         isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
         isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
+        isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
     }
@@ -91,10 +97,11 @@ struct SavedMediaCount: Codable {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
     @Published private(set) var sessionLimit = 3
-    /// Sélecteur de source : `u` profil, `r` subreddit, `saved` éléments sauvegardés,
+    /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
+    /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish.
-    /// du compte connecté. Le cœur ignore la saisie ; pour u/ et r/,
-    /// un texte contenant déjà `/` garde la priorité.
+    /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
+    /// déjà `/` ou une URL RedGifs garde la priorité.
     @Published var sourceKind: String = {
         let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
         return SourceKind(rawValue: saved) == nil ? "u" : saved
@@ -108,6 +115,10 @@ struct SavedMediaCount: Codable {
     /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
     var resolvedSource: FeedSource? {
         if sourceKind == "saved" { return nil }
+        if sourceKind == "rg" {
+            let text = username.contains("/") || username.lowercased().contains("redgifs.com") ? username : "rg/\(username)"
+            return try? FeedSource.parse(text)
+        }
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         return try? FeedSource.parse(text)
     }
@@ -196,7 +207,11 @@ struct SavedMediaCount: Codable {
 
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
     private func display(_ collection: UserCollection) {
-        sourceKind = collection.isSaved ? "saved" : (collection.isXFetish ? "x" : (collection.isSubreddit ? "r" : "u"))
+        if collection.isSaved { sourceKind = "saved" }
+        else if collection.isXFetish { sourceKind = "x" }
+        else if collection.isRedGifs { sourceKind = "rg" }
+        else if collection.isSubreddit { sourceKind = "r" }
+        else { sourceKind = "u" }
         username = collection.name
     }
 
@@ -211,13 +226,15 @@ struct SavedMediaCount: Codable {
             if saved.contains(where: \.archived) { saveCollections() }
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
-            // Anciennes versions : pseudo nu sans préfixe ; versions récentes : `u/…` ou `r/…`.
-            if let source = try? FeedSource.parse(last.contains("/") ? last : "u/\(last)") {
+            // Anciennes versions : pseudo nu sans préfixe ; versions récentes :
+            // `u/…`, `r/…`, `rg/…`, `x/…` ou URL RedGifs.
+            if let source = try? FeedSource.parse(last.contains("/") || last.lowercased().contains("redgifs.com") ? last : "u/\(last)") {
                 switch source {
                 case .user(let name): sourceKind = "u"; username = name
                 case .subreddit(let name): sourceKind = "r"; username = name
                 case .saved(let name): sourceKind = "saved"; username = name
                 case .xFetish(let name): sourceKind = "x"; username = name
+                case .redgifsUser(let name): sourceKind = "rg"; username = name
                 }
             } else {
                 username = last
@@ -240,10 +257,13 @@ struct SavedMediaCount: Codable {
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
         for folder in fresh {
-            // Les dossiers `r.…` et `saved.…` viennent des subreddits et sauvegardés
+            // Les dossiers `r.…`, `saved.…`, `x.…` et `redgifs.…` viennent des
+            // subreddits, sauvegardés, profils X-Fetish et comptes RedGifs
             // (le point est impossible dans un pseudo).
             if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
                 collections.append(UserCollection(name: sub, isSubreddit: true))
+            } else if folder.hasPrefix("redgifs."), let owner = try? RedgifsAPI.username(String(folder.dropFirst(8))) {
+                collections.append(UserCollection(name: owner, isRedGifs: true))
             } else if folder.hasPrefix("saved."), let owner = try? MediaExtractor.username(String(folder.dropFirst(6))) {
                 collections.append(UserCollection(name: owner, isSaved: true))
             } else if folder.hasPrefix("x."), let model = try? XFetishAlbums.modelName(String(folder.dropFirst(2))) {
@@ -274,6 +294,7 @@ struct SavedMediaCount: Codable {
             case .subreddit(let name): sourceKind = "r"; username = name
             case .saved(let name): sourceKind = "saved"; username = name
             case .xFetish(let name): sourceKind = "x"; username = name
+            case .redgifsUser(let name): sourceKind = "rg"; username = name
             }
         } else {
             username = id
@@ -291,6 +312,7 @@ struct SavedMediaCount: Codable {
             case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
             case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
             case .xFetish(let name): collections.append(UserCollection(name: name, isXFetish: true))
+            case .redgifsUser(let name): collections.append(UserCollection(name: name, isRedGifs: true))
             }
         }
         saveCollections()
@@ -585,7 +607,8 @@ struct SavedMediaCount: Codable {
             source = .saved(feed.username)
             privateFeed = feed
         } else {
-            let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
+            let needsPrefix = !username.contains("/") && !username.lowercased().contains("redgifs.com")
+            let text = needsPrefix ? "\(sourceKind)/\(username)" : username
             source = try FeedSource.parse(text)
             if case .saved(let name) = source {
                 status = L("Vérification du compte et du flux privé…", "Checking account and private feed…")
@@ -624,6 +647,32 @@ struct SavedMediaCount: Codable {
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
+        // Comptes RedGifs : pagination numérique de l'API search, pas de RSS.
+        // La meilleure qualité (HD puis SD) passe par le chemin existant
+        // `downloadRedgifs(id:)` ; le listing ne sert qu'à recenser les IDs.
+        if case .redgifsUser(let rgName) = source {
+            let visited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
+            LogCenter.info(L("Dossier : \(source.folderName), \(visited.count) déjà vus.", "Folder: \(source.folderName), \(visited.count) seen."))
+            let completed = try await runRedgifsUser(
+                username: rgName, canonical: canonical, folder: folder,
+                seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                preparedCount: &preparedCount)
+            if let index = collections.firstIndex(where: { $0.id == canonical }) {
+                collections[index].lastRun = Date()
+                saveCollections()
+            }
+            if !completed {
+                status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
+            } else if failed == 0 {
+                status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
+            }
+            if failed > 0 {
+                let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+                errorMessage = L("\(failed) médias inaccessibles ou non enregistrés (le plus souvent supprimés par leur hébergeur).\n\(kept) médias conservés.",
+                                 "\(failed) media files unavailable or unsaved (most often deleted by their host).\n\(kept) media files kept.")
+            }
+            return
+        }
         let checkpoint = FeedCheckpoint(
             cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)),
             frontier: UserDefaults.standard.string(forKey: Self.frontierKey(canonical)),
@@ -913,6 +962,108 @@ struct SavedMediaCount: Codable {
 
     private static func validPageCursor(_ id: String, privateFeed: SavedFeed?) -> Bool {
         id.hasPrefix("t3_") || (privateFeed != nil && id.hasPrefix("t1_"))
+    }
+
+    /// Parcours d'un compte RedGifs (`order=new`, 80 par page, max 100 pages
+    /// côté API). Les IDs déjà vus sont sautés, les nouveaux passent par le
+    /// chemin HD-d'abord existant. Retourne `false` si les 100 pages sont
+    /// consommées sans atteindre la fin (relance pour continuer).
+    private func runRedgifsUser(username: String, canonical: String, folder: URL,
+                                seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                preparedCount: inout Int) async throws -> Bool {
+        var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
+        var orderedVisited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
+        var seenPages = Set<[String]>()
+        for page in 1...100 {
+            try Task.checkCancellation()
+            status = L("Recherche RedGifs… page \(page)", "Searching RedGifs… page \(page)")
+            LogCenter.net(L("RedGifs \(username) : page \(page) demandée…", "RedGifs \(username): page \(page) requested…"))
+            let response = try await fetchRedgifsUserPage(username: username, page: page)
+            let ids = response.gifs.map(\.id)
+            LogCenter.net(L("RedGifs \(username) : page \(page) reçue, \(ids.count) médias.", "RedGifs \(username): page \(page) received, \(ids.count) media."))
+            if ids.isEmpty { break }
+            guard seenPages.insert(ids).inserted else { break }
+            let fresh = ids.filter { !visited.contains($0) }
+            if !fresh.isEmpty {
+                let downloads = prepareRedgifsDownloads(fresh, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
+                LogCenter.info(L("RedGifs page \(page) : \(downloads.count) nouveaux médias à prendre.", "RedGifs page \(page): \(downloads.count) new media to fetch."))
+                try await executeDownloads(downloads, &preparedCount)
+            }
+            for id in ids where visited.insert(id).inserted { orderedVisited.append(id) }
+            Self.persistResumeState(canonical: canonical, cursor: nil, visited: orderedVisited)
+            if page >= max(1, response.pages) { return true }
+        }
+        return false
+    }
+
+    private func fetchRedgifsUserPage(username: String, page: Int) async throws -> RedgifsUserSearchResponse {
+        let bearer = try await redgifsToken()
+        do {
+            let data = try await network.data(
+                RedgifsAPI.userSearchURL(username: username, page: page),
+                bearer: bearer, headers: RedgifsAPI.headers(id: username))
+            return try JSONDecoder().decode(RedgifsUserSearchResponse.self, from: data)
+        } catch NetworkError.refused(let code) where code == 401 {
+            token = nil
+            let bearer = try await redgifsToken()
+            let data = try await network.data(
+                RedgifsAPI.userSearchURL(username: username, page: page),
+                bearer: bearer, headers: RedgifsAPI.headers(id: username))
+            return try JSONDecoder().decode(RedgifsUserSearchResponse.self, from: data)
+        } catch NetworkError.refused(let code) where code == 404 {
+            throw NetworkError.invalid(L("Compte RedGifs introuvable : \(username).", "RedGifs account not found: \(username)."))
+        }
+    }
+
+    /// Nommage `IDcourt` stable (titres API non exploités), dédoublonnage par
+    /// `Media` et migration des anciens fichiers nommés par empreinte,
+    /// comme `prepareDownloads`.
+    private func prepareRedgifsDownloads(_ ids: [String], folder: URL,
+                                         seenMedia: inout Set<Media>,
+                                         usedFilenames: inout Set<String>,
+                                         author: String) -> [Download] {
+        var downloads: [Download] = []
+        var renamedExisting = false
+        var skippedExisting = 0
+        var skippedSeen = 0
+        for id in ids {
+            let item = Media.redgifs(id.lowercased())
+            guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
+            let stem = FilenamePolicy.downloadStem(title: "", postID: id)
+            var filename = "\(stem).mp4"
+            if !usedFilenames.insert(filename.lowercased()).inserted {
+                var duplicate = 2
+                filename = "\(stem)-\(duplicate).mp4"
+                while !usedFilenames.insert(filename.lowercased()).inserted {
+                    duplicate += 1
+                    filename = "\(stem)-\(duplicate).mp4"
+                }
+            }
+            let destination = folder.appendingPathComponent(filename)
+            let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
+            let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension("mp4")
+            if fm.fileExists(atPath: destination.path) {
+                skippedExisting += 1
+                if fm.fileExists(atPath: legacyDestination.path) {
+                    try? fm.removeItem(at: legacyDestination)
+                    renamedExisting = true
+                }
+            } else if fm.fileExists(atPath: legacyDestination.path) {
+                try? fm.moveItem(at: legacyDestination, to: destination)
+                MediaMetadata.move(from: legacyDestination, to: destination)
+                renamedExisting = true
+            } else {
+                downloads.append(Download(media: item, destination: destination,
+                    postDate: nil, author: author, headers: nil,
+                    postLink: "https://www.redgifs.com/users/\(author.split(separator: "/").last.map(String.init) ?? "")"))
+            }
+        }
+        if skippedExisting > 0 || skippedSeen > 0 {
+            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen."))
+        }
+        if renamedExisting { reload() }
+        return downloads
     }
 
     private func executeDownloads(_ downloads: [Download], _ preparedCount: inout Int) async throws {

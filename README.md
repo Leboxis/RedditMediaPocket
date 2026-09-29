@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `♥` (sauvegardés Reddit) et `x/` (albums et vidéos d'un profil X-Fetish). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit) et `x/` (albums et vidéos d'un profil X-Fetish). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## État réel
 
@@ -10,7 +10,7 @@ Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronque
 
 Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencontrer une page entièrement déjà connue : c'est là que les nouveaux posts s'arrêtent. Si une session précédente a été interrompue au milieu de cette lecture, le point d'arrivée est mémorisé et l'exécution suivante saute directement dessus au lieu de conclure à tort qu'elle a tout vu. Ce point est effacé dès que le parcours rejoint l'historique, ou conservé si les 100 pages ont été consommées sans l'atteindre.
 
-Les profils (`u/pseudo`, flux `submitted`) et les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`) pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
+Les profils (`u/pseudo`, flux `submitted`), les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) et les comptes RedGifs (`RG/pseudo` ou URL `redgifs.com/users/pseudo`, tri Nouveaux via `order=new`, 80 par page, 100 pages max côté API) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`), ceux des comptes RedGifs `redgifs.` (ex. `redgifs.upset_trash_3094`) et les clés `rg/pseudo` pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
 Albums X-Fetish (`x/`) : saisir uniquement le nom dans l'adresse du profil après `/models/`, par exemple `itwasalwaysmysolesvip` pour `https://x-fetish.tube/models/itwasalwaysmysolesvip/`. Un sélecteur **Images / Vidéos / Les deux** apparaît sous le champ de saisie ; il est mémorisé et vaut « Images » par défaut. Une collection distincte `x/nom` est créée dans le dossier `x.nom`, quel que soit le sélecteur.
 
@@ -77,6 +77,7 @@ Si le dépôt porte un autre nom, adapter cette URL ; le workflow utilise automa
 | MP4 direct sur ces mêmes hôtes | Téléchargement direct |
 | Vidéo v.redd.it | Manifest DASH, meilleure résolution exposée, assemblage audio si présent |
 | RedGIFs `/watch/` ou `/ifr/` | API RedGIFs avec jeton temporaire anonyme ; pas de compte |
+| Comptes RedGifs (`RG/pseudo`) | Liste `users/<pseudo>/search` (vérifié : 158 médias sur `upset_trash_3094`), HD puis SD par média |
 | Galerie Reddit | Non prise en charge ; indiquée dans le journal |
 | Autres hébergeurs / galeries Imgur | Non pris en charge |
 | Privé, supprimé, accès soumis à connexion | Non accessible |
@@ -114,7 +115,7 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 ## Galerie et téléchargements simultanés
 
-Interface compacte : sélecteur `u/`, `r/` ou `♥`, nom (ou « Sauvegardés du compte connecté » pour le cœur), bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
+Interface compacte : sélecteur `u/`, `r/`, `RG`, `♥` ou `x/`, nom (ou « Sauvegardés du compte connecté » pour le cœur), bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
 Trois médias maximum sont traités simultanément (résolution, transfert et assemblage compris). Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt, une erreur ou un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 
