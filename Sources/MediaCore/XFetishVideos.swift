@@ -93,9 +93,11 @@ public enum XFetishVideos {
         let html = String(decoding: data, as: UTF8.self)
         let ns = html as NSString
         let range = NSRange(location: 0, length: ns.length)
-        guard let match = playerURLRegex.firstMatch(in: html, range: range),
-              let raw = ns.substring(with: match.range(at: 1)),
-              let url = XFetishHTML.siteURL(raw, relativeTo: XFetishHTML.siteRoot),
+        guard let match = playerURLRegex.firstMatch(in: html, range: range) else {
+            throw XFetishVideoError.invalidPlayer
+        }
+        let raw = ns.substring(with: match.range(at: 1))
+        guard let url = XFetishHTML.siteURL(raw, relativeTo: XFetishHTML.siteRoot),
               let route = signedRouteRegex.firstMatch(in: url.path,
                                                       range: NSRange(url.path.startIndex..., in: url.path)) else {
             throw XFetishVideoError.invalidPlayer
