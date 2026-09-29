@@ -170,6 +170,8 @@ L’état de session est visible dans les réglages et la connexion ; le bandeau
 
 La galerie affiche des compteurs de largeur égale et centrés : fichiers locaux tous profils confondus, somme des tailles des fichiers terminés, puis nouveaux fichiers reçus / repérés pendant le parcours en cours. Le dénominateur progresse à chaque page ; les fichiers déjà présents sont exclus de ce dénominateur. Il ne constitue pas un maximum exhaustif de l’historique Reddit. Les téléchargements échoués ou limités restent dans le total repéré.
 
+En mode `x/`, une barre d'avancement linéaire s'affiche sous les compteurs pendant le téléchargement. Elle rapporte les médias déjà enregistrés aux médias repérés à cet instant : X-Fetish n'annonce aucun total, le dénominateur grandit donc au fil du parcours et la barre ne recule jamais. Ce n'est pas un pourcentage exhaustif de l'historique du profil.
+
 La connexion est présentée en plein écran. Une seule barre supérieure affiche reddit.com et une croix. La vue Web est contrainte au guide UIKit du clavier, et le déplacement automatique de l’ensemble par SwiftUI est désactivé pour cet écran.
 
 Quick Look est remplacé par une visionneuse plein écran : fond noir, titre tronqué au milieu et centré entre commandes de même largeur, index centré, croix et partage. Les vidéos utilisent AVPlayer et s’arrêtent quand on quitte leur page. Les images disposent d’un zoom par pincement/double toucher. Seuls les médias voisins sont préparés ; les images d’affichage sont limitées à 4096 pixels, sans modifier les originaux téléchargés ou partagés. Les GIF sont affichés dans une vue Web locale non persistante sans JavaScript.

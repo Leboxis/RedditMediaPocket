@@ -64,6 +64,13 @@ struct SavedMediaCount: Codable {
     @Published var count = 0
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var discovered = 0
+    /// Avancé du parcours, en fraction. `discovered` (les médias repérés) croît
+    /// pendant que le parcours avance, donc le ratio brut peut reculer ; le
+    /// plancher ci-dessous garantit une barre qui ne recule jamais, comme
+    /// l'utilisateur s'attend à le voir. Ce n'est pas un pourcentage exhaustif :
+    /// X-Fetish n'annonce pas son total, le dénominateur grandit en continu.
+    @Published private(set) var transferProgress: Double = 0
+    private var transferProgressFloor: Double = 0
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
 
     private static func savedMediaCountKey(_ canonical: String) -> String { "savedMediaCount.\(canonical)" }
@@ -402,6 +409,7 @@ struct SavedMediaCount: Codable {
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
         running = true; discovered = 0; count = 0; status = ""; failed = 0
+        transferProgress = 0; transferProgressFloor = 0
         task = Task {
             defer { running = false; active = 0; task = nil }
             do {
@@ -892,11 +900,27 @@ struct SavedMediaCount: Codable {
         preparedCount += downloads.count
         status = ""
         if downloads.isEmpty { return }
+        // `discovered` compte ce que le parcours a repéré, pas ce qu'il a
+        // enregistré : sans cela le dénominateur resterait égal au numérateur
+        // et aucune barre n'aurait de sens. Les fichiers déjà présents sont
+        // exclus car `downloads` ne contient que les médias à transférer.
+        discovered += downloads.count
         LogCenter.net(L("Transfert de \(downloads.count) médias (max \(sessionLimit) à la fois)…", "Transferring \(downloads.count) media (max \(sessionLimit) at once)…"))
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
+            // Un média terminé, réussi ou non, fait avancer la barre.
+            defer { Task { @MainActor in self.recordTransferredItem() } }
             try await self.saveIgnoringInaccessible(item)
         }
         LogCenter.net(L("Transfert du lot terminé.", "Batch transfer done."))
+    }
+
+    /// Recalcule l'avancé en inhibant tout recul : le dénominateur croît avec la
+    /// découverte, un ratio brut pourrait donc redescendre entre deux lots.
+    private func recordTransferredItem() {
+        guard discovered > 0 else { return }
+        let ratio = Double(count) / Double(discovered)
+        transferProgressFloor = max(transferProgressFloor, ratio)
+        transferProgress = min(1, transferProgressFloor)
     }
 
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
@@ -1066,7 +1090,6 @@ struct SavedMediaCount: Codable {
         files.insert(item.destination, at: 0)
         totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         count += 1
-        discovered += 1
         LogCenter.info(L("Gardé : \(item.destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(item.destination.lastPathComponent) (\(count)/\(discovered))."))
         // A scan started before this save must not overwrite the newly inserted file.
         if reloadTask != nil { reload() }

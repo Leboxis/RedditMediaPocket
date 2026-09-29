@@ -39,6 +39,7 @@ struct ContentView: View {
                 savedHintRow
                 userChipsRow
                 metricsRow
+                transferBarRow
                 statusRow
                 gallerySection
             }
@@ -233,6 +234,21 @@ struct ContentView: View {
                 .accessibilityHidden(!showProgress)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
+    }
+
+    /// Avancé du transfert en cours. X-Fetish seulement : son parcours n'a pas
+    /// de curseur ni de total annoncé, la barre est donc un rapport aux médias
+    /// repérés à cet instant, et son dénominateur grandit pendant le parcours.
+    @ViewBuilder private var transferBarRow: some View {
+        if isXFetishInput, model.running, model.discovered > 0 {
+            ProgressView(value: model.transferProgress)
+                .progressViewStyle(.linear)
+                .tint(.orange)
+                .padding(.horizontal, 16).padding(.bottom, 6)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(L("Téléchargement X-Fetish", "X-Fetish download"))
+                .accessibilityValue("\(model.count)/\(model.discovered)")
+        }
     }
 
     @ViewBuilder private var statusRow: some View {
