@@ -34,6 +34,15 @@ public enum XFetishIPv4Error: LocalizedError {
 /// systématique). Ce client force IPv4 pour `get_image` afin que le jeton
 /// corresponde à l'IP du stockage.
 public enum XFetishIPv4 {
+    /// Signed image routes require the original escaping and trailing slash.
+    static func requestTarget(for url: URL) throws -> String {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
+            throw XFetishIPv4Error.invalidResponse
+        }
+        let path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
+        return path + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+    }
+
     /// Decode only the header block. Errors contain no server-supplied text or
     /// URLs: Location and even the HTTP reason phrase may contain credentials.
     static func redirectURL(headerData: Data, from source: URL) throws -> URL {
@@ -100,8 +109,7 @@ public enum XFetishIPv4 {
             throw XFetishIPv4Error.invalidResponse
         }
         let ipv4 = try resolveIPv4(host)
-        let path = getImage.path.isEmpty ? "/" : getImage.path
-        let target = path + (getImage.query.map { "?" + $0 } ?? "")
+        let target = try requestTarget(for: getImage)
         let requestLines = [
             "GET \(target) HTTP/1.1",
             "Host: \(host)",

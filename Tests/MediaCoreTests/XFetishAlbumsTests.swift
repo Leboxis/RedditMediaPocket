@@ -2,6 +2,17 @@ import XCTest
 @testable import MediaCore
 
 final class XFetishAlbumsTests: XCTestCase {
+    func testIPv4ImageTargetPreservesTrailingSlashAndSignedQuery() throws {
+        let url = try XCTUnwrap(URL(string: "https://x-fetish.tube/get_image/12/abc/sources/6000/6264/3454270.jpg/?i-acctoken=a%2Bb%2Fz&v=1"))
+        XCTAssertEqual(try XFetishIPv4.requestTarget(for: url),
+                       "/get_image/12/abc/sources/6000/6264/3454270.jpg/?i-acctoken=a%2Bb%2Fz&v=1")
+    }
+
+    func testIPv4ImageTargetPreservesEncodedPath() throws {
+        let url = try XCTUnwrap(URL(string: "https://x-fetish.tube/get_image/a%2Fb/image.jpg/?token=x%26y"))
+        XCTAssertEqual(try XFetishIPv4.requestTarget(for: url), "/get_image/a%2Fb/image.jpg/?token=x%26y")
+    }
+
     func testSourceButtonCyclesThroughAllFourKinds() {
         XCTAssertEqual(SourceKind.user.next, .subreddit)
         XCTAssertEqual(SourceKind.subreddit.next, .saved)
