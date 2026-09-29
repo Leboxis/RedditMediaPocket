@@ -192,15 +192,24 @@ import MediaCore
         // X-Fetish `get_image` / `get_file` : forçage IPv4 (le stockage est
         // IPv4-only, le token est lié à l'IP ; en IPv6 le 403 est systématique).
         if XFetishIPv4.isSignedMediaRoute(url) {
+            // Seul l'échec de l'échange contre l'URL de stockage justifie un
+            // repli. Le transfert du média est volontairement hors de ce `do` :
+            // une annulation ou un refus y survenant ne doit jamais être
+            // rapporté comme une indisponibilité IPv4, ni renvoyer la route
+            // signée en IPv6 alors que son jeton est lié à l'adresse IPv4.
+            let storage: URL?
             do {
                 let referer = headers?.first(where: { $0.key.lowercased() == "referer" })?.value
                     ?? "https://x-fetish.tube/"
-                let storage = try await XFetishIPv4.storageURL(for: url, userAgent: XFetishAPI.userAgent, referer: referer)
+                storage = try await XFetishIPv4.storageURL(for: url, userAgent: XFetishAPI.userAgent, referer: referer)
+            } catch {
+                if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+                LogCenter.err(L("IPv4 X-Fetish indisponible, repli URLSession : \(error.localizedDescription).", "X-Fetish IPv4 unavailable, URLSession fallback: \(error.localizedDescription)."))
+                storage = nil
+            }
+            if let storage {
                 LogCenter.net(L("IPv4 : \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage)).", "IPv4: \(LogDiagnostics.requestSummary(url)) → \(LogDiagnostics.requestSummary(storage))."))
                 return try await download(storage, headers: headers)
-            } catch {
-                if error is CancellationError { throw error }
-                LogCenter.err(L("IPv4 X-Fetish indisponible, repli URLSession : \(error.localizedDescription).", "X-Fetish IPv4 unavailable, URLSession fallback: \(error.localizedDescription)."))
             }
         }
         let generation = requestGeneration

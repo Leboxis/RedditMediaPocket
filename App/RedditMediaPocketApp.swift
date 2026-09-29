@@ -237,17 +237,17 @@ struct ContentView: View {
     }
 
     /// Avancé du transfert en cours. X-Fetish seulement : son parcours n'a pas
-    /// de curseur ni de total annoncé, la barre est donc un rapport aux médias
-    /// repérés à cet instant, et son dénominateur grandit pendant le parcours.
+    /// de curseur ni de total annoncé, la barre porte donc sur l'unité en cours
+    /// (un album, une page de vidéos), dont le nombre de médias est connu.
     @ViewBuilder private var transferBarRow: some View {
-        if isXFetishInput, model.running, model.discovered > 0 {
-            ProgressView(value: model.transferProgress)
+        if let unit = model.transferUnit, isXFetishInput, model.running, unit.total > 0 {
+            ProgressView(value: unit.fraction)
                 .progressViewStyle(.linear)
                 .tint(.orange)
                 .padding(.horizontal, 16).padding(.bottom, 6)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(L("Téléchargement X-Fetish", "X-Fetish download"))
-                .accessibilityValue("\(model.count)/\(model.discovered)")
+                .accessibilityValue("\(unit.done)/\(unit.total)")
         }
     }
 

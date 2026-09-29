@@ -64,13 +64,17 @@ struct SavedMediaCount: Codable {
     @Published var count = 0
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var discovered = 0
-    /// Avancé du parcours, en fraction. `discovered` (les médias repérés) croît
-    /// pendant que le parcours avance, donc le ratio brut peut reculer ; le
-    /// plancher ci-dessous garantit une barre qui ne recule jamais, comme
-    /// l'utilisateur s'attend à le voir. Ce n'est pas un pourcentage exhaustif :
-    /// X-Fetish n'annonce pas son total, le dénominateur grandit en continu.
-    @Published private(set) var transferProgress: Double = 0
-    private var transferProgressFloor: Double = 0
+    /// Avancé de l'unité de téléchargement en cours : un album, ou une page de
+    /// vidéos. X-Fetish n'annonce aucun total global et le parcours en découvre
+    /// en continu, donc la barre ne porte pas sur le profil mais sur une unité
+    /// dont le nombre de médias est connu : elle est exacte, pas estimée, et le
+    /// compteur « repérés » garde son sens propre.
+    struct TransferUnit: Equatable {
+        var done = 0
+        var total = 0
+        var fraction: Double { total > 0 ? min(1, Double(done) / Double(total)) : 0 }
+    }
+    @Published private(set) var transferUnit: TransferUnit?
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
 
     private static func savedMediaCountKey(_ canonical: String) -> String { "savedMediaCount.\(canonical)" }
@@ -409,7 +413,7 @@ struct SavedMediaCount: Codable {
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
         running = true; discovered = 0; count = 0; status = ""; failed = 0
-        transferProgress = 0; transferProgressFloor = 0
+        transferUnit = nil
         task = Task {
             defer { running = false; active = 0; task = nil }
             do {
@@ -799,6 +803,7 @@ struct SavedMediaCount: Codable {
                 let downloads = try await prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                     author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
+                beginTransferUnit(total: downloads.count)
                 try await executeDownloads(downloads, &preparedCount)
             }
 
@@ -830,24 +835,38 @@ struct SavedMediaCount: Codable {
             let listingData = try await network.data(XFetishVideos.listingURL(model: model, page: page))
             let listing = try XFetishVideos.parseListing(listingData, model: model, page: page)
             LogCenter.info(L("X-Fetish vidéos : page \(page), \(listing.videos.count) vidéos.", "X-Fetish videos: page \(page), \(listing.videos.count) videos."))
-
+            var fresh: [XFetishVideos.Video] = []
             for video in listing.videos {
                 try Task.checkCancellation()
                 guard scannedVideos.insert(video.id).inserted else { continue }
-                let id = "xfv-\(video.id)"
-                guard !savedVideoIDs.contains(id) else { continue }
-                status = L("Vidéo \(scannedVideos.count) : \(video.title)", "Video \(scannedVideos.count): \(video.title)")
-                let pageData = try await network.data(video.url)
-                let fileURL = try XFetishVideos.parseFileURL(pageData, video: video)
-                let media = Media.direct(fileURL)
+                guard !savedVideoIDs.contains("xfv-\(video.id)") else { continue }
+                fresh.append(video)
+            }
+            beginTransferUnit(total: fresh.count)
+            // Vidéos préparées par lots de `sessionLimit` : au-delà, une URL
+            // signée attendrait derrière tous les transferts de la page et le
+            // `v-acctoken` pourrait expirer. La barre suit la page entière, pas
+            // le lot, donc elle reste lisse malgré la découpe.
+            for start in stride(from: 0, to: fresh.count, by: max(1, sessionLimit)) {
+                try Task.checkCancellation()
+                let chunk = Array(fresh[start..<min(start + max(1, sessionLimit), fresh.count)])
                 var mediaOverrides: [String: [Media]] = [:]
                 var mediaHeaders: [String: [String: String]] = [:]
-                mediaOverrides[id] = [media]
-                // Anti-hotlink : le stockage exige le Referer de la page vidéo.
-                mediaHeaders[media.key] = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
-                let downloads = try await prepareDownloads(
-                    [Post(id: id, title: video.title, html: "", link: video.url.absoluteString)],
-                    folder: folder, seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                var posts: [Post] = []
+                for video in chunk {
+                    try Task.checkCancellation()
+                    let id = "xfv-\(video.id)"
+                    status = L("Vidéo \(scannedVideos.count) : \(video.title)", "Video \(scannedVideos.count): \(video.title)")
+                    let pageData = try await network.data(video.url)
+                    let fileURL = try XFetishVideos.parseFileURL(pageData, video: video)
+                    let media = Media.direct(fileURL)
+                    mediaOverrides[id] = [media]
+                    // Anti-hotlink : le stockage exige le Referer de la page vidéo.
+                    mediaHeaders[media.key] = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
+                    posts.append(Post(id: id, title: video.title, html: "", link: video.url.absoluteString))
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                     author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
                 try await executeDownloads(downloads, &preparedCount)
             }
@@ -907,20 +926,28 @@ struct SavedMediaCount: Codable {
         discovered += downloads.count
         LogCenter.net(L("Transfert de \(downloads.count) médias (max \(sessionLimit) à la fois)…", "Transferring \(downloads.count) media (max \(sessionLimit) at once)…"))
         try await ConcurrentDownloads.run(downloads, limit: sessionLimit) { item in
-            // Un média terminé, réussi ou non, fait avancer la barre.
-            defer { Task { @MainActor in self.recordTransferredItem() } }
-            try await self.saveIgnoringInaccessible(item)
+            // Un média terminé, réussi ou non, fait avancer la barre. L'appel
+            // est attendu avant toute autre étape : aucun reliquat ne peut
+            // ainsi arriver après le début de l'unité suivante.
+            do {
+                try await self.saveIgnoringInaccessible(item)
+            } catch {
+                await self.recordTransferredItem()
+                throw error
+            }
+            await self.recordTransferredItem()
         }
         LogCenter.net(L("Transfert du lot terminé.", "Batch transfer done."))
     }
 
-    /// Recalcule l'avancé en inhibant tout recul : le dénominateur croît avec la
-    /// découverte, un ratio brut pourrait donc redescendre entre deux lots.
+    private func beginTransferUnit(total: Int) {
+        transferUnit = total > 0 ? TransferUnit(done: 0, total: total) : nil
+    }
+
     private func recordTransferredItem() {
-        guard discovered > 0 else { return }
-        let ratio = Double(count) / Double(discovered)
-        transferProgressFloor = max(transferProgressFloor, ratio)
-        transferProgress = min(1, transferProgressFloor)
+        guard var unit = transferUnit else { return }
+        unit.done = min(unit.done + 1, unit.total)
+        transferUnit = unit
     }
 
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
