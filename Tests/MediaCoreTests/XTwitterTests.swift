@@ -77,13 +77,28 @@ final class XTwitterTests: XCTestCase {
         XCTAssertTrue(second.absoluteString.contains("cursor"))
     }
 
-    /// Un curseur est une chaîne base64 : il doit survivre à l'assemblage de
-    /// l'URL, être échappé, et revenir identique une fois décodé.
-    func testCursorSurvivesURLRoundTrip() throws {
+    /// Le curseur est imbriqué dans le JSON des `variables`, pas dans un
+    /// paramètre de l'URL : il n'a donc pas de `queryItems` à lui. Ce qui
+    /// compte est que le JSON produit reste valide et que le curseur y figure
+    /// intact, échappé ou non : c'est x.com qui le décode, pas l'app.
+    func testCursorIsEmbeddedInValidVariablesJSON() throws {
         let url = XTwitterAPI.userMedia(userID: "1", cursor: "a+b/c=")
-        let value = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == "cursor" }?.value)
-        XCTAssertEqual(value, "a+b/c=")
+        let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        let raw = try XCTUnwrap(items.first { $0.name == "variables" }?.value)
+        // Rétablit le JSON après le décodage des percent-encodages de l'URL.
+        let variables = try XCTUnwrap(raw.removingPercentEncoding ?? raw)
+        let decoded = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(variables.utf8))
+            as? [String: Any])
+        XCTAssertEqual(decoded["userId"] as? String, "1")
+        XCTAssertEqual(decoded["count"] as? Int, 40)
+        XCTAssertEqual(decoded["cursor"] as? String, "a+b/c=")
+        // L'absence de curseur ne doit pas laisser de champ vide derrière.
+        let first = try XCTUnwrap(URLComponents(url: XTwitterAPI.userMedia(userID: "1", cursor: nil),
+                                                resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "variables" }?.value)
+        let without = try XCTUnwrap(first.removingPercentEncoding ?? first)
+        let empty = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(without.utf8)) as? [String: Any])
+        XCTAssertNil(empty["cursor"])
     }
 
     // MARK: - Cookies

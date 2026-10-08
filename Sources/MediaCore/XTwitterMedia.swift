@@ -83,10 +83,8 @@ public enum XTwitterMedia {
     public static func parseMediaPage(_ data: Data) throws -> XMediaPage {
         let root = try object(data)
         let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
-        // `instructions` est un tableau d'objets : le lire via `dictionary`
-        // le ferait échouer, d'où l'étape dédiée.
         let timeline = dictionary(dictionary(user, "timeline_v2"), "timeline")
-        guard let instructions = objects(dictionary(timeline, "instructions")) else {
+        guard let instructions = objects(timeline, "instructions") else {
             throw XTwitterError.invalidTimeline
         }
         var posts: [XPost] = []
@@ -94,7 +92,7 @@ public enum XTwitterMedia {
         var sawEntry = false
 
         for instruction in instructions {
-            guard let entries = list(instruction, "entries") else { continue }
+            guard let entries = objects(instruction, "entries") else { continue }
             for entry in entries {
                 sawEntry = true
                 let entryID = text(entry, "entryId") ?? ""
@@ -129,8 +127,8 @@ public enum XTwitterMedia {
     /// `entities.media`. Les médias d'une citation appartiennent au post cité :
     /// le parcours de ce post les prendra à son tour.
     static func mediaList(_ legacy: [String: Any]) -> [XMedia] {
-        let raw = list(dictionary(legacy, "extended_entities"), "media")
-            ?? list(dictionary(legacy, "entities"), "media")
+        let raw = objects(dictionary(legacy, "extended_entities"), "media")
+            ?? objects(dictionary(legacy, "entities"), "media")
             ?? []
         var seen = Set<String>()
         var out: [XMedia] = []
@@ -176,7 +174,7 @@ public enum XTwitterMedia {
         guard type == "video" || type == "animated_gif" else { return nil }
         var bestURL: URL?
         var bestBitrate = 0
-        for variant in list(dictionary(entry, "video_info"), "variants") ?? [] {
+        for variant in objects(dictionary(entry, "video_info"), "variants") ?? [] {
             guard text(variant, "content_type") == "video/mp4",
                   let raw = text(variant, "url"),
                   let url = URL(string: raw), isMediaHost(url) else { continue }
@@ -211,18 +209,16 @@ public enum XTwitterMedia {
 
     /// Une liste d'objets. `instructions` est un tableau, pas un objet : le lire
 /// avec `dictionary` le ferait échouer à chaque fois.
-    private static func objects(_ node: Any?) -> [[String: Any]]? {
-        node as? [[String: Any]]
+    private static func objects(_ node: [String: Any]?, _ key: String) -> [[String: Any]]? {
+        guard let node else { return nil }
+        return node[key] as? [[String: Any]]
     }
+
+    
 
     private static func dictionary(_ node: Any?, _ key: String) -> [String: Any]? {
         guard let container = node as? [String: Any] else { return nil }
         return container[key] as? [String: Any]
-    }
-
-    private static func list(_ node: [String: Any]?, _ key: String) -> [[String: Any]]? {
-        guard let node else { return nil }
-        return node[key] as? [[String: Any]]
     }
 
     private static func text(_ node: [String: Any]?, _ key: String) -> String? {
