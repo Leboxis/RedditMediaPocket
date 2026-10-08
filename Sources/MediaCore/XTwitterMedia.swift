@@ -7,7 +7,7 @@ import Foundation
 /// Vidéos et GIF animés : la variante `video/mp4` de plus haut débit, jamais le
 /// flux HLS `application/x-mpegURL` car il n'est pas téléchargeable tel quel.
 public struct XMedia: Hashable, Sendable {
-    /// Nature du média, pour l'extension et la déduplication.
+    /// Nature du média, pour l'extension et la dédouplication.
     public enum Kind: String, Sendable {
         case image, video, gif
 
@@ -21,8 +21,8 @@ public struct XMedia: Hashable, Sendable {
         }
     }
 
-    /// Identifiant du média (`media_key` / `id_str`). Immutable : il sert de
-    /// clé de dédoublonnage sur disque.
+    /// Identifiant du média (`media_key` ou `id_str`). Il est immuable et sert
+    /// de clé de dédoublonnage sur disque.
     public let id: String
     public let kind: Kind
     public let url: URL
@@ -70,20 +70,21 @@ public enum XTwitterMedia {
     /// Résolution du compte : renvoie l'identifiant numérique.
     public static func parseUser(_ data: Data) throws -> String {
         let root = try object(data)
-        // data.user.result.__typename == "User" puis .legacy.id_str
-        let user = root["data"]?["user"]?["result"]
-        let legacy = user?["legacy"] as? [String: Any]
-        if let id = legacy?["id_str"] as? String, !id.isEmpty { return id }
+        let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
+        if let legacy = dictionary(user, "legacy"),
+           let id = text(legacy, "id_str"), !id.isEmpty { return id }
         // Un compte inexistant ou protégé arrive ici : X renvoie un objet sans
-        // `legacy`, ou un typename "UserUnavailable".
+        // `legacy`, ou un typename `UserUnavailable`.
         throw XTwitterError.unknownAccount
     }
 
     /// Une page du fil média. Les entrées sans média exploitable (texte seul,
-    /// carte, réponse citant un média déjà retenu) sont ignorées.
+    /// carte, citation) sont ignorées.
     public static func parseMediaPage(_ data: Data) throws -> XMediaPage {
         let root = try object(data)
-        guard let instructions = root["data"]?["user"]?["result"]?["timeline_v2"]?["timeline"]?["instructions"] as? [[String: Any]] else {
+        let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
+        let timeline = dictionary(dictionary(dictionary(user, "timeline_v2"), "timeline"), "instructions")
+        guard let instructions = timeline as? [[String: Any]] else {
             throw XTwitterError.invalidTimeline
         }
         var posts: [XPost] = []
@@ -91,28 +92,29 @@ public enum XTwitterMedia {
         var sawEntry = false
 
         for instruction in instructions {
-            guard let entries = instruction["entries"] as? [[String: Any]] else { continue }
+            guard let entries = list(instruction, "entries") else { continue }
             for entry in entries {
                 sawEntry = true
-                let entryID = entry["entryId"] as? String ?? ""
+                let entryID = text(entry, "entryId") ?? ""
                 // Le curseur de bas de page se trouve dans une entrée dédiée,
                 // pas dans un post. Il est la seule voie de pagination.
                 if entryID.hasPrefix("cursor-bottom") {
-                    let value = entry["content"]?["value"] as? String
-                    if let value, !value.isEmpty { nextCursor = value }
+                    if let value = text(dictionary(entry, "content"), "value"), !value.isEmpty {
+                        nextCursor = value
+                    }
                     continue
                 }
                 if entryID.hasPrefix("profile-conversation") || entryID.hasPrefix("tweetdetailreflow") { continue }
-                guard let result = entry["content"]?["itemContent"]?["tweet_results"]?["result"] as? [String: Any] else { continue }
-                guard let legacy = result["legacy"] as? [String: Any] else { continue }
-                let tweetID = legacy["id_str"] as? String
-                    ?? (result["rest_id"] as? String)
+                let content = dictionary(dictionary(entry, "content"), "itemContent")
+                let results = dictionary(dictionary(content, "tweet_results"), "result")
+                guard let legacy = dictionary(results, "legacy") else { continue }
+                let tweetID = text(legacy, "id_str") ?? text(results, "rest_id")
                 guard let tweetID, !tweetID.isEmpty else { continue }
                 let media = mediaList(legacy)
                 guard !media.isEmpty else { continue }
                 posts.append(XPost(id: tweetID,
-                                   text: (legacy["full_text"] as? String) ?? "",
-                                   publishedAt: parseDate(legacy["created_at"] as? String),
+                                   text: text(legacy, "full_text") ?? "",
+                                   publishedAt: parseDate(text(legacy, "created_at")),
                                    media: media))
             }
         }
@@ -122,11 +124,11 @@ public enum XTwitterMedia {
 
     /// Médias d'un post, dans l'ordre publié, sans doublon d'identifiant.
     /// `extended_entities.media` est la source la plus complète ; à défaut,
-    /// `entities.media`. Les médias d'une citation appartiennent au post cité et
-    /// sont donc ignorés : le parcours du post cité les prendra à son tour.
+    /// `entities.media`. Les médias d'une citation appartiennent au post cité :
+    /// le parcours de ce post les prendra à son tour.
     static func mediaList(_ legacy: [String: Any]) -> [XMedia] {
-        let raw = (legacy["extended_entities"]?["media"] as? [[String: Any]])
-            ?? (legacy["entities"]?["media"] as? [[String: Any]])
+        let raw = list(dictionary(legacy, "extended_entities"), "media")
+            ?? list(dictionary(legacy, "entities"), "media")
             ?? []
         var seen = Set<String>()
         var out: [XMedia] = []
@@ -139,11 +141,11 @@ public enum XTwitterMedia {
     }
 
     private static func mediaID(_ entry: [String: Any]) -> String? {
-        if let key = entry["media_key"] as? String, !key.isEmpty {
-            // `3_1234567890` → l'identifiant nu suffit et reste stable.
+        if let key = text(entry, "media_key"), !key.isEmpty {
+            // `3_1234567890` : l'identifiant nu suffit et reste stable.
             return key.split(separator: "_").last.map(String.init) ?? key
         }
-        if let id = entry["id_str"] as? String, !id.isEmpty { return id }
+        if let id = text(entry, "id_str"), !id.isEmpty { return id }
         return nil
     }
 
@@ -155,13 +157,14 @@ public enum XTwitterMedia {
     /// sont retenus, le plus haut débit d'abord. Un flux HLS seul ne donne rien
     /// de téléchargeable : le média est alors ignoré, et non compté en échec.
     static func bestVariant(_ entry: [String: Any]) -> XMedia? {
-        let id = mediaID(entry)
-        let type = (entry["type"] as? String) ?? "photo"
-        let width = (entry["original_width"] as? NSNumber)?.intValue ?? 0
-        let height = (entry["original_height"] as? NSNumber)?.intValue ?? 0
+        guard let id = mediaID(entry) else { return nil }
+        let type = text(entry, "type") ?? "photo"
+        let width = number(entry, "original_width")
+        let height = number(entry, "original_height")
 
         if type == "photo" {
-            guard let id, let raw = entry["url"] as? String, var components = URLComponents(string: raw) else { return nil }
+            guard let raw = text(entry, "url"),
+                  var components = URLComponents(string: raw) else { return nil }
             // `name=orig` est l'original téléversé ; X sert aussi `format`.
             components.queryItems = [URLQueryItem(name: "name", value: "orig")]
             guard let url = components.url, isMediaHost(url) else { return nil }
@@ -169,18 +172,21 @@ public enum XTwitterMedia {
         }
 
         guard type == "video" || type == "animated_gif" else { return nil }
-        let variants = entry["video_info"]?["variants"] as? [[String: Any]] ?? []
-        var best: (url: URL, bitrate: Int)?
-        for variant in variants {
-            guard (variant["content_type"] as? String) == "video/mp4",
-                  let raw = variant["url"] as? String,
+        var bestURL: URL?
+        var bestBitrate = 0
+        for variant in list(dictionary(entry, "video_info"), "variants") ?? [] {
+            guard text(variant, "content_type") == "video/mp4",
+                  let raw = text(variant, "url"),
                   let url = URL(string: raw), isMediaHost(url) else { continue }
-            let bitrate = (variant["bitrate"] as? NSNumber)?.intValue ?? 0
-            if best == nil || bitrate > best!.bitrate { best = (url, bitrate) }
+            let bitrate = number(variant, "bitrate")
+            if bestURL == nil || bitrate > bestBitrate {
+                bestURL = url
+                bestBitrate = bitrate
+            }
         }
-        guard let id, let chosen = best else { return nil }
+        guard let chosen = bestURL else { return nil }
         return XMedia(id: id, kind: type == "animated_gif" ? .gif : .video,
-                       url: chosen.url, width: width, height: height, bitrate: chosen.bitrate)
+                      url: chosen, width: width, height: height, bitrate: bestBitrate)
     }
 
     /// Seuls les hôtes de publication de X sont acceptés : une URL d'hôte tiers
@@ -195,6 +201,30 @@ public enum XTwitterMedia {
             throw XTwitterError.invalidTimeline
         }
         return root
+    }
+
+    // Les aides ci-dessous évitent d'écrire `a?["b"]?["c"]` : sur `Any`, un
+    // sous-script optionnel n'a pas de type de sortie, et l'enchaînement de
+    // quatre niveaux ne se compile pas.
+
+    private static func dictionary(_ node: Any?, _ key: String) -> [String: Any]? {
+        guard let container = node as? [String: Any] else { return nil }
+        return container[key] as? [String: Any]
+    }
+
+    private static func list(_ node: [String: Any]?, _ key: String) -> [[String: Any]]? {
+        guard let node else { return nil }
+        return node[key] as? [[String: Any]]
+    }
+
+    private static func text(_ node: [String: Any]?, _ key: String) -> String? {
+        guard let node else { return nil }
+        return node[key] as? String
+    }
+
+    private static func number(_ node: [String: Any]?, _ key: String) -> Int {
+        guard let node else { return 0 }
+        return (node[key] as? NSNumber)?.intValue ?? 0
     }
 
     /// `created_at` de X est toujours `EEE MMM dd HH:mm:ss Z yyyy` en anglais.

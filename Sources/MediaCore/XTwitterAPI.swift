@@ -45,16 +45,18 @@ public enum XTwitterAPI {
 
     /// Drapeaux de fonctionnalités que x.com valide sur chaque appel. Ils
     /// conditionnent la forme de la réponse ; les omettre ferait rejeter la requête.
-    static let commonFeatures = [
-        #""rweb_tweetviewer_omnimodal":true"#,
-        #""profile_and_omnimodal":true"#,
-        #""tweet_awards":true"#,
-        #""tweet_creator_enabled":true"#,
-        #""tweet_results_ui_omnimodal":true"#,
-        #""responsive_web_graphql_user_by_screen_name":true"#,
-        #""responsive_web_graphql_user_media":true"#,
-        #""responsive_web_graphql_timeline_navigation":true"#
-    ].joined(separator: ",").wrapped(in: "{", and: "}")
+    static let commonFeatures = "{"
+        + [
+            #""rweb_tweetviewer_omnimodal":true"#,
+            #""profile_and_omnimodal":true"#,
+            #""tweet_awards":true"#,
+            #""tweet_creator_enabled":true"#,
+            #""tweet_results_ui_omnimodal":true"#,
+            #""responsive_web_graphql_user_by_screen_name":true"#,
+            #""responsive_web_graphql_user_media":true"#,
+            #""responsive_web_graphql_timeline_navigation":true"#
+        ].joined(separator: ",")
+        + "}"
 
     /// `UserByScreenName` : `@pseudo` → identifiant numérique.
     public static func userByScreenName(username: String) -> URL {
