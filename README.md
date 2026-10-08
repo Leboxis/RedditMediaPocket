@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit) et `x/` (albums et vidéos d'un profil X-Fetish). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish) et `tw` (médias publics d'un compte X). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## État réel
 
@@ -13,6 +13,24 @@ Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencon
 Les profils (`u/pseudo`, flux `submitted`), les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) et les comptes RedGifs (`RG/pseudo` ou URL `redgifs.com/users/pseudo`, tri Nouveaux via `order=new`, 80 par page, 100 pages max côté API) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`), ceux des comptes RedGifs `redgifs.` (ex. `redgifs.upset_trash_3094`) et les clés `rg/pseudo` pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
 Albums X-Fetish (`x/`) : saisir uniquement le nom dans l'adresse du profil après `/models/`, par exemple `itwasalwaysmysolesvip` pour `https://x-fetish.tube/models/itwasalwaysmysolesvip/`. Un sélecteur **Images / Vidéos / Les deux** apparaît sous le champ de saisie ; il est mémorisé et vaut « Images » par défaut. Une collection distincte `x/nom` est créée dans le dossier `x.nom`, quel que soit le sélecteur.
+
+## Médias d'un compte X (`tw`)
+
+X n'expose aucun accès anonyme aux médias : l'API officielle répond HTTP 401 sans compte, et les miroirs publics type Nitter ne répondent plus. Cette source exige donc une session X, obtenue dans Réglages → Se connecter à X. Elle est distincte de la session Reddit : une déconnexion X n'efface pas la session Reddit, et inversement. Le stockage WebKit est non persistant, donc la session doit être rétablie après un redémarrage de l'app.
+
+Saisir le pseudo seul (`nasa`), avec `@` (`@nasa`), avec le préfixe `tw/`, ou coller l'adresse du profil (`x.com/nasa`). La collection `tw/pseudo` est créée dans le dossier `tw.nasa`, distinct de `x.nasa` (X-Fetish) et d'un profil Reddit au même pseudo.
+
+L'application parcourt le fil `/media` du compte, page par page, du plus récent au plus ancien, 100 pages au plus par exécution. Chaque média est pris dans la meilleure qualité que X publie pour lui :
+
+- Images : `?name=orig`, l'original téléversé, et non une vignette.
+- Vidéos : la variante `video/mp4` de plus haut débit. Le flux `application/x-mpegURL` qu publie aussi X n'est pas retenu, car il n'est pas téléchargeable tel quel.
+- GIF animés : un GIF X est un MP4 ; le fichier enregistré porte donc l'extension `.mp4`.
+
+Un compte protégé, introuvable ou sans aucun média ne produit aucun fichier. Un média publié uniquement en flux HLS est ignoré plutôt que compté comme échec.
+
+Le parcours repart de la première page à chaque exécution, car X se lit du plus récent au plus ancien : reprendre au milieu sauterait les posts publiés depuis la dernière fois. Le dédoublonnage ne repose pas sur un curseur mais sur les clés `xm-<id>` et `xmv-<id>` inscrites dans les noms de fichiers : une relance relit les pages mais ne retélécharge rien.
+
+Le parcours s'appuie sur l'API GraphQL interne de x.com, dont les `queryId` sont publiés par le bundle web et changent quand X met à jour son interface. Ils sont regroupés dans `XTwitterAPI.Query`. Un `queryId` périmé se manifeste par le message « Fil des médias X illisible ou tronqué », jamais par un « aucun média » silencieux. À vérifier sur iPhone : connexion X, un profil avec image, une vidéo et un GIF, puis une relance qui ne doit rien retélécharger.
 
 Images : l'application parcourt les pages d'albums publics et les images originales de chaque album, y compris celles derrière « Show More ». Elle ne prend pas les photos de profil, miniatures ni albums privés.
 
@@ -78,11 +96,12 @@ Si le dépôt porte un autre nom, adapter cette URL ; le workflow utilise automa
 | Vidéo v.redd.it | Manifest DASH, meilleure résolution exposée, assemblage audio si présent |
 | RedGIFs `/watch/` ou `/ifr/` | API RedGIFs avec jeton temporaire anonyme ; pas de compte |
 | Comptes RedGifs (`RG/pseudo`) | Liste `users/<pseudo>/search` (vérifié : 158 médias sur `upset_trash_3094`), HD puis SD par média |
+| Comptes X (`tw/pseudo`) | Fil `/media` authentifié : images en `name=orig`, vidéos et GIF en plus haut débit MP4 |
 | Galerie Reddit | Non prise en charge ; indiquée dans le journal |
 | Autres hébergeurs / galeries Imgur | Non pris en charge |
 | Privé, supprimé, accès soumis à connexion | Non accessible |
 
-RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; si le fichier HD RedGIFs est inaccessible, la variante SD exposée est essayée avant de le compter ainsi, et un HTTP 410 du service RedGIFs signifie que le contenu a été retiré de leur côté (aucun repli possible). Aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS, l'annulation et un HTTP 429 arrêtent la session et restent visibles.
+RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. X n'a aucun accès anonyme et passe par son API GraphQL interne, qui exige une session : cette source n'est donc pas comparable aux autres, qui restent sans compte. Les structures distantes peuvent changer. Les manifests DASH segmentés sans fichier complet par représentation ne sont pas pris en charge. Un média supprimé ou inaccessible (ex. HTTP 404) est ignoré et compté « inaccessible » sans arrêter le parcours ; si le fichier HD RedGIFs est inaccessible, la variante SD exposée est essayée avant de le compter ainsi, et un HTTP 410 du service RedGIFs signifie que le contenu a été retiré de leur côté (aucun repli possible). Aucune vidéo muette n'est enregistrée silencieusement à la place d'une vidéo dont la piste audio a échoué. Seules les erreurs de flux RSS, l'annulation et un HTTP 429 arrêtent la session et restent visibles.
 
 ## Comportement réseau et stockage
 
@@ -147,7 +166,7 @@ Références consultées :
 
 ## Réglage de la concurrence
 
-La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective. Choisir 1 ou 2 peut réduire la fréquence des 429, sans garantie. La connexion par cookies n’est pas implémentée dans cette version.
+La roue dentée ouvre le réglage de 1 à 6 médias simultanés (3 par défaut). La préférence est mémorisée. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective. Choisir 1 ou 2 peut réduire la fréquence des 429, sans garantie. La source `tw` utilise en revanche la session WebKit de X, décrite plus haut.
 
 ## Connexion Reddit locale
 

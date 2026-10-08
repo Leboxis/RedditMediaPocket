@@ -48,16 +48,23 @@ public enum FeedSource: Hashable, Sendable {
     case saved(String)
     case xFetish(String)
     case redgifsUser(String)
+    case twitterUser(String)
 
     /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
     public static let subredditSorts = ["new", "hot", "top"]
 
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
-    /// `rg/pseudo` (ou `g/`), URL `redgifs.com/users/pseudo` ou un pseudo nu
+    /// `rg/pseudo` (ou `g/`), `tw/pseudo` (`@pseudo` ou `x.com/pseudo`),
+    /// URL `redgifs.com/users/pseudo` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
+        // Formes X testées en premier : `x.com/pseudo` contient « / » et serait
+        // sinon lu comme un subreddit `x` nommé `com/pseudo`.
+        if lower.hasPrefix("tw/") || lower.hasPrefix("@") || lower.contains("x.com/") || lower.contains("twitter.com/") {
+            return try .twitterUser(XTwitterAPI.username(trimmed))
+        }
         if lower.hasPrefix("saved/") {
             return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
         }
@@ -94,7 +101,7 @@ public enum FeedSource: Hashable, Sendable {
     }
 
     /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
-    /// `x/profil` ou `rg/pseudo`), utilisé comme clé de collection.
+    /// `x/profil`, `rg/pseudo` ou `tw/pseudo`), utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
@@ -102,6 +109,7 @@ public enum FeedSource: Hashable, Sendable {
         case .saved(let name): return "saved/\(name)"
         case .xFetish(let name): return "x/\(name)"
         case .redgifsUser(let name): return "rg/\(name)"
+        case .twitterUser(let name): return "tw/\(name)"
         }
     }
 
@@ -112,9 +120,9 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.` et `redgifs.`
-    /// (point interdit dans les pseudos Reddit) évitent les collisions
-    /// entre sources.
+    /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.`, `redgifs.` et
+    /// `tw.` (point interdit dans les pseudos) évitent les collisions
+    /// entre sources. `x.` et `tw.` se distinguent sans ambiguïté.
     public var folderName: String {
         switch self {
         case .user(let name): return name
@@ -122,6 +130,7 @@ public enum FeedSource: Hashable, Sendable {
         case .saved(let name): return "saved.\(name)"
         case .xFetish(let name): return "x.\(name)"
         case .redgifsUser(let name): return "redgifs.\(name)"
+        case .twitterUser(let name): return "tw.\(name)"
         }
     }
 
@@ -161,6 +170,11 @@ public enum FeedSource: Hashable, Sendable {
             return components.url!
         case .redgifsUser(let name):
             return RedgifsAPI.userSearchURL(username: name, page: 1)
+        case .twitterUser(let name):
+            // Point d'entrée sans session : sert uniquement à résoudre le
+            // compte. Le parcours réel passe par `XTwitterAPI.userMedia` avec
+            // les cookies de session, jamais par cette URL.
+            return XTwitterAPI.userByScreenName(username: name)
         }
     }
 }

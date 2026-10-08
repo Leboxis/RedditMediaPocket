@@ -69,6 +69,11 @@ import MediaCore
             }
         }
         if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        // La session X est distincte de la Reddit : `RedditCookiePolicy` refuse
+        // x.com, il faut donc demander son en-tête à `XSession`. Les deux
+        // politiques sont filtrées par hôte, aucune ne peut envoyer les
+        // identifiants de l'autre service ni les transmettre au CDN média.
+        if let cookie = await XSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         try Task.checkCancellation()
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
         if let headers {

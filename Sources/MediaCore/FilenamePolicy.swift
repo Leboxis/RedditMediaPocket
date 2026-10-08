@@ -80,6 +80,42 @@ public enum FilenamePolicy {
         return prefix + parts.joined(separator: "-")
     }
 
+    /// Recover the immutable media key of an X file. Titles change and a
+    /// post can hold several media, so the scan compares this key rather than
+    /// the whole filename. Images use `xm-<mediaId>`, videos and animated GIFs
+    /// use `xmv-<mediaId>`.
+    public static func xMediaID(inFileName filename: String) -> String? {
+        let file = URL(fileURLWithPath: filename)
+        guard ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()) else { return nil }
+        let stem = file.deletingPathExtension().lastPathComponent
+        // Un post X sans texte produit un nom nu (`xm-123.jpg`) : le préfixe
+        // seul doit alors suffire. Sinon le nom est `Titre - xm-123`.
+        if let bare = Self.xBareKey(stem) { return bare }
+        // ` - xm-` exigerait un tiret après `xm`, donc il ne peut pas matcher
+        // ` - xmv-` : les deux marqueurs sont mutuellement exclusifs et il suffit
+        // de retenir la dernière occurrence de l'un ou l'autre.
+        guard let marker = [" - xmv-", " - xm-"].compactMap({ stem.range(of: $0, options: .backwards) })
+                .max(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+        let key = String(stem[marker.upperBound...])
+        guard Self.isMediaKey(key) else { return nil }
+        return stem[marker.lowerBound...].hasPrefix(" - xmv-") ? "xmv-" + key : "xm-" + key
+    }
+
+    /// Clé d'un nom de fichier réduit à sa seule clé, sans titre.
+    private static func xBareKey(_ stem: String) -> String? {
+        for prefix in ["xmv-", "xm-"] where stem.hasPrefix(prefix) {
+            let key = String(stem.dropFirst(prefix.count))
+            if isMediaKey(key) { return prefix + key }
+        }
+        return nil
+    }
+
+    /// L'identifiant de média X est numérique : un suffixe de collision `-2` ou
+    /// un fragment de titre ne doit jamais être accepté comme clé.
+    private static func isMediaKey(_ value: String) -> Bool {
+        !value.isEmpty && value.allSatisfy(\.isNumber)
+    }
+
     /// Nom de fichier sûr pour l'API kDrive, dérivé d'un nom local existant
     /// (qui peut contenir des caractères aujourd'hui interdits côté serveur).
     /// Conserve l'extension, remplace les interdits par `-`, lève les noms
@@ -164,7 +200,8 @@ public enum FilenamePolicy {
 
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
-    /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`, `rg/pseudo`.
+    /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`,
+    /// `rg/pseudo` et `tw/pseudo`.
     public static func kDriveFolderName(_ raw: String, fallback: String = "Pocket", maxUTF8Bytes: Int = 100) -> String {
         var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let labelSeparators = CharacterSet(charactersIn: "/／\\＼")
@@ -180,6 +217,9 @@ public enum FilenamePolicy {
         if parts.count > 1, let first = parts.first?.lowercased() {
             if first == "x" { typePrefix = "X-Fetish " }
             else if first == "rg" { typePrefix = "Rg" }
+            // `tw` doit rester distinct de `t` : un compte X ne doit jamais
+            // hériter du dossier d'un profil Reddit au même pseudo.
+            else if first == "tw" { typePrefix = "Tw" }
             else if ["u", "r", "saved"].contains(first) { typePrefix = String(first.prefix(1)).uppercased() }
         }
         if let last = parts.last { base = last }

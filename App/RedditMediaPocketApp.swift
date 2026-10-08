@@ -17,6 +17,7 @@ private struct Selection: Identifiable {
 struct ContentView: View {
     @StateObject private var model = Downloader()
     @ObservedObject private var redditSession = RedditSession.shared
+    @ObservedObject private var xSession = XSession.shared
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var info: MediaInfoSelection?
@@ -120,7 +121,8 @@ struct ContentView: View {
             } else {
                 TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") :
                           (model.sourceKind == "rg" ? L("pseudo RedGifs", "RedGifs username") :
-                            (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") : L("pseudo", "username"))), text: $model.username)
+                            (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") :
+                              (model.sourceKind == "tw" ? L("compte X", "X account") : L("pseudo", "username")))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -156,6 +158,9 @@ struct ContentView: View {
         guard !model.running else { return false }
         if model.sourceKind == "saved" { return !redditSession.hasSession || redditSession.clearing }
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        // Les deux sessions sont distinctes : X ne se connecte pas avec le
+        // compte Reddit.
+        if model.needsSession && !xSession.hasSession { return true }
         return model.needsSession && !redditSession.hasSession
     }
 
@@ -197,8 +202,19 @@ struct ContentView: View {
         }
     }
 
+    private var isTwitterInput: Bool {
+        if let source = model.resolvedSource, case .twitterUser = source { return true }
+        return false
+    }
+
     @ViewBuilder private var savedHintRow: some View {
-        if model.needsSession && !redditSession.hasSession {
+        if isTwitterInput && !xSession.hasSession {
+            Label(L("Compte X : connecte-toi à X dans les Réglages. Sans session, X ne publie aucun média.", "X account: sign in to X in Settings. Without a session, X publishes no media."),
+                  systemImage: "person.crop.circle.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 18).padding(.bottom, 10)
+        } else if model.needsSession && !redditSession.hasSession {
             Label(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."), systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -241,7 +257,7 @@ struct ContentView: View {
     /// de curseur ni de total annoncé, la barre porte donc sur l'unité en cours
     /// (un album, une page de vidéos), dont le nombre de médias est connu.
     @ViewBuilder private var transferBarRow: some View {
-        if let unit = model.transferUnit, isXFetishInput, model.running, unit.total > 0 {
+        if let unit = model.transferUnit, (isXFetishInput || isTwitterInput), model.running, unit.total > 0 {
             ProgressView(value: unit.fraction)
                 .progressViewStyle(.linear)
                 .tint(.orange)
@@ -322,7 +338,7 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs) ? $0.id : $0.name } ?? "Pocket"
+                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter) ? $0.id : $0.name } ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -349,7 +365,7 @@ struct ContentView: View {
         let active = model.activeUser == collection.id
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))))
                 Text(collection.displayName).lineLimit(1)
                 if active { Image(systemName: "checkmark") }
             }
@@ -378,7 +394,8 @@ struct ContentView: View {
 }
 
 /// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
-/// la face suivante apparaît, la pastille se referme. Cycle u/ → r/ → RG → ♥ → x/.
+/// la face suivante apparaît, la pastille se referme.
+/// Cycle u/ → r/ → RG → ♥ → x/ → tw.
 private struct SourceKindToggle: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Binding var kind: String
@@ -392,6 +409,7 @@ private struct SourceKindToggle: View {
         if current == "rg" { return "RG" }
         if current == "saved" { return "♥" }
         if current == "x" { return "x/" }
+        if current == "tw" { return "tw" }
         return "u/"
     }
     private func spoken(_ current: String) -> String {
@@ -399,6 +417,7 @@ private struct SourceKindToggle: View {
         if current == "rg" { return "RedGifs" }
         if current == "saved" { return L("sauvegardés", "saved") }
         if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
+        if current == "tw" { return L("compte X", "X account") }
         return L("profil", "profile")
     }
 
@@ -427,7 +446,9 @@ private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @ObservedObject private var reddit = RedditSession.shared
+    @ObservedObject private var xSession = XSession.shared
     @State private var loginPresented = false
+    @State private var xLoginPresented = false
     @State private var confirmDeleteAll = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
@@ -464,6 +485,18 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.") : L("Session locale. Les limites Reddit restent applicables.", "Local session. Reddit rate limits still apply."))
                 }
+                Section {
+                    XSessionIndicator()
+                    Button(xSession.hasSession ? L("Session détectée · ouvrir X", "Session detected · open X") : L("Se connecter à X", "Sign in to X")) { xLoginPresented = true }
+                        .disabled(model.running || xSession.clearing)
+                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await xSession.logout() } }
+                        .disabled(model.running || xSession.clearing)
+                } header: {
+                    Text("X")
+                } footer: {
+                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
+                         : L("Session distincte de Reddit, requise par la source tw. X ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit, required by the tw source. X publishes no media without it. Its rate limits still apply."))
+                }
                 KDriveSettingsSection()
                 Section {
                     Button(L("Supprimer tous les téléchargements", "Delete all downloads"), role: .destructive) { confirmDeleteAll = true }
@@ -474,6 +507,7 @@ private struct DownloadSettings: View {
                 }
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
+            .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
             .confirmationDialog(L("Supprimer tous les téléchargements ?", "Delete all downloads?"), isPresented: $confirmDeleteAll, titleVisibility: .visible) {
                 Button(L("Tout supprimer", "Delete all"), role: .destructive) { model.deleteAllDownloads() }
                 Button(L("Annuler", "Cancel"), role: .cancel) { }

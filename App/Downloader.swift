@@ -11,33 +11,38 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var isSaved = false
     var isXFetish = false
     var isRedGifs = false
+    var isTwitter = false
     var archived = false
     var lastRun: Date?
-    /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil` ou `rg/pseudo`.
+    /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
+    /// `rg/pseudo` ou `tw/pseudo`.
     var id: String {
+        if isTwitter { return "tw/\(name)" }
         if isRedGifs { return "rg/\(name)" }
         if isSaved { return "saved/\(name)" }
         if isXFetish { return "x/\(name)" }
         return (isSubreddit ? "r/" : "u/") + name
     }
     var displayName: String { isSaved ? "Saved" : id }
-    /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…` et
-    /// `redgifs.…` sont interdits dans les pseudos : aucune collection
-    /// existante ne peut entrer en collision.
+    /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…`,
+    /// `redgifs.…` et `tw.…` sont interdits dans les pseudos : aucune
+    /// collection existante ne peut entrer en collision.
     var folderName: String {
+        if isTwitter { return "tw.\(name)" }
         if isRedGifs { return "redgifs.\(name)" }
         if isSaved { return "saved.\(name)" }
         if isXFetish { return "x.\(name)" }
         return isSubreddit ? "r.\(name)" : name
     }
 
-    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, isRedGifs, archived, lastRun }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, archived, lastRun }
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
         self.isXFetish = isXFetish
         self.isRedGifs = isRedGifs
+        self.isTwitter = isTwitter
         self.archived = archived
         self.lastRun = lastRun
     }
@@ -48,6 +53,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isSaved = try container.decodeIfPresent(Bool.self, forKey: .isSaved) ?? false
         isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
+        isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
     }
@@ -99,7 +105,8 @@ struct SavedMediaCount: Codable {
     @Published private(set) var sessionLimit = 3
     /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
     /// `saved` éléments sauvegardés du compte connecté,
-    /// `x` albums publics d'un profil X-Fetish.
+    /// `x` albums publics d'un profil X-Fetish,
+    /// `tw` médias publics d'un compte X.
     /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
     /// déjà `/` ou une URL RedGifs garde la priorité.
     @Published var sourceKind: String = {
@@ -115,6 +122,12 @@ struct SavedMediaCount: Codable {
     /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
     var resolvedSource: FeedSource? {
         if sourceKind == "saved" { return nil }
+        // `tw` accepte `@pseudo` et une adresse `x.com/pseudo` collée telle
+        // quelle ; le préfixe ne doit pas être ajouté dans ces cas.
+        if sourceKind == "tw" {
+            let text = username.contains("/") || username.hasPrefix("@") ? username : "tw/\(username)"
+            return try? FeedSource.parse(text)
+        }
         if sourceKind == "rg" {
             let text = username.contains("/") || username.lowercased().contains("redgifs.com") ? username : "rg/\(username)"
             return try? FeedSource.parse(text)
@@ -126,7 +139,14 @@ struct SavedMediaCount: Codable {
     /// Vrai quand la source effective exige une session Reddit.
     var needsSession: Bool {
         if sourceKind == "saved" { return true }
-        if let source = resolvedSource, case .saved = source { return true }
+        // Les médias d'un compte X ne sont accessibles qu'authentifié.
+        if sourceKind == "tw" { return true }
+        if let source = resolvedSource {
+            switch source {
+            case .saved, .twitterUser: return true
+            default: return false
+            }
+        }
         return false
     }
     @Published var subSort: String = {
@@ -208,6 +228,7 @@ struct SavedMediaCount: Codable {
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
+        else if collection.isTwitter { sourceKind = "tw" }
         else if collection.isXFetish { sourceKind = "x" }
         else if collection.isRedGifs { sourceKind = "rg" }
         else if collection.isSubreddit { sourceKind = "r" }
@@ -227,7 +248,7 @@ struct SavedMediaCount: Codable {
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
             // Anciennes versions : pseudo nu sans préfixe ; versions récentes :
-            // `u/…`, `r/…`, `rg/…`, `x/…` ou URL RedGifs.
+            // `u/…`, `r/…`, `rg/…`, `x/…`, `tw/…` ou URL d'hébergeur.
             if let source = try? FeedSource.parse(last.contains("/") || last.lowercased().contains("redgifs.com") ? last : "u/\(last)") {
                 switch source {
                 case .user(let name): sourceKind = "u"; username = name
@@ -235,6 +256,7 @@ struct SavedMediaCount: Codable {
                 case .saved(let name): sourceKind = "saved"; username = name
                 case .xFetish(let name): sourceKind = "x"; username = name
                 case .redgifsUser(let name): sourceKind = "rg"; username = name
+                case .twitterUser(let name): sourceKind = "tw"; username = name
                 }
             } else {
                 username = last
@@ -257,9 +279,9 @@ struct SavedMediaCount: Codable {
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
         for folder in fresh {
-            // Les dossiers `r.…`, `saved.…`, `x.…` et `redgifs.…` viennent des
-            // subreddits, sauvegardés, profils X-Fetish et comptes RedGifs
-            // (le point est impossible dans un pseudo).
+            // Les dossiers `r.…`, `saved.…`, `x.…`, `redgifs.…` et `tw.…` viennent
+            // des subreddits, sauvegardés, profils X-Fetish, comptes RedGifs et
+            // comptes X (le point est impossible dans un pseudo).
             if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
                 collections.append(UserCollection(name: sub, isSubreddit: true))
             } else if folder.hasPrefix("redgifs."), let owner = try? RedgifsAPI.username(String(folder.dropFirst(8))) {
@@ -268,6 +290,8 @@ struct SavedMediaCount: Codable {
                 collections.append(UserCollection(name: owner, isSaved: true))
             } else if folder.hasPrefix("x."), let model = try? XFetishAlbums.modelName(String(folder.dropFirst(2))) {
                 collections.append(UserCollection(name: model, isXFetish: true))
+            } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
+                collections.append(UserCollection(name: handle, isTwitter: true))
             } else {
                 collections.append(UserCollection(name: folder))
             }
@@ -295,6 +319,7 @@ struct SavedMediaCount: Codable {
             case .saved(let name): sourceKind = "saved"; username = name
             case .xFetish(let name): sourceKind = "x"; username = name
             case .redgifsUser(let name): sourceKind = "rg"; username = name
+            case .twitterUser(let name): sourceKind = "tw"; username = name
             }
         } else {
             username = id
@@ -313,6 +338,7 @@ struct SavedMediaCount: Codable {
             case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
             case .xFetish(let name): collections.append(UserCollection(name: name, isXFetish: true))
             case .redgifsUser(let name): collections.append(UserCollection(name: name, isRedGifs: true))
+            case .twitterUser(let name): collections.append(UserCollection(name: name, isTwitter: true))
             }
         }
         saveCollections()
@@ -607,7 +633,11 @@ struct SavedMediaCount: Codable {
             source = .saved(feed.username)
             privateFeed = feed
         } else {
-            let needsPrefix = !username.contains("/") && !username.lowercased().contains("redgifs.com")
+            // `@pseudo` et `x.com/pseudo` collés tels quels sont acceptés : le préfixe
+            // ne doit pas être ajouté devant, sans quoi le pseudo serait
+            // invalide.
+            let needsPrefix = !username.contains("/") && !username.hasPrefix("@")
+                && !username.lowercased().contains("redgifs.com")
             let text = needsPrefix ? "\(sourceKind)/\(username)" : username
             source = try FeedSource.parse(text)
             if case .saved(let name) = source {
@@ -632,6 +662,25 @@ struct SavedMediaCount: Codable {
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         if case .xFetish(let model) = source {
             try await runXFetish(model: model, canonical: canonical, folder: folder)
+            return
+        }
+        // Comptes X : fil `/media` authentifié, sans RSS et sans curseur — le
+        // dédoublonnage vient des noms de fichiers. Le chemin est branched avant
+        // la reprise RSS, dont la migration v2 est sans objet ici.
+        if case .twitterUser(let handle) = source {
+            var seenMedia = Set<Media>()
+            var usedFilenames = Set<String>()
+            var preparedCount = 0
+            let completed = try await runTwitter(username: handle, canonical: canonical,
+                                                 folder: folder, seenMedia: &seenMedia,
+                                                 usedFilenames: &usedFilenames,
+                                                 preparedCount: &preparedCount)
+            // Le plafond de pages n'est pas repris au curseur : relancer relit le
+            // fil depuis le début, ce qui ne coûte que des appels API puisque
+            // les médias déjà sur disque sont écartés.
+            if !completed {
+                status = L("Parcours incomplet : profil plus long que 100 pages de médias. Relance pour couvrir la suite.", "Scan incomplete: profile is longer than 100 media pages. Relaunch to cover the rest.")
+            }
             return
         }
         // Older versions swallowed media 429s and marked incomplete pages as
@@ -928,6 +977,145 @@ struct SavedMediaCount: Codable {
         LogCenter.info(L("X-Fetish vidéos : \(scannedPages.count) pages, \(scannedVideos.count) vidéos, \(preparedCount) médias préparés.", "X-Fetish videos: \(scannedPages.count) pages, \(scannedVideos.count) videos, \(preparedCount) media prepared."))
     }
 
+    /// Parcours du fil `/media` d'un compte X.
+    ///
+    /// Le fil se lit du plus récent au plus ancien et repart donc de la
+    /// première page à chaque exécution : c'est le coût assumé du choix « tous
+    /// les médias ». Aucun curseur n'est persisté, car reprendre au milieu
+    /// sauterait les posts publiés depuis la dernière exécution.
+    ///
+    /// Le dédoublonnage repose uniquement sur les clés `xm-…` / `xmv-…` lues
+    /// dans les noms de fichiers : une relance relit les pages mais ne
+    /// retélécharge rien.
+    ///
+    /// Retourne `false` si le plafond de pages est atteint sans fin de fil.
+    private func runTwitter(username: String, canonical: String, folder: URL,
+                            seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                            preparedCount: inout Int) async throws -> Bool {
+        guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
+        status = L("Résolution du compte X…", "Resolving X account…")
+        let userID = try await fetchXUserID(username: username)
+        LogCenter.info(L("X : compte \(username) résolu.", "X: account \(username) resolved."))
+
+        // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
+        // ni du post qui l'a publié.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.xMediaID(inFileName: $0.lastPathComponent)
+        })
+        var scanned = Set<String>()
+        var scannedPages = 0
+        var cursor: String?
+
+        while true {
+            try Task.checkCancellation()
+            scannedPages += 1
+            guard scannedPages <= 100 else {
+                LogCenter.info(L("X : plafond de 100 pages atteint, parcours incomplet. Le profil dépasse cette limite : les médias les plus anciens n'ont pas été parcourus.", "X: 100-page limit reached, scan incomplete. The profile exceeds this limit: its oldest media was not scanned."))
+                return false
+            }
+            status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
+            let data = try await fetchXMediaPage(userID: userID, cursor: cursor)
+            let page = try XTwitterMedia.parseMediaPage(data)
+            LogCenter.info(L("X : page \(scannedPages), \(page.posts.count) posts avec média.", "X: page \(scannedPages), \(page.posts.count) posts with media."))
+
+            var fresh: [XPost] = []
+            for post in page.posts where scanned.insert(post.id).inserted {
+                // Un média déjà enregistré ne vaut pas une seconde page à relire
+                // pour lui : le post entier est écarté si tous ses médias sont là.
+                let missing = post.media.filter { !savedIDs.contains(Self.xMediaKey($0)) }
+                guard !missing.isEmpty else { continue }
+                fresh.append(XPost(id: post.id, text: post.text, publishedAt: post.publishedAt, media: missing))
+            }
+
+            if !fresh.isEmpty {
+                var mediaOverrides: [String: [Media]] = [:]
+                var posts: [Post] = []
+                for post in fresh {
+                    for media in post.media {
+                        // L'identifiant du média entre dans le nom de fichier :
+                        // c'est lui que `FilenamePolicy.xMediaID` relit au
+                        // lancement suivant pour ne pas retélécharger. Un
+                        // identifiant de post ne conviendrait pas, un même média
+                        // pouvant apparaître dans plusieurs posts.
+                        let id = Self.xMediaKey(media)
+                        mediaOverrides[id] = [.direct(media.url)]
+                        posts.append(Post(id: id, title: post.text, html: "",
+                                          publishedAt: post.publishedAt,
+                                          link: "https://x.com/i/status/\(post.id)"))
+                    }
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
+                // La barre suit la page : X n'annonce aucun total global et le
+                // parcours en découvre en continu, donc une unité de nombre
+                // connu est la seule progression exacte possible. `downloads`
+                // et non le nombre de médias vus : ceux déjà sur disque en sont
+                // exclus, et la barre ne doit pas annoncer plus que le lot.
+                beginTransferUnit(total: downloads.count)
+                try await executeDownloads(downloads, &preparedCount)
+            }
+
+            guard let next = page.nextCursor, !next.isEmpty else { break }
+            guard next != cursor else { throw XTwitterError.invalidTimeline }
+            cursor = next
+        }
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("X : \(scannedPages) pages, \(preparedCount) médias préparés.", "X: \(scannedPages) pages, \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) médias X inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                             "\(failed) X media unavailable or unsaved.\n\(kept) media files kept.")
+            return true
+        }
+        status = count == 0 ? L("Aucun nouveau média X accessible", "No new accessible X media")
+                            : L("\(count) médias X téléchargés", "\(count) X media downloaded")
+        return true
+    }
+
+    /// Clé de dédoublonnage d'un média X, alignée sur `FilenamePolicy.xMediaID`.
+    private static func xMediaKey(_ media: XMedia) -> String {
+        switch media.kind {
+        case .image: return "xm-\(media.id)"
+        case .video, .gif: return "xmv-\(media.id)"
+        }
+    }
+
+    private func fetchXUserID(username: String) async throws -> String {
+        try await fetchX(XTwitterAPI.userByScreenName(username: username))
+    }
+
+    private func fetchXMediaPage(userID: String, cursor: String?) async throws -> Data {
+        try await fetchX(XTwitterAPI.userMedia(userID: userID, cursor: cursor))
+    }
+
+    /// Un appel GraphQL authentifié.
+    private func fetchX(_ url: URL) async throws -> Data {
+        // `csrfToken` lit les cookies à chaque appel : X renouvelle `ct0` en
+        // cours de session et un jeton périmé se manifeste par un HTTP 403.
+        // `refresh()` n'est pas appelé ici, l'observateur du cookie store tient
+        // déjà `hasSession` à jour et le rappeler ici déclencherait une mise à
+        // jour d'interface par requête.
+        guard let csrf = await XSession.shared.csrfToken() else { throw XTwitterError.loginRequired }
+        do {
+            return try await network.data(url, bearer: XTwitterAPI.bearer,
+                                         headers: XTwitterAPI.headers(csrf: csrf))
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            // Une session expirée se voit ici. L'utilisateur est invité à se
+            // reconnecter plutôt que de boucler sur un refus identique.
+            await XSession.shared.refresh()
+            guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
+            throw XTwitterError.deniedAccess
+        } catch NetworkError.refused(let code) where code == 404 {
+            throw XTwitterError.unknownAccount
+        }
+    }
+
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
     private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
@@ -1150,7 +1338,14 @@ struct SavedMediaCount: Codable {
             for (index, item) in media.enumerated() {
                 guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
                 let ext: String
-                if case .direct(let url) = item { ext = url.pathExtension.lowercased() } else { ext = "mp4" }
+                // Une URL de média X porte son format dans le chemin pour les vidéos, mais
+                // `pbs.twimg.com/media/<id>.jpg` peut être servie en `png` ou
+                // `webp` : le chemin reste donc la seule source fiable ici, et
+                // une extension vide se replie sur `jpg`.
+                if case .direct(let url) = item {
+                    let path = url.pathExtension.lowercased()
+                    ext = path.isEmpty ? "jpg" : path
+                } else { ext = "mp4" }
 
                 let position: Int? = media.count > 1 ? index + 1 : nil
                 let stem = FilenamePolicy.downloadStem(title: post.title, postID: post.id, position: position)

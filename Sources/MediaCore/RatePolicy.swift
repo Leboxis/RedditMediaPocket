@@ -8,6 +8,11 @@ public enum RatePolicy {
         if host == "redgifs.com" || host.hasSuffix(".redgifs.com") { return "RedGIFs" }
         if host == "imgur.com" || host.hasSuffix(".imgur.com") { return "Imgur" }
         if host == "x-fetish.tube" || host.hasSuffix(".x-fetish.tube") { return "X-Fetish" }
+        // The X API and its media CDN share one limit: rotating the subdomain
+        // must not bypass it, and a media 429 must stop the timeline with it.
+        if host == "x.com" || host.hasSuffix(".x.com")
+            || host == "twitter.com" || host.hasSuffix(".twitter.com")
+            || host == "twimg.com" || host.hasSuffix(".twimg.com") { return "X" }
         return host
     }
 
