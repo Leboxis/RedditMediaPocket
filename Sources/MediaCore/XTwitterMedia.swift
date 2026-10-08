@@ -83,8 +83,10 @@ public enum XTwitterMedia {
     public static func parseMediaPage(_ data: Data) throws -> XMediaPage {
         let root = try object(data)
         let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
-        let timeline = dictionary(dictionary(dictionary(user, "timeline_v2"), "timeline"), "instructions")
-        guard let instructions = timeline as? [[String: Any]] else {
+        // `instructions` est un tableau d'objets : le lire via `dictionary`
+        // le ferait échouer, d'où l'étape dédiée.
+        let timeline = dictionary(dictionary(user, "timeline_v2"), "timeline")
+        guard let instructions = objects(dictionary(timeline, "instructions")) else {
             throw XTwitterError.invalidTimeline
         }
         var posts: [XPost] = []
@@ -206,6 +208,12 @@ public enum XTwitterMedia {
     // Les aides ci-dessous évitent d'écrire `a?["b"]?["c"]` : sur `Any`, un
     // sous-script optionnel n'a pas de type de sortie, et l'enchaînement de
     // quatre niveaux ne se compile pas.
+
+    /// Une liste d'objets. `instructions` est un tableau, pas un objet : le lire
+/// avec `dictionary` le ferait échouer à chaque fois.
+    private static func objects(_ node: Any?) -> [[String: Any]]? {
+        node as? [[String: Any]]
+    }
 
     private static func dictionary(_ node: Any?, _ key: String) -> [String: Any]? {
         guard let container = node as? [String: Any] else { return nil }

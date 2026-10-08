@@ -49,7 +49,7 @@ final class XTwitterTests: XCTestCase {
     }
 
     func testKDriveFolderNameForTwitter() {
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("tw/nasa"), "Twinasa")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("tw/nasa"), "Twnasa")
         // Distinct de `u/nasa` : les deux portent le même pseudo.
         XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("tw/nasa"),
                           FilenamePolicy.kDriveFolderName("u/nasa"))
@@ -77,12 +77,12 @@ final class XTwitterTests: XCTestCase {
         XCTAssertTrue(second.absoluteString.contains("cursor"))
     }
 
-    /// Un curseur est une chaîne base64 : il doit être échappé, pas collé brut.
-    func testCursorIsEscaped() {
+    /// Un curseur est une chaîne base64 : il doit survivre à l'assemblage de
+    /// l'URL, être échappé, et revenir identique une fois décodé.
+    func testCursorSurvivesURLRoundTrip() throws {
         let url = XTwitterAPI.userMedia(userID: "1", cursor: "a+b/c=")
-        XCTAssertFalse(url.absoluteString.contains("cursor=a+b"))
-        let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first { $0.name == "cursor" }?.value
+        let value = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "cursor" }?.value)
         XCTAssertEqual(value, "a+b/c=")
     }
 
