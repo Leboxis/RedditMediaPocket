@@ -313,6 +313,76 @@ final class XTwitterTests: XCTestCase {
         XCTAssertNil(XTwitterMedia.bestVariant(entry))
     }
 
+    private func gridItem(_ id: String, wrapped: Bool = false) -> [String: Any] {
+        let media: [String: Any] = [
+            "media_key": "3_\(id)", "type": "photo",
+            "media_url_https": "https://pbs.twimg.com/media/\(id).jpg",
+            "url": "https://t.co/example",
+            "original_info": ["width": 2048, "height": 1152]
+        ]
+        let tweet: [String: Any] = [
+            "rest_id": id,
+            "legacy": ["id_str": id, "full_text": "Photo",
+                       "extended_entities": ["media": [media]]]
+        ]
+        let result: [String: Any] = wrapped
+            ? ["__typename": "TweetWithVisibilityResults", "tweet": tweet] : tweet
+        return ["entryId": "profile-grid-\(id)",
+                "item": ["itemContent": ["tweet_results": ["result": result]]]]
+    }
+
+    private func gridPage(_ instructions: [[String: Any]]) throws -> XMediaPage {
+        let root: [String: Any] = [
+            "data": ["user": ["result": ["timeline_v2": ["timeline": ["instructions": instructions]]]]]
+        ]
+        return try XTwitterMedia.parseMediaPage(JSONSerialization.data(withJSONObject: root))
+    }
+
+    private var bottomEntry: [String: Any] {
+        ["entryId": "cursor-bottom-1",
+         "content": ["cursorType": "Bottom", "value": "NEXT"]]
+    }
+
+    func testUserMediaFirstPageGrid() throws {
+        let page = try gridPage([
+            ["type": "TimelineAddEntries", "entries": [
+                ["entryId": "profile-grid-0", "content": [
+                    "entryType": "TimelineTimelineModule",
+                    "items": [gridItem("1"), gridItem("2", wrapped: true)]]],
+                bottomEntry
+            ]]
+        ])
+        XCTAssertEqual(page.posts.map(\.id), ["1", "2"])
+        let media = try XCTUnwrap(page.posts.first?.media.first)
+        XCTAssertEqual(media.url.absoluteString, "https://pbs.twimg.com/media/1.jpg?name=orig")
+        XCTAssertEqual(media.width, 2048)
+        XCTAssertEqual(media.height, 1152)
+        XCTAssertEqual(page.nextCursor, "NEXT")
+    }
+
+    func testUserMediaContinuationModuleItems() throws {
+        let page = try gridPage([
+            ["type": "TimelineAddToModule", "moduleItems": [gridItem("3"), gridItem("3")]],
+            ["type": "TimelineAddEntries", "entries": [bottomEntry]]
+        ])
+        XCTAssertEqual(page.posts.map(\.id), ["3"])
+        XCTAssertEqual(page.nextCursor, "NEXT")
+    }
+
+    func testCursorOnlyAndEmptyPagesStopPagination() throws {
+        let terminal = try gridPage([["type": "TimelineAddEntries", "entries": [bottomEntry]]])
+        XCTAssertTrue(terminal.posts.isEmpty)
+        XCTAssertNil(terminal.nextCursor)
+        XCTAssertNil(try gridPage([["type": "TimelineAddEntries", "entries": []]]).nextCursor)
+        let terminated = try gridPage([
+            ["type": "TimelineAddToModule", "moduleItems": [gridItem("4")]],
+            ["type": "TimelineAddEntries", "entries": [bottomEntry]],
+            ["type": "TimelineTerminateTimeline", "direction": "Bottom"]
+        ])
+        XCTAssertEqual(terminated.posts.count, 1)
+        XCTAssertNil(terminated.nextCursor)
+    }
+
     // MARK: - Fil média
 
     func testParseMediaPage() throws {

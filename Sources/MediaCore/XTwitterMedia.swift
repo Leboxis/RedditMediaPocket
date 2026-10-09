@@ -90,37 +90,49 @@ public enum XTwitterMedia {
         }
         var posts: [XPost] = []
         var nextCursor: String?
-        var sawEntry = false
+        var sawTimelineItem = false
+        var terminated = false
+        var seenPosts = Set<String>()
+
+        func appendItem(_ item: [String: Any]) {
+            // Entrée directe : content.itemContent. Grille : item.itemContent.
+            let content = dictionary(item, "content") ?? dictionary(item, "item") ?? item
+            guard let itemContent = dictionary(content, "itemContent") else { return }
+            sawTimelineItem = true
+            guard var result = dictionary(dictionary(itemContent, "tweet_results"), "result") else { return }
+            if let tweet = dictionary(result, "tweet") { result = tweet }
+            guard let legacy = dictionary(result, "legacy"),
+                  let id = text(legacy, "id_str") ?? text(result, "rest_id"),
+                  !id.isEmpty, seenPosts.insert(id).inserted else { return }
+            let media = mediaList(legacy)
+            guard !media.isEmpty else { return }
+            posts.append(XPost(id: id, text: text(legacy, "full_text") ?? "",
+                               publishedAt: parseDate(text(legacy, "created_at")), media: media))
+        }
 
         for instruction in instructions {
-            guard let entries = objects(instruction, "entries") else { continue }
+            if text(instruction, "type") == "TimelineTerminateTimeline",
+               text(instruction, "direction") == "Bottom" { terminated = true }
+            for item in objects(instruction, "moduleItems") ?? [] { appendItem(item) }
+            var entries = objects(instruction, "entries") ?? []
+            if let entry = dictionary(instruction, "entry") { entries.append(entry) }
             for entry in entries {
-                sawEntry = true
                 let entryID = text(entry, "entryId") ?? ""
-                // Le curseur de bas de page se trouve dans une entrée dédiée,
-                // pas dans un post. Il est la seule voie de pagination.
-                if entryID.hasPrefix("cursor-bottom") {
-                    if let value = text(dictionary(entry, "content"), "value"), !value.isEmpty {
-                        nextCursor = value
-                    }
+                let content = dictionary(entry, "content")
+                if text(content, "cursorType") == "Bottom" || entryID.hasPrefix("cursor-bottom") {
+                    if let value = text(content, "value"), !value.isEmpty { nextCursor = value }
                     continue
                 }
-                if entryID.hasPrefix("profile-conversation") || entryID.hasPrefix("tweetdetailreflow") { continue }
-                let content = dictionary(dictionary(entry, "content"), "itemContent")
-                let results = dictionary(dictionary(content, "tweet_results"), "result")
-                guard let legacy = dictionary(results, "legacy") else { continue }
-                let tweetID = text(legacy, "id_str") ?? text(results, "rest_id")
-                guard let tweetID, !tweetID.isEmpty else { continue }
-                let media = mediaList(legacy)
-                guard !media.isEmpty else { continue }
-                posts.append(XPost(id: tweetID,
-                                   text: text(legacy, "full_text") ?? "",
-                                   publishedAt: parseDate(text(legacy, "created_at")),
-                                   media: media))
+                // Première page UserMedia : TimelineTimelineModule.content.items.
+                for item in objects(content, "items") ?? [] { appendItem(item) }
+                if !entryID.hasPrefix("profile-conversation") && !entryID.hasPrefix("tweetdetailreflow") {
+                    appendItem(entry)
+                }
             }
         }
-        guard sawEntry else { throw XTwitterError.invalidTimeline }
-        return XMediaPage(posts: posts, nextCursor: nextCursor)
+        // X peut continuer à fournir un Bottom sur une page composée seulement
+        // de curseurs. Il ne justifie pas une nouvelle requête sans aucun item.
+        return XMediaPage(posts: posts, nextCursor: terminated || !sawTimelineItem ? nil : nextCursor)
     }
 
     /// Médias d'un post, dans l'ordre publié, sans doublon d'identifiant.
@@ -160,11 +172,12 @@ public enum XTwitterMedia {
     static func bestVariant(_ entry: [String: Any]) -> XMedia? {
         guard let id = mediaID(entry) else { return nil }
         let type = text(entry, "type") ?? "photo"
-        let width = number(entry, "original_width")
-        let height = number(entry, "original_height")
+        let original = dictionary(entry, "original_info")
+        let width = number(original ?? entry, original == nil ? "original_width" : "width")
+        let height = number(original ?? entry, original == nil ? "original_height" : "height")
 
         if type == "photo" {
-            guard let raw = text(entry, "url"),
+            guard let raw = text(entry, "media_url_https") ?? text(entry, "url"),
                   var components = URLComponents(string: raw) else { return nil }
             // `name=orig` est l'original téléversé ; X sert aussi `format`.
             components.queryItems = [URLQueryItem(name: "name", value: "orig")]
