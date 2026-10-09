@@ -1004,6 +1004,7 @@ struct SavedMediaCount: Codable {
         })
         var scanned = Set<String>()
         var scannedPages = 0
+        var requestedCursors = Set<String>()
         var cursor: String?
 
         while true {
@@ -1057,7 +1058,7 @@ struct SavedMediaCount: Codable {
             }
 
             guard let next = page.nextCursor, !next.isEmpty else { break }
-            guard next != cursor else { throw XTwitterError.invalidTimeline }
+            guard next != cursor, requestedCursors.insert(next).inserted else { throw XTwitterError.invalidTimeline }
             cursor = next
         }
 

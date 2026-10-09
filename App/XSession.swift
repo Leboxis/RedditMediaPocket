@@ -128,7 +128,8 @@ private struct XWebLogin: UIViewControllerRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
-        view.load(URLRequest(url: URL(string: "https://x.com/i/flow/login")!))
+        let startURL = XSession.shared.hasSession ? "https://x.com/home" : "https://x.com/i/flow/login"
+        view.load(URLRequest(url: URL(string: startURL)!))
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -179,7 +180,21 @@ private struct XWebLogin: UIViewControllerRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             guard (error as? URLError)?.code != .cancelled else { return }
-            errorMessage = L("Connexion X indisponible. Ferme puis réessaie.", "X sign-in unavailable. Close and try again.")
+            reportNavigationError(error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            guard (error as? URLError)?.code != .cancelled else { return }
+            reportNavigationError(error)
+        }
+
+        private func reportNavigationError(_ error: Error) {
+            let nsError = error as NSError
+            // Codes uniquement : ni URL de connexion, ni cookies dans le journal.
+            let code = nsError.code
+            LogCenter.err(L("Navigation X impossible : erreur \(code).", "X navigation failed: error \(code)."))
+            errorMessage = L("La page de connexion X n’a pas pu charger (erreur \(code)). Les cookies présents ne garantissent pas que cette page fonctionne.",
+                             "The X sign-in page could not load (error \(code)). Existing cookies do not guarantee that this page works.")
         }
     }
 }
