@@ -11,8 +11,11 @@ import MediaCore
 /// session Reddit, et inversement.
 @MainActor final class XSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
     static let shared = XSession()
-    /// Store dédié : `WKWebsiteDataStore.default()` est déjà utilisé par Reddit.
-    let store = WKWebsiteDataStore.nonPersistent()
+    /// Profil WebKit persistant exclusivement réservé à X, sans partage avec Reddit.
+    /// UUID constant : une même session est retrouvée au prochain lancement.
+    let store = WKWebsiteDataStore(forIdentifier:
+        UUID(uuidString: "E9F9D960-81B3-43D3-85DB-65DCBE7F82CE")!)
+    @Published private(set) var hasAPICredentials = false
     @Published private(set) var hasSession = false
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
@@ -42,13 +45,15 @@ import MediaCore
         let cookies = await allCookies()
         let values = cookies.filter { $0.name == "auth_token" || $0.name == "ct0" }
             .map { "\($0.domain)|\($0.path)|\($0.name)|\($0.value)" }.sorted()
-        let ready = !clearing && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
+        let ready = !clearing && XTwitterCookiePolicy.hasLoginCookie(cookies: cookies)
+        let apiReady = ready && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
         if values != credentialValues || !ready {
             apiAccepted = false
             apiRejected = false
         }
         credentialValues = values
         hasSession = ready
+        hasAPICredentials = apiReady
         revision += 1
     }
 
@@ -60,12 +65,17 @@ import MediaCore
     var statusText: String {
         if apiRejected { return L("Session X refusée · reconnecte-toi", "X session rejected · sign in again") }
         if apiAccepted { return L("Session X acceptée au dernier appel", "X session accepted on last request") }
-        return hasSession ? L("Cookies X présents · session à vérifier", "X cookies present · session unverified")
-                          : L("X · connexion requise", "X · sign-in required")
+        if !hasSession { return L("X · connexion requise", "X · sign-in required") }
+        if !hasAPICredentials {
+            return L("Connexion X détectée · jeton CSRF en attente",
+                     "X signed in · waiting for CSRF token")
+        }
+        return L("Session X détectée · accès API à vérifier",
+                 "X session detected · API access unverified")
     }
 
-    /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Une session valide en a
-    /// toujours un ; son absence signifie session expirée.
+    /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Il peut apparaître
+    /// après `auth_token` : son absence ne prouve pas une déconnexion.
     func csrfToken() async -> String? {
         let cookies = await allCookies()
         return XTwitterCookiePolicy.csrfToken(cookies: cookies)
@@ -86,7 +96,8 @@ import MediaCore
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
-        hasSession = false; apiAccepted = false; apiRejected = false
+        hasSession = false; hasAPICredentials = false
+        apiAccepted = false; apiRejected = false
         credentialValues = []; revision += 1; clearing = false
     }
 }
@@ -117,8 +128,8 @@ struct XLogin: View {
     }
 }
 
-/// Le fil web partage le même stockage que la connexion X. Sans cookies,
-/// XWebContent ouvre la connexion ; une fois connecté, X affiche son accueil.
+/// Le fil web partage le même stockage persistant que la connexion X.
+/// X redirige /home vers son formulaire quand l'utilisateur n'est pas connecté.
 struct XFeedView: View {
     @State private var errorMessage: String?
 
@@ -140,7 +151,9 @@ private struct XWebContent: UIViewControllerRepresentable {
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
-        let startURL = XSession.shared.hasSession ? "https://x.com/home" : "https://x.com/i/flow/login"
+        // X redirige vers la connexion si nécessaire. Évite de lire hasSession
+        // avant la fin de la récupération asynchrone des cookies persistants.
+        let startURL = "https://x.com/home"
         view.load(URLRequest(url: URL(string: startURL)!))
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
