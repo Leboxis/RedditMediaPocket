@@ -1,3 +1,10 @@
+Correction de la connexion à X (Twitter).
+
+- Détection de la connexion dès que X pose le cookie d'authentification, sans attendre le cookie CSRF.
+- Les appels à l'API X continuent d'exiger les deux cookies, pour éviter d'envoyer une requête incomplète.
+- Session X conservée dans un profil WebKit persistant séparé de Reddit, y compris après une fermeture complète de l'application ; la déconnexion efface les données de ce profil.
+- Chargement de l'accueil X au démarrage, laissant X rediriger vers le formulaire de connexion si nécessaire.
+
 Choix des médias X-Fetish : images, vidéos ou les deux.
 
 - Un sélecteur segmenté apparaît sous le champ de saisie en mode `x/`. Il est mémorisé et vaut « Images » par défaut, sans changer le comportement des installations existantes.
