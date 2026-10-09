@@ -20,7 +20,7 @@ La fenêtre des sauvegardés Reddit propose un sélecteur **Reddit / X (Twitter)
 
 À vérifier sur iPhone : ouvrir les sauvegardés, passer sur X avec puis sans session X, lire une vidéo, revenir à Reddit, fermer la fenêtre puis la rouvrir. Les sessions Reddit et X restent distinctes.
 
-X n'expose aucun accès anonyme aux médias : l'API officielle répond HTTP 401 sans compte, et les miroirs publics type Nitter ne répondent plus. Cette source exige donc une session X, obtenue dans Réglages → Se connecter à X. Elle est distincte de la session Reddit : une déconnexion X n'efface pas la session Reddit, et inversement. Le stockage WebKit est non persistant, donc la session doit être rétablie après un redémarrage de l'app.
+X n'expose aucun accès anonyme aux médias : l'API officielle répond HTTP 401 sans compte, et les miroirs publics type Nitter ne répondent plus. Cette source exige donc une session X, obtenue dans Réglages → Se connecter à X. Elle est distincte de la session Reddit : une déconnexion X n'efface pas la session Reddit, et inversement. Le stockage WebKit de X est persistant et isolé de celui de Reddit : la connexion peut être retrouvée après un redémarrage, jusqu’à expiration des cookies ou déconnexion explicite. Les cookies de X sont donc conservés localement sur l’appareil. Le cookie `auth_token` permet de détecter la connexion ; les appels GraphQL requièrent aussi `ct0` (CSRF), qui peut être émis ultérieurement par X.
 
 Saisir le pseudo seul (`nasa`), avec `@` (`@nasa`), avec le préfixe `tw/`, ou coller l'adresse du profil (`x.com/nasa`). La collection `tw/pseudo` est créée dans le dossier `tw.nasa`, distinct de `x.nasa` (X-Fetish) et d'un profil Reddit au même pseudo.
 
@@ -34,7 +34,7 @@ Un compte protégé, introuvable ou sans aucun média ne produit aucun fichier. 
 
 Le parcours repart de la première page à chaque exécution, car X se lit du plus récent au plus ancien : reprendre au milieu sauterait les posts publiés depuis la dernière fois. Le dédoublonnage ne repose pas sur un curseur mais sur les clés `xm-<id>` et `xmv-<id>` inscrites dans les noms de fichiers : une relance relit les pages mais ne retélécharge rien.
 
-Le parcours s'appuie sur l'API GraphQL interne de x.com, dont les `queryId` sont publiés par le bundle web et changent quand X met à jour son interface. Ils sont regroupés dans `XTwitterAPI.Query`. Un `queryId` périmé se manifeste par le message « Fil des médias X illisible ou tronqué », jamais par un « aucun média » silencieux. À vérifier sur iPhone : connexion X, un profil avec image, une vidéo et un GIF, puis une relance qui ne doit rien retélécharger.
+Le parcours s'appuie sur l'API GraphQL interne de x.com, dont les `queryId` sont publiés par le bundle web et changent quand X met à jour son interface. Ils sont regroupés dans `XTwitterAPI.Query`. Un `queryId` périmé se manifeste par le message « Fil des médias X illisible ou tronqué », jamais par un « aucun média » silencieux. À vérifier sur iPhone : connexion X, fermeture complète puis relance de l’application (session conservée), déconnexion X (session effacée sans affecter Reddit), un profil avec image, une vidéo et un GIF, puis une relance qui ne doit rien retélécharger. Si `auth_token` apparaît avant `ct0`, la connexion doit être détectée mais l’accès API doit rester en attente de CSRF.
 
 Images : l'application parcourt les pages d'albums publics et les images originales de chaque album, y compris celles derrière « Show More ». Elle ne prend pas les photos de profil, miniatures ni albums privés.
 
