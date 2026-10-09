@@ -11,8 +11,11 @@ import MediaCore
 /// session Reddit, et inversement.
 @MainActor final class XSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
     static let shared = XSession()
-    /// Store dédié : `WKWebsiteDataStore.default()` est déjà utilisé par Reddit.
-    let store = WKWebsiteDataStore.nonPersistent()
+    /// Profil WebKit persistant exclusivement réservé à X, sans partage avec Reddit.
+    /// UUID constant : une même session est retrouvée au prochain lancement.
+    let store = WKWebsiteDataStore(forIdentifier:
+        UUID(uuidString: "E9F9D960-81B3-43D3-85DB-65DCBE7F82CE")!)
+    @Published private(set) var hasAPICredentials = false
     @Published private(set) var hasSession = false
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
@@ -42,13 +45,15 @@ import MediaCore
         let cookies = await allCookies()
         let values = cookies.filter { $0.name == "auth_token" || $0.name == "ct0" }
             .map { "\($0.domain)|\($0.path)|\($0.name)|\($0.value)" }.sorted()
-        let ready = !clearing && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
+        let ready = !clearing && XTwitterCookiePolicy.hasLoginCookie(cookies: cookies)
+        let apiReady = ready && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
         if values != credentialValues || !ready {
             apiAccepted = false
             apiRejected = false
         }
         credentialValues = values
         hasSession = ready
+        hasAPICredentials = apiReady
         revision += 1
     }
 
@@ -60,12 +65,17 @@ import MediaCore
     var statusText: String {
         if apiRejected { return L("Session X refusée · reconnecte-toi", "X session rejected · sign in again") }
         if apiAccepted { return L("Session X acceptée au dernier appel", "X session accepted on last request") }
-        return hasSession ? L("Cookies X présents · session à vérifier", "X cookies present · session unverified")
-                          : L("X · connexion requise", "X · sign-in required")
+        if !hasSession { return L("X · connexion requise", "X · sign-in required") }
+        if !hasAPICredentials {
+            return L("Connexion X détectée · jeton CSRF en attente",
+                     "X signed in · waiting for CSRF token")
+        }
+        return L("Session X détectée · accès API à vérifier",
+                 "X session detected · API access unverified")
     }
 
-    /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Une session valide en a
-    /// toujours un ; son absence signifie session expirée.
+    /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Il peut apparaître
+    /// après `auth_token` : son absence ne prouve pas une déconnexion.
     func csrfToken() async -> String? {
         let cookies = await allCookies()
         return XTwitterCookiePolicy.csrfToken(cookies: cookies)
@@ -86,7 +96,8 @@ import MediaCore
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
-        hasSession = false; apiAccepted = false; apiRejected = false
+        hasSession = false; hasAPICredentials = false
+        apiAccepted = false; apiRejected = false
         credentialValues = []; revision += 1; clearing = false
     }
 }
@@ -96,12 +107,35 @@ struct XLogin: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = XSession.shared
     @State private var errorMessage: String?
+    @State private var webRevision = 0
+    @State private var directLogin = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                XWebContent(errorMessage: $errorMessage)
+                XWebContent(errorMessage: $errorMessage,
+                            initialURL: directLogin ? XWebNavigation.loginURL
+                                                    : XWebNavigation.initialURL(for: .signIn))
+                    .id(webRevision)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 12) {
+                    Button(L("Recharger", "Reload")) {
+                        errorMessage = nil
+                        webRevision += 1
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                    Button(directLogin ? L("Accueil X", "X home")
+                                       : L("Connexion directe", "Direct sign-in")) {
+                        errorMessage = nil
+                        directLogin.toggle()
+                        webRevision += 1
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
             }
             .navigationTitle(session.statusText)
             .navigationBarTitleDisplayMode(.inline)
@@ -117,13 +151,14 @@ struct XLogin: View {
     }
 }
 
-/// Le fil web partage le même stockage que la connexion X. Sans cookies,
-/// XWebContent ouvre la connexion ; une fois connecté, X affiche son accueil.
+/// Le fil web partage le même stockage persistant que la connexion X.
+/// X redirige /home vers son formulaire quand l'utilisateur n'est pas connecté.
 struct XFeedView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        XWebContent(errorMessage: $errorMessage)
+        XWebContent(errorMessage: $errorMessage,
+                    initialURL: XWebNavigation.initialURL(for: .feed))
             .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
             .ignoresSafeArea(.keyboard, edges: .bottom)
     }
@@ -131,6 +166,7 @@ struct XFeedView: View {
 
 private struct XWebContent: UIViewControllerRepresentable {
     @Binding var errorMessage: String?
+    let initialURL: URL
 
     func makeCoordinator() -> Coordinator { Coordinator(errorMessage: $errorMessage) }
 
@@ -139,9 +175,9 @@ private struct XWebContent: UIViewControllerRepresentable {
         configuration.websiteDataStore = XSession.shared.store
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
-        let startURL = XSession.shared.hasSession ? "https://x.com/home" : "https://x.com/i/flow/login"
-        view.load(URLRequest(url: URL(string: startURL)!))
+        view.load(URLRequest(url: initialURL))
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -158,18 +194,38 @@ private struct XWebContent: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
 
     static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
-        for case let view as WKWebView in controller.view.subviews { view.stopLoading(); view.navigationDelegate = nil }
+        for case let view as WKWebView in controller.view.subviews {
+            view.stopLoading()
+            view.navigationDelegate = nil
+            view.uiDelegate = nil
+        }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding var errorMessage: String?
         init(errorMessage: Binding<String?>) { _errorMessage = errorMessage }
 
-        /// Le parcours de connexion traverse `accounts.x.com` puis `x.com` :
-        /// seuls ces hôtes sont autorisés, pas `twitter.com`.
+        /// Les liens target=_blank et window.open ne chargent rien sans WKUIDelegate.
+        /// Charge les destinations X autorisées dans la WebView existante.
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for navigationAction: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard navigationAction.targetFrame == nil else { return nil }
+            guard let url = navigationAction.request.url, XWebNavigation.allowsPopup(url) else {
+                blockedNavigation()
+                return nil
+            }
+            webView.load(navigationAction.request)
+            return nil
+        }
+
+        /// Les redirections X/Twitter sont permises mais pas les domaines tiers,
+        /// qui pourraient recevoir accidentellement des cookies de session.
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.targetFrame?.isMainFrame != false else { decisionHandler(.allow); return }
             guard let url = navigationAction.request.url, XTwitterCookiePolicy.allows(url) else {
+                blockedNavigation()
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow)
@@ -177,7 +233,10 @@ private struct XWebContent: UIViewControllerRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             if navigationResponse.isForMainFrame {
-                guard let url = navigationResponse.response.url, XTwitterCookiePolicy.allows(url) else { decisionHandler(.cancel); return }
+                guard let url = navigationResponse.response.url, XTwitterCookiePolicy.allows(url) else {
+                    blockedNavigation()
+                    decisionHandler(.cancel); return
+                }
             }
             decisionHandler(.allow)
         }
@@ -198,6 +257,13 @@ private struct XWebContent: UIViewControllerRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             guard (error as? URLError)?.code != .cancelled else { return }
             reportNavigationError(error)
+        }
+
+        private func blockedNavigation() {
+            LogCenter.err(L("Connexion X : navigation vers un domaine externe refusée.",
+                            "X sign-in: external-domain navigation blocked."))
+            errorMessage = L("X demande une page externe qui n'est pas autorisée dans cette connexion intégrée. Essaie la connexion directe avec tes identifiants X.",
+                             "X requested an external page that this embedded sign-in does not allow. Try direct sign-in with your X credentials.")
         }
 
         private func reportNavigationError(_ error: Error) {

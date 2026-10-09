@@ -154,6 +154,13 @@ public enum XTwitterCookiePolicy {
             .first { $0.name == "ct0" && !$0.value.isEmpty }?.value
     }
 
+    /// Session WebKit détectée dès qu'un auth_token X non expiré existe.
+    /// ct0 reste obligatoire pour les appels GraphQL authentifiés.
+    public static func hasLoginCookie(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
+        matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
+            .contains { $0.name == "auth_token" && !$0.value.isEmpty }
+    }
+
     public static func hasCredentials(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
         let matching = matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
         return ["auth_token", "ct0"].allSatisfy { name in
@@ -183,5 +190,29 @@ public enum XTwitterCookiePolicy {
             let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))
             return hostMatches && pathMatches && (cookie.expiresDate == nil || cookie.expiresDate! > now)
         }
+    }
+}
+
+/** Routes WebKit utilisées pour la connexion et la lecture du fil X.
+    Une page d'accueil initiale fournit un repli lorsque le parcours /i/flow/login
+    direct reste blanc dans une WebView intégrée. */
+public enum XWebNavigation {
+    public enum Destination {
+        case signIn, feed
+    }
+
+    public static func initialURL(for destination: Destination) -> URL {
+        switch destination {
+        case .signIn: return URL(string: "https://x.com/")!
+        case .feed: return URL(string: "https://x.com/home")!
+        }
+    }
+
+    public static let loginURL = URL(string: "https://x.com/i/flow/login")!
+
+    /// Les fenêtres contextuelles X restent sur les hôtes X autorisés.
+    /// Les redirections externes ne doivent pas réutiliser la session WebKit.
+    public static func allowsPopup(_ url: URL) -> Bool {
+        XTwitterCookiePolicy.allows(url)
     }
 }
