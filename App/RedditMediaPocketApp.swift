@@ -160,8 +160,8 @@ struct ContentView: View {
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         // Les deux sessions sont distinctes : X ne se connecte pas avec le
         // compte Reddit.
-        if model.needsSession && !xSession.hasSession { return true }
-        return model.needsSession && !redditSession.hasSession
+        if isTwitterInput { return !xSession.hasSession || xSession.clearing }
+        return model.needsSession && (!redditSession.hasSession || redditSession.clearing)
     }
 
     private var isSubredditInput: Bool {
@@ -204,7 +204,8 @@ struct ContentView: View {
 
     private var isTwitterInput: Bool {
         if let source = model.resolvedSource, case .twitterUser = source { return true }
-        return false
+        // Le sélecteur reste pertinent tant que le champ X est vide/invalide.
+        return model.resolvedSource == nil && model.sourceKind == "tw"
     }
 
     @ViewBuilder private var savedHintRow: some View {
@@ -214,7 +215,7 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)
-        } else if model.needsSession && !redditSession.hasSession {
+        } else if !isTwitterInput && model.needsSession && !redditSession.hasSession {
             Label(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."), systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -263,7 +264,7 @@ struct ContentView: View {
                 .tint(.orange)
                 .padding(.horizontal, 16).padding(.bottom, 6)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(L("Téléchargement X-Fetish", "X-Fetish download"))
+                .accessibilityLabel(isTwitterInput ? L("Téléchargement X", "X download") : L("Téléchargement X-Fetish", "X-Fetish download"))
                 .accessibilityValue("\(unit.done)/\(unit.total)")
         }
     }
@@ -288,7 +289,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel(L("Galerie vide", "Empty gallery"))
-            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, RG, ♥ ou x/)", "Choose a source (u/, r/, RG, ♥ or x/)"))
+            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, RG, ♥, x/ ou tw/)", "Choose a source (u/, r/, RG, ♥, x/ or tw/)"))
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -487,7 +488,7 @@ private struct DownloadSettings: View {
                 }
                 Section {
                     XSessionIndicator()
-                    Button(xSession.hasSession ? L("Session détectée · ouvrir X", "Session detected · open X") : L("Se connecter à X", "Sign in to X")) { xLoginPresented = true }
+                    Button(xSession.hasSession ? L("Ouvrir X", "Open X") : L("Se connecter à X", "Sign in to X")) { xLoginPresented = true }
                         .disabled(model.running || xSession.clearing)
                     Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await xSession.logout() } }
                         .disabled(model.running || xSession.clearing)
