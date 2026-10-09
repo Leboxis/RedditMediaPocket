@@ -154,6 +154,13 @@ public enum XTwitterCookiePolicy {
             .first { $0.name == "ct0" && !$0.value.isEmpty }?.value
     }
 
+    /// Session WebKit détectée dès qu'un auth_token X non expiré existe.
+    /// ct0 reste obligatoire pour les appels GraphQL authentifiés.
+    public static func hasLoginCookie(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
+        matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
+            .contains { $0.name == "auth_token" && !$0.value.isEmpty }
+    }
+
     public static func hasCredentials(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
         let matching = matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
         return ["auth_token", "ct0"].allSatisfy { name in
