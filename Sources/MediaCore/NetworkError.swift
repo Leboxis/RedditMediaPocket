@@ -15,6 +15,10 @@ public enum NetworkError: LocalizedError {
 }
 
 public enum DownloadFailurePolicy {
+    public static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
+
     /// Missing media may be skipped; a service limit must abort the page so
     /// its unprocessed posts are not committed to the visited history.
     /// Décision Jev A bug 9 : un échec passager (réseau coupé, 408/5xx) doit
@@ -37,7 +41,7 @@ public enum DownloadFailurePolicy {
             return true
         } catch {
             try Task.checkCancellation()
-            if error is CancellationError { throw error }
+            if isCancellation(error) { throw error }
             if case NetworkError.limited = error { throw error }
             if isTransient(error) { throw error }
             return false

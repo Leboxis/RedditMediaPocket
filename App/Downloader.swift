@@ -470,7 +470,7 @@ struct SavedMediaCount: Codable {
             }
             catch {
                 tokenTask?.cancel(); tokenTask = nil; token = nil
-                if Task.isCancelled || error is CancellationError {
+                if Task.isCancelled || DownloadFailurePolicy.isCancellation(error) {
                     status = L("Arrêté", "Stopped")
                     LogCenter.info(L("Parcours arrêté après \(Int(Date().timeIntervalSince(started))) s : \(count) fichiers conservés pendant cette session.", "Run stopped after \(Int(Date().timeIntervalSince(started))) s: \(count) files kept during this run."))
                 } else {
@@ -1431,7 +1431,7 @@ struct SavedMediaCount: Codable {
             let saved = try await DownloadFailurePolicy.attempt {
                 do { try await self.saveWithRetry(item) }
                 catch {
-                    if !(error is CancellationError) && !DownloadFailurePolicy.isTransient(error) {
+                    if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) && !DownloadFailurePolicy.isTransient(error) {
                         LogCenter.net("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
                     }
                     throw error
@@ -1442,7 +1442,9 @@ struct SavedMediaCount: Codable {
                 LogCenter.info(L("Média inaccessible, ignoré : \(item.destination.lastPathComponent).", "Inaccessible media, skipped: \(item.destination.lastPathComponent)."))
             }
         } catch {
-            LogCenter.err("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
+            if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) {
+                LogCenter.err("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
+            }
             throw error
         }
     }
