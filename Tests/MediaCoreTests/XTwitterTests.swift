@@ -101,6 +101,18 @@ final class XTwitterTests: XCTestCase {
         XCTAssertNil(empty["cursor"])
     }
 
+    /// Contrat du client web X : le bearer identifie le client public, tandis
+    /// que les cookies et le CSRF identifient la session de l'utilisateur.
+    func testAuthenticatedWebClientHeaders() {
+        XCTAssertEqual(XTwitterAPI.bearer,
+                       "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA")
+        let headers = XTwitterAPI.headers(csrf: "csrf-value")
+        XCTAssertEqual(headers["x-twitter-auth-type"], "OAuth2Session")
+        XCTAssertEqual(headers["x-csrf-token"], "csrf-value")
+        XCTAssertEqual(headers["x-twitter-active-user"], "yes")
+        XCTAssertEqual(headers["Accept"], "application/json")
+    }
+
     // MARK: - Cookies
 
     func testCookiePolicyRejectsMediaCDN() {
