@@ -136,18 +136,17 @@ struct SavedMediaCount: Codable {
         return try? FeedSource.parse(text)
     }
 
-    /// Vrai quand la source effective exige une session Reddit.
+    /// Vrai quand la source effective exige une session du service concerné.
     var needsSession: Bool {
         if sourceKind == "saved" { return true }
-        // Les médias d'un compte X ne sont accessibles qu'authentifié.
-        if sourceKind == "tw" { return true }
         if let source = resolvedSource {
             switch source {
             case .saved, .twitterUser: return true
             default: return false
             }
         }
-        return false
+        // Champ vide/invalide : le sélecteur X conserve son aide de connexion.
+        return sourceKind == "tw"
     }
     @Published var subSort: String = {
         let saved = UserDefaults.standard.string(forKey: "subSort") ?? "new"
