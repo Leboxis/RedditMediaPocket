@@ -107,12 +107,35 @@ struct XLogin: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var session = XSession.shared
     @State private var errorMessage: String?
+    @State private var webRevision = 0
+    @State private var directLogin = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                XWebContent(errorMessage: $errorMessage)
+                XWebContent(errorMessage: $errorMessage,
+                            initialURL: directLogin ? XWebNavigation.loginURL
+                                                    : XWebNavigation.initialURL(for: .signIn))
+                    .id(webRevision)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 12) {
+                    Button(L("Recharger", "Reload")) {
+                        errorMessage = nil
+                        webRevision += 1
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                    Button(directLogin ? L("Accueil X", "X home")
+                                       : L("Connexion directe", "Direct sign-in")) {
+                        errorMessage = nil
+                        directLogin.toggle()
+                        webRevision += 1
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
             }
             .navigationTitle(session.statusText)
             .navigationBarTitleDisplayMode(.inline)
@@ -134,7 +157,8 @@ struct XFeedView: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        XWebContent(errorMessage: $errorMessage)
+        XWebContent(errorMessage: $errorMessage,
+                    initialURL: XWebNavigation.initialURL(for: .feed))
             .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
             .ignoresSafeArea(.keyboard, edges: .bottom)
     }
@@ -142,6 +166,7 @@ struct XFeedView: View {
 
 private struct XWebContent: UIViewControllerRepresentable {
     @Binding var errorMessage: String?
+    let initialURL: URL
 
     func makeCoordinator() -> Coordinator { Coordinator(errorMessage: $errorMessage) }
 
@@ -150,11 +175,9 @@ private struct XWebContent: UIViewControllerRepresentable {
         configuration.websiteDataStore = XSession.shared.store
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
+        view.uiDelegate = context.coordinator
         view.scrollView.keyboardDismissMode = .interactive
-        // X redirige vers la connexion si nécessaire. Évite de lire hasSession
-        // avant la fin de la récupération asynchrone des cookies persistants.
-        let startURL = "https://x.com/home"
-        view.load(URLRequest(url: URL(string: startURL)!))
+        view.load(URLRequest(url: initialURL))
         let controller = UIViewController()
         controller.view.backgroundColor = .systemBackground
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -171,18 +194,38 @@ private struct XWebContent: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIViewController, context: Context) {}
 
     static func dismantleUIViewController(_ controller: UIViewController, coordinator: Coordinator) {
-        for case let view as WKWebView in controller.view.subviews { view.stopLoading(); view.navigationDelegate = nil }
+        for case let view as WKWebView in controller.view.subviews {
+            view.stopLoading()
+            view.navigationDelegate = nil
+            view.uiDelegate = nil
+        }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         @Binding var errorMessage: String?
         init(errorMessage: Binding<String?>) { _errorMessage = errorMessage }
 
-        /// Le parcours de connexion traverse `accounts.x.com` puis `x.com` :
-        /// seuls ces hôtes sont autorisés, pas `twitter.com`.
+        /// Les liens target=_blank et window.open ne chargent rien sans WKUIDelegate.
+        /// Charge les destinations X autorisées dans la WebView existante.
+        func webView(_ webView: WKWebView,
+                     createWebViewWith configuration: WKWebViewConfiguration,
+                     for navigationAction: WKNavigationAction,
+                     windowFeatures: WKWindowFeatures) -> WKWebView? {
+            guard navigationAction.targetFrame == nil else { return nil }
+            guard let url = navigationAction.request.url, XWebNavigation.allowsPopup(url) else {
+                blockedNavigation()
+                return nil
+            }
+            webView.load(navigationAction.request)
+            return nil
+        }
+
+        /// Les redirections X/Twitter sont permises mais pas les domaines tiers,
+        /// qui pourraient recevoir accidentellement des cookies de session.
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.targetFrame?.isMainFrame != false else { decisionHandler(.allow); return }
             guard let url = navigationAction.request.url, XTwitterCookiePolicy.allows(url) else {
+                blockedNavigation()
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow)
@@ -190,7 +233,10 @@ private struct XWebContent: UIViewControllerRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             if navigationResponse.isForMainFrame {
-                guard let url = navigationResponse.response.url, XTwitterCookiePolicy.allows(url) else { decisionHandler(.cancel); return }
+                guard let url = navigationResponse.response.url, XTwitterCookiePolicy.allows(url) else {
+                    blockedNavigation()
+                    decisionHandler(.cancel); return
+                }
             }
             decisionHandler(.allow)
         }
@@ -211,6 +257,13 @@ private struct XWebContent: UIViewControllerRepresentable {
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             guard (error as? URLError)?.code != .cancelled else { return }
             reportNavigationError(error)
+        }
+
+        private func blockedNavigation() {
+            LogCenter.err(L("Connexion X : navigation vers un domaine externe refusée.",
+                            "X sign-in: external-domain navigation blocked."))
+            errorMessage = L("X demande une page externe qui n'est pas autorisée dans cette connexion intégrée. Essaie la connexion directe avec tes identifiants X.",
+                             "X requested an external page that this embedded sign-in does not allow. Try direct sign-in with your X credentials.")
         }
 
         private func reportNavigationError(_ error: Error) {
