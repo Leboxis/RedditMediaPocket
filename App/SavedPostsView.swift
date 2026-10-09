@@ -131,6 +131,10 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 }
 
 struct SavedPostsView: View {
+    private enum FeedSource: Hashable {
+        case reddit, x
+    }
+
     @ObservedObject var model: Downloader
     let onDownloadAll: (String) -> Void
 
@@ -141,13 +145,23 @@ struct SavedPostsView: View {
     @State private var loading = false
     @State private var retryCount = 0
     @State private var showFeed = true
-
-
+    @State private var source: FeedSource = .reddit
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !session.hasSession {
+                Picker(L("Source du feed", "Feed source"), selection: $source) {
+                    Text("Reddit").tag(FeedSource.reddit)
+                    Text("X (Twitter)").tag(FeedSource.x)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+
+                if source == .x {
+                    XFeedView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if !session.hasSession {
                     VStack(spacing: 12) {
                         Image(systemName: "bookmark.badge.questionmark")
                             .font(.system(size: 40)).foregroundStyle(.tertiary)
@@ -198,7 +212,7 @@ struct SavedPostsView: View {
                     }
                 }
             }
-            .navigationTitle(L("Sauvegardés", "Saved"))
+            .navigationTitle(source == .reddit ? L("Sauvegardés", "Saved") : "X (Twitter)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -207,31 +221,33 @@ struct SavedPostsView: View {
                     }
                     .accessibilityLabel(L("Fermer", "Close"))
                 }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showFeed.toggle()
-                    } label: {
-                        Image(systemName: showFeed ? "list.bullet" : "play.rectangle.on.rectangle.fill").font(.title3)
+                if source == .reddit {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button {
+                            showFeed.toggle()
+                        } label: {
+                            Image(systemName: showFeed ? "list.bullet" : "play.rectangle.on.rectangle.fill").font(.title3)
+                        }
+                        .accessibilityLabel(showFeed
+                            ? L("Vue liste", "List view")
+                            : L("Vue défilement", "Feed view"))
                     }
-                    .accessibilityLabel(showFeed
-                        ? L("Vue liste", "List view")
-                        : L("Vue défilement", "Feed view"))
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        onDownloadAll("saved")
-                    } label: {
-                        Image(systemName: "arrow.down.circle.fill").font(.title3)
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button {
+                            onDownloadAll("saved")
+                        } label: {
+                            Image(systemName: "arrow.down.circle.fill").font(.title3)
+                        }
+                        .disabled(model.running || !session.hasSession)
+                        .accessibilityLabel(L("Tout télécharger", "Download all"))
                     }
-                    .disabled(model.running || !session.hasSession)
-                    .accessibilityLabel(L("Tout télécharger", "Download all"))
                 }
             }
         }
         .tint(.orange)
-        .errorAlert(errorMessage)
-        .task(id: "\(session.hasSession)-\(retryCount)") {
-            if session.hasSession, posts == nil { await load() }
+        .errorAlert(source == .reddit ? errorMessage : nil)
+        .task(id: "\(source)-\(session.hasSession)-\(retryCount)") {
+            if source == .reddit, session.hasSession, posts == nil { await load() }
         }
     }
 
