@@ -71,6 +71,7 @@ public enum XTwitterMedia {
     public static func parseUser(_ data: Data) throws -> String {
         let root = try object(data)
         let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
+        if let id = text(user, "rest_id"), !id.isEmpty { return id }
         if let legacy = dictionary(user, "legacy"),
            let id = text(legacy, "id_str"), !id.isEmpty { return id }
         // Un compte inexistant ou protégé arrive ici : X renvoie un objet sans

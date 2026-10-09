@@ -1,7 +1,7 @@
 import Foundation
 
 public enum XTwitterError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages
 
     public var errorDescription: String? {
         switch self {
@@ -13,6 +13,8 @@ public enum XTwitterError: LocalizedError {
             return L("Compte X introuvable ou protégé : les médias publics de ce profil sont inaccessibles.", "X account not found or protected: this profile's public media is inaccessible.")
         case .deniedAccess:
             return L("X refuse l'accès aux médias (HTTP 403 ou 401). L'interface de X a peut-être changé.", "X denied media access (HTTP 403 or 401). X's interface may have changed.")
+        case .unavailableAPI:
+            return L("La route API X est indisponible (HTTP 404). Cela ne signifie pas que le compte est introuvable.", "The X API route is unavailable (HTTP 404). This does not mean the account is missing.")
         case .invalidTimeline:
             return L("Fil des médias X illisible ou tronqué.", "X media timeline is unreadable or truncated.")
         case .tooManyPages:
@@ -32,36 +34,27 @@ public enum XTwitterAPI {
     /// remplace pas la session : sans `auth_token`, x.com répond HTTP 403.
     public static let bearer = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 
-    /// `queryId` relevés dans le bundle web de x.com. Un `queryId` périmé se
-    /// manifeste par une réponse sans `entries` ; `invalidTimeline` le dit
-    /// explicitement plutôt que de rapporter « aucun média ».
+    /// Routes et paramètres alignés sur twikit/client/gql.py et constants.py.
+    /// Une route périmée peut renvoyer HTTP 404, distinct d’un compte absent.
     public enum Query {
         /// Résout un `@pseudo` en identifiant numérique, nécessaire aux pages
         /// suivantes.
-        public static let userByScreenName = "WU4yX3X0Z4VdQv9Fq1cY1w"
+        public static let userByScreenName = "NimuplG1OB7Fd2btCLdBOw"
         /// Fil `/media` d'un compte : uniquement les posts qui portent un média.
-        public static let userMedia = "ZsExXCi3SqC3D8C5YCVXKA"
+        public static let userMedia = "2tLOJWwGuCTytDrGBg8VwQ"
     }
 
     /// Drapeaux de fonctionnalités que x.com valide sur chaque appel. Ils
     /// conditionnent la forme de la réponse ; les omettre ferait rejeter la requête.
-    static let commonFeatures = "{"
-        + [
-            #""rweb_tweetviewer_omnimodal":true"#,
-            #""profile_and_omnimodal":true"#,
-            #""tweet_awards":true"#,
-            #""tweet_creator_enabled":true"#,
-            #""tweet_results_ui_omnimodal":true"#,
-            #""responsive_web_graphql_user_by_screen_name":true"#,
-            #""responsive_web_graphql_user_media":true"#,
-            #""responsive_web_graphql_timeline_navigation":true"#
-        ].joined(separator: ",")
-        + "}"
+    // Paramètres des opérations utilisés par Twikit (twikit/constants.py).
+    static let userFeatures = #"{"hidden_profile_likes_enabled":true,"hidden_profile_subscriptions_enabled":true,"responsive_web_graphql_exclude_directive_enabled":true,"verified_phone_label_enabled":false,"subscriptions_verification_info_is_identity_verified_enabled":true,"subscriptions_verification_info_verified_since_enabled":true,"highlights_tweets_tab_ui_enabled":true,"responsive_web_twitter_article_notes_tab_enabled":false,"creator_subscriptions_tweet_preview_api_enabled":true,"responsive_web_graphql_skip_user_profile_image_extensions_enabled":false,"responsive_web_graphql_timeline_navigation_enabled":true}"#
+    static let mediaFeatures = #"{"creator_subscriptions_tweet_preview_api_enabled":true,"c9s_tweet_anatomy_moderator_badge_enabled":true,"tweetypie_unmention_optimization_enabled":true,"responsive_web_edit_tweet_api_enabled":true,"graphql_is_translatable_rweb_tweet_is_translatable_enabled":true,"view_counts_everywhere_api_enabled":true,"longform_notetweets_consumption_enabled":true,"responsive_web_twitter_article_tweet_consumption_enabled":true,"tweet_awards_web_tipping_enabled":false,"longform_notetweets_rich_text_read_enabled":true,"longform_notetweets_inline_media_enabled":true,"rweb_video_timestamps_enabled":true,"responsive_web_graphql_exclude_directive_enabled":true,"verified_phone_label_enabled":false,"freedom_of_speech_not_reach_fetch_enabled":true,"standardized_nudges_misinfo":true,"tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled":true,"responsive_web_media_download_video_enabled":false,"responsive_web_graphql_skip_user_profile_image_extensions_enabled":false,"responsive_web_graphql_timeline_navigation_enabled":true,"responsive_web_enhance_cards_enabled":false}"#
 
     /// `UserByScreenName` : `@pseudo` → identifiant numérique.
     public static func userByScreenName(username: String) -> URL {
         graphqlURL(queryID: Query.userByScreenName, operation: "UserByScreenName",
-                    variables: #"{"screen_name":"\#(jsonEscape(username))","withSafetyModeUserFields":true}"#)
+                    variables: #"{"screen_name":"\#(jsonEscape(username))","withSafetyModeUserFields":false}"#,
+                    features: userFeatures, fieldToggles: #"{"withAuxiliaryUserLabels":false}"#)
     }
 
     /// `UserMedia` : une page du fil `/media` du compte. `cursor` nil = première
@@ -73,20 +66,21 @@ public enum XTwitterAPI {
         var variables = #"{"userId":"\#(jsonEscape(userID))","count":40"# + ","
         variables += #""includePromotedContent":false"# + ","
         variables += #""withQuickPromoteEligibilityTweetFields":true"# + ","
-        variables += #""withVoice":true"#
+        variables += #""withVoice":true,"withV2Timeline":true"#
         if let cursor, !cursor.isEmpty {
             variables += #","cursor":"\#(jsonEscape(cursor))""#
         }
         variables += "}"
-        return graphqlURL(queryID: Query.userMedia, operation: "UserMedia", variables: variables)
+        return graphqlURL(queryID: Query.userMedia, operation: "UserMedia", variables: variables, features: mediaFeatures)
     }
 
-    private static func graphqlURL(queryID: String, operation: String, variables: String) -> URL {
+    private static func graphqlURL(queryID: String, operation: String, variables: String, features: String, fieldToggles: String? = nil) -> URL {
         var components = URLComponents(string: "https://x.com/i/api/graphql/\(queryID)/\(operation)")!
         components.queryItems = [
             URLQueryItem(name: "variables", value: variables),
-            URLQueryItem(name: "features", value: commonFeatures)
+            URLQueryItem(name: "features", value: features)
         ]
+        if let fieldToggles { components.queryItems?.append(URLQueryItem(name: "fieldToggles", value: fieldToggles)) }
         return components.url!
     }
 
@@ -155,14 +149,28 @@ public enum XTwitterCookiePolicy {
 
     /// `ct0` est un cookie de domaine `x.com` : il doit traverser tous les
     /// appels API.
-    public static func csrfToken(cookies: [HTTPCookie]) -> String? {
-        cookies.first { $0.name == "ct0" && !$0.value.isEmpty }?.value
+    public static func csrfToken(cookies: [HTTPCookie], now: Date = Date()) -> String? {
+        matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
+            .first { $0.name == "ct0" && !$0.value.isEmpty }?.value
+    }
+
+    public static func hasCredentials(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
+        let matching = matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
+        return ["auth_token", "ct0"].allSatisfy { name in
+            matching.contains { $0.name == name && !$0.value.isEmpty }
+        }
     }
 
     public static func header(cookies: [HTTPCookie], for url: URL, now: Date = Date()) -> String? {
-        guard allows(url), let host = url.host?.lowercased() else { return nil }
+        let matching = matchingCookies(cookies, for: url, now: now)
+        guard !matching.isEmpty else { return nil }
+        return HTTPCookie.requestHeaderFields(with: matching)["Cookie"]
+    }
+
+    private static func matchingCookies(_ cookies: [HTTPCookie], for url: URL, now: Date) -> [HTTPCookie] {
+        guard allows(url), let host = url.host?.lowercased() else { return [] }
         let path = url.path.isEmpty ? "/" : url.path
-        let matching = cookies.filter { cookie in
+        return cookies.filter { cookie in
             let domain = cookie.domain.lowercased()
             let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
             let isXDomain = bare == "x.com" || bare.hasSuffix(".x.com")
@@ -175,7 +183,5 @@ public enum XTwitterCookiePolicy {
             let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))
             return hostMatches && pathMatches && (cookie.expiresDate == nil || cookie.expiresDate! > now)
         }
-        guard !matching.isEmpty else { return nil }
-        return HTTPCookie.requestHeaderFields(with: matching)["Cookie"]
     }
 }

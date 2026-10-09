@@ -1088,7 +1088,9 @@ struct SavedMediaCount: Codable {
 
     private func fetchXUserID(username: String) async throws -> String {
         let data = try await fetchX(XTwitterAPI.userByScreenName(username: username))
-        return try XTwitterMedia.parseUser(data)
+        let userID = try XTwitterMedia.parseUser(data)
+        await XSession.shared.recordAPIAcceptance(true)
+        return userID
     }
 
     private func fetchXMediaPage(userID: String, cursor: String?) async throws -> Data {
@@ -1110,10 +1112,11 @@ struct SavedMediaCount: Codable {
             // Une session expirée se voit ici. L'utilisateur est invité à se
             // reconnecter plutôt que de boucler sur un refus identique.
             await XSession.shared.refresh()
+            if code == 401 { await XSession.shared.recordAPIAcceptance(false) }
             guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
             throw XTwitterError.deniedAccess
         } catch NetworkError.refused(let code) where code == 404 {
-            throw XTwitterError.unknownAccount
+            throw XTwitterError.unavailableAPI
         }
     }
 
