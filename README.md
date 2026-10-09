@@ -16,6 +16,10 @@ Albums X-Fetish (`x/`) : saisir uniquement le nom dans l'adresse du profil aprè
 
 ## Médias d'un compte X (`tw`)
 
+La fenêtre des sauvegardés Reddit propose un sélecteur **Reddit / X (Twitter)** en haut. Reddit conserve la vue feed/liste et le téléchargement des sauvegardés. X affiche le fil d'accueil web de `x.com/home` dans la même fenêtre, avec la session X des Réglages ; sans session, la page de connexion X s'ouvre. Les commandes de liste et de téléchargement Reddit sont masquées pendant la consultation de X. Revenir à Reddit restaure les posts déjà chargés. Le fil X est celui du site (pas un feed natif de médias ni les signets X), et ne télécharge aucun média dans la collection.
+
+À vérifier sur iPhone : ouvrir les sauvegardés, passer sur X avec puis sans session X, lire une vidéo, revenir à Reddit, fermer la fenêtre puis la rouvrir. Les sessions Reddit et X restent distinctes.
+
 X n'expose aucun accès anonyme aux médias : l'API officielle répond HTTP 401 sans compte, et les miroirs publics type Nitter ne répondent plus. Cette source exige donc une session X, obtenue dans Réglages → Se connecter à X. Elle est distincte de la session Reddit : une déconnexion X n'efface pas la session Reddit, et inversement. Le stockage WebKit est non persistant, donc la session doit être rétablie après un redémarrage de l'app.
 
 Saisir le pseudo seul (`nasa`), avec `@` (`@nasa`), avec le préfixe `tw/`, ou coller l'adresse du profil (`x.com/nasa`). La collection `tw/pseudo` est créée dans le dossier `tw.nasa`, distinct de `x.nasa` (X-Fetish) et d'un profil Reddit au même pseudo.

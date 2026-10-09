@@ -100,7 +100,7 @@ struct XLogin: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                XWebLogin(errorMessage: $errorMessage)
+                XWebContent(errorMessage: $errorMessage)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .navigationTitle(session.statusText)
@@ -117,7 +117,19 @@ struct XLogin: View {
     }
 }
 
-private struct XWebLogin: UIViewControllerRepresentable {
+/// Le fil web partage le même stockage que la connexion X. Sans cookies,
+/// XWebContent ouvre la connexion ; une fois connecté, X affiche son accueil.
+struct XFeedView: View {
+    @State private var errorMessage: String?
+
+    var body: some View {
+        XWebContent(errorMessage: $errorMessage)
+            .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+    }
+}
+
+private struct XWebContent: UIViewControllerRepresentable {
     @Binding var errorMessage: String?
 
     func makeCoordinator() -> Coordinator { Coordinator(errorMessage: $errorMessage) }
