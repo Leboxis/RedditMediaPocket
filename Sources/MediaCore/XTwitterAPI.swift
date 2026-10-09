@@ -192,3 +192,27 @@ public enum XTwitterCookiePolicy {
         }
     }
 }
+
+/** Routes WebKit utilisées pour la connexion et la lecture du fil X.
+    Une page d'accueil initiale fournit un repli lorsque le parcours /i/flow/login
+    direct reste blanc dans une WebView intégrée. */
+public enum XWebNavigation {
+    public enum Destination {
+        case signIn, feed
+    }
+
+    public static func initialURL(for destination: Destination) -> URL {
+        switch destination {
+        case .signIn: return URL(string: "https://x.com/")!
+        case .feed: return URL(string: "https://x.com/home")!
+        }
+    }
+
+    public static let loginURL = URL(string: "https://x.com/i/flow/login")!
+
+    /// Les fenêtres contextuelles X restent sur les hôtes X autorisés.
+    /// Les redirections externes ne doivent pas réutiliser la session WebKit.
+    public static func allowsPopup(_ url: URL) -> Bool {
+        XTwitterCookiePolicy.allows(url)
+    }
+}
