@@ -153,8 +153,10 @@ final class XTwitterTests: XCTestCase {
         XCTAssertEqual(XTwitterCookiePolicy.csrfToken(cookies: [foreign, csrf]), "csrf")
         let scoped = cookie("ct0", "scoped", path: "/i/flow")
         XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth, scoped]))
-        var properties = csrf.properties ?? [:]
-        properties[.expires] = Date(timeIntervalSince1970: 1)
+        let properties: [HTTPCookiePropertyKey: Any] = [
+            .name: "ct0", .value: "csrf", .domain: ".x.com", .path: "/",
+            .expires: Date(timeIntervalSince1970: 1)
+        ]
         let expired = HTTPCookie(properties: properties)!
         XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth, expired]))
         XCTAssertNil(XTwitterCookiePolicy.csrfToken(cookies: [expired]))
