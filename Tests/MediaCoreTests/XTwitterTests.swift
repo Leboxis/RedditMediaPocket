@@ -113,6 +113,55 @@ final class XTwitterTests: XCTestCase {
         XCTAssertEqual(headers["Accept"], "application/json")
     }
 
+    func testCurrentGraphQLRequestContract() throws {
+        let user = XTwitterAPI.userByScreenName(username: "nasa")
+        XCTAssertEqual(user.path, "/i/api/graphql/NimuplG1OB7Fd2btCLdBOw/UserByScreenName")
+        let items = try XCTUnwrap(URLComponents(url: user, resolvingAgainstBaseURL: false)?.queryItems)
+        let raw = try XCTUnwrap(items.first { $0.name == "features" }?.value)
+        let features = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Bool])
+        XCTAssertEqual(features["responsive_web_graphql_exclude_directive_enabled"], true)
+        XCTAssertNotNil(items.first { $0.name == "fieldToggles" })
+        let media = XTwitterAPI.userMedia(userID: "123", cursor: nil)
+        XCTAssertEqual(media.path, "/i/api/graphql/2tLOJWwGuCTytDrGBg8VwQ/UserMedia")
+        let mediaItems = try XCTUnwrap(URLComponents(url: media, resolvingAgainstBaseURL: false)?.queryItems)
+        let mediaRaw = try XCTUnwrap(mediaItems.first { $0.name == "features" }?.value)
+        let mediaFeatures = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(mediaRaw.utf8)) as? [String: Bool])
+        XCTAssertEqual(mediaFeatures["longform_notetweets_consumption_enabled"], true)
+        let variablesRaw = try XCTUnwrap(mediaItems.first { $0.name == "variables" }?.value)
+        let variables = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(variablesRaw.utf8)) as? [String: Any])
+        XCTAssertEqual(variables["withV2Timeline"] as? Bool, true)
+    }
+
+    func testGraphQLRouteMissingIsNotUnknownAccount() {
+        XCTAssertNotEqual(XTwitterError.unavailableAPI.errorDescription, XTwitterError.unknownAccount.errorDescription)
+        XCTAssertTrue(XTwitterError.unavailableAPI.errorDescription?.contains("404") == true)
+    }
+
+    func testUserRestIDWithoutLegacy() throws {
+        let json = #"{"data":{"user":{"result":{"__typename":"User","rest_id":"123"}}}}"#
+        XCTAssertEqual(try XTwitterMedia.parseUser(Data(json.utf8)), "123")
+    }
+
+    func testCredentialsRequireMatchingUnexpiredSessionAndCSRF() {
+        let auth = cookie("auth_token", "session")
+        let csrf = cookie("ct0", "csrf")
+        XCTAssertTrue(XTwitterCookiePolicy.hasCredentials(cookies: [auth, csrf]))
+        XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth]))
+        XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [csrf]))
+        let foreign = cookie("ct0", "foreign", domain: ".twitter.com")
+        XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth, foreign]))
+        XCTAssertEqual(XTwitterCookiePolicy.csrfToken(cookies: [foreign, csrf]), "csrf")
+        let scoped = cookie("ct0", "scoped", path: "/i/flow")
+        XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth, scoped]))
+        let properties: [HTTPCookiePropertyKey: Any] = [
+            .name: "ct0", .value: "csrf", .domain: ".x.com", .path: "/",
+            .expires: Date(timeIntervalSince1970: 1)
+        ]
+        let expired = HTTPCookie(properties: properties)!
+        XCTAssertFalse(XTwitterCookiePolicy.hasCredentials(cookies: [auth, expired]))
+        XCTAssertNil(XTwitterCookiePolicy.csrfToken(cookies: [expired]))
+    }
+
     // MARK: - Cookies
 
     func testCookiePolicyRejectsMediaCDN() {

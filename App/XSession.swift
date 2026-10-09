@@ -14,6 +14,9 @@ import MediaCore
     /// Store dédié : `WKWebsiteDataStore.default()` est déjà utilisé par Reddit.
     let store = WKWebsiteDataStore.nonPersistent()
     @Published private(set) var hasSession = false
+    @Published private(set) var apiAccepted = false
+    @Published private(set) var apiRejected = false
+    private var credentialValues: [String] = []
     @Published private(set) var revision = 0
     @Published private(set) var clearing = false
 
@@ -33,15 +36,32 @@ import MediaCore
         }
     }
 
-    /// `auth_token` est le seul marqueur de session réellement publié par x.com :
-    /// sa présence signifie « connecté », sans prétendre que le compte a été
-    /// validé côté serveur. Même lecture que `RedditSession.hasSession`.
+    /// Les cookies permettent de tenter un appel ; seul un succès API valide
+    /// leur acceptation par X. La validation est oubliée quand ils changent.
     func refresh() async {
         let cookies = await allCookies()
-        hasSession = cookies.contains {
-            $0.name == "auth_token" && !$0.value.isEmpty
+        let values = cookies.filter { $0.name == "auth_token" || $0.name == "ct0" }
+            .map { "\($0.domain)|\($0.path)|\($0.name)|\($0.value)" }.sorted()
+        let ready = !clearing && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
+        if values != credentialValues || !ready {
+            apiAccepted = false
+            apiRejected = false
         }
+        credentialValues = values
+        hasSession = ready
         revision += 1
+    }
+
+    func recordAPIAcceptance(_ accepted: Bool) {
+        apiAccepted = accepted
+        apiRejected = !accepted
+    }
+
+    var statusText: String {
+        if apiRejected { return L("Session X refusée · reconnecte-toi", "X session rejected · sign in again") }
+        if apiAccepted { return L("Session X acceptée au dernier appel", "X session accepted on last request") }
+        return hasSession ? L("Cookies X présents · session à vérifier", "X cookies present · session unverified")
+                          : L("X · connexion requise", "X · sign-in required")
     }
 
     /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Une session valide en a
@@ -66,7 +86,8 @@ import MediaCore
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
-        hasSession = false; revision += 1; clearing = false
+        hasSession = false; apiAccepted = false; apiRejected = false
+        credentialValues = []; revision += 1; clearing = false
     }
 }
 
@@ -82,7 +103,7 @@ struct XLogin: View {
                 XWebLogin(errorMessage: $errorMessage)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .navigationTitle(session.hasSession ? L("X · session détectée", "X · session detected") : "x.com")
+            .navigationTitle(session.statusText)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -168,15 +189,15 @@ struct XSessionIndicator: View {
     @ObservedObject private var session = XSession.shared
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: session.hasSession ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
+            Image(systemName: session.apiAccepted ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
                 .font(.title3)
-            Text(session.hasSession ? L("Session X détectée", "X session detected") : L("X · sans session", "X · signed out"))
+            Text(session.statusText)
                 .font(.subheadline.weight(.semibold))
         }
         .frame(maxWidth: .infinity, alignment: .center)
-        .foregroundStyle(session.hasSession ? Color.green : Color.secondary)
+        .foregroundStyle(session.apiAccepted ? Color.green : (session.apiRejected ? Color.red : Color.secondary))
         .padding(12)
-        .background(session.hasSession ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .background(session.apiAccepted ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .combine)
     }
 }
