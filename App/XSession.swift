@@ -190,6 +190,13 @@ private struct XWebLogin: UIViewControllerRepresentable {
 
         private func reportNavigationError(_ error: Error) {
             let nsError = error as NSError
+            if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 {
+                // WebKitErrorFrameLoadInterruptedByPolicyChange : navigation
+                // annulée par une décision de navigation, pas refus de session.
+                LogCenter.info(L("Navigation X interrompue par une décision de navigation (WebKit 102).",
+                                 "X navigation interrupted by a navigation policy decision (WebKit 102)."))
+                return
+            }
             // Codes uniquement : ni URL de connexion, ni cookies dans le journal.
             let code = nsError.code
             LogCenter.err(L("Navigation X impossible : erreur \(code).", "X navigation failed: error \(code)."))
