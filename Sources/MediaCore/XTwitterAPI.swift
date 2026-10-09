@@ -30,7 +30,7 @@ public enum XTwitterError: LocalizedError {
 public enum XTwitterAPI {
     /// Jeton public embarqué dans le client web. Il n'est pas secret et ne
     /// remplace pas la session : sans `auth_token`, x.com répond HTTP 403.
-    public static let bearer = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCO4W5svLiN1JqbuTsaOgC8R4vKgrbJ0C3M4jQhbSy1w7u"
+    public static let bearer = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 
     /// `queryId` relevés dans le bundle web de x.com. Un `queryId` périmé se
     /// manifeste par une réponse sans `entries` ; `invalidTimeline` le dit
@@ -118,6 +118,7 @@ public enum XTwitterAPI {
         [
             "Accept": "application/json",
             "x-twitter-active-user": "yes",
+            "x-twitter-auth-type": "OAuth2Session",
             "x-twitter-client-language": "en",
             "x-csrf-token": csrf
         ]
