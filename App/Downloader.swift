@@ -1087,7 +1087,8 @@ struct SavedMediaCount: Codable {
     }
 
     private func fetchXUserID(username: String) async throws -> String {
-        try await fetchX(XTwitterAPI.userByScreenName(username: username))
+        let data = try await fetchX(XTwitterAPI.userByScreenName(username: username))
+        return try XTwitterMedia.parseUser(data)
     }
 
     private func fetchXMediaPage(userID: String, cursor: String?) async throws -> Data {
