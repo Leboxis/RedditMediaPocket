@@ -1,3 +1,9 @@
+Moins de requêtes sur les comptes X déjà archivés, et un avertissement clair quand l'archive est incomplète.
+
+- Relancer un compte X déjà téléchargé ne relit plus tout le fil : le parcours s'arrête dès qu'il a rattrapé l'historique, au lieu de redemander les 100 pages à chaque lancement. Un média en échec reste retenté, et un fil jamais terminé continue de s'arrêter à la limite de pages pour reprendre au même endroit.
+- Un bandeau d'information apparaît quand le parcours n'a pas atteint la fin du contenu, pour toutes les sources (profils, subreddits, sauvegardés, RedGifs, X et X-Fetish). Ce n'est pas une erreur : rien n'est perdu, un nouveau lancement continue exactement où le parcours s'était arrêté. Le bandeau disparaît au lancement suivant.
+- X-Fetish ne signale plus sa limite de pages comme une panne. Atteindre cette limite signifie simplement « il reste des pages », ce qui est désormais indiqué sans alerte rouge.
+
 Connexion X plus stable, galerie et reprise cohérentes.
 
 - L'indicateur de session X ne retombe plus tout seul en « accès à vérifier » : X renouvelle son jeton CSRF en cours de session, et ce renouvellement était lu comme une nouvelle connexion.
