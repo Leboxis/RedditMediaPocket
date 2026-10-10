@@ -108,14 +108,12 @@ struct XLogin: View {
     @ObservedObject private var session = XSession.shared
     @State private var errorMessage: String?
     @State private var webRevision = 0
-    @State private var directLogin = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 XWebContent(errorMessage: $errorMessage,
-                            initialURL: directLogin ? XWebNavigation.loginURL
-                                                    : XWebNavigation.initialURL(for: .signIn))
+                            initialURL: XWebNavigation.loginURL)
                     .id(webRevision)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 HStack(spacing: 12) {
@@ -125,13 +123,6 @@ struct XLogin: View {
                     }
                     .buttonStyle(.bordered)
                     Spacer(minLength: 0)
-                    Button(directLogin ? L("Accueil X", "X home")
-                                       : L("Connexion directe", "Direct sign-in")) {
-                        errorMessage = nil
-                        directLogin.toggle()
-                        webRevision += 1
-                    }
-                    .buttonStyle(.borderedProminent)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -148,19 +139,6 @@ struct XLogin: View {
         }
         .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
         .ignoresSafeArea(.keyboard, edges: .bottom)
-    }
-}
-
-/// Le fil web partage le même stockage persistant que la connexion X.
-/// X redirige /home vers son formulaire quand l'utilisateur n'est pas connecté.
-struct XFeedView: View {
-    @State private var errorMessage: String?
-
-    var body: some View {
-        XWebContent(errorMessage: $errorMessage,
-                    initialURL: XWebNavigation.initialURL(for: .feed))
-            .errorAlert(errorMessage, onDismiss: { errorMessage = nil })
-            .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
 
@@ -262,8 +240,8 @@ private struct XWebContent: UIViewControllerRepresentable {
         private func blockedNavigation() {
             LogCenter.err(L("Connexion X : navigation vers un domaine externe refusée.",
                             "X sign-in: external-domain navigation blocked."))
-            errorMessage = L("X demande une page externe qui n'est pas autorisée dans cette connexion intégrée. Essaie la connexion directe avec tes identifiants X.",
-                             "X requested an external page that this embedded sign-in does not allow. Try direct sign-in with your X credentials.")
+            errorMessage = L("Cette connexion autorise uniquement les pages X. Utilise tes identifiants X dans le formulaire de connexion.",
+                             "This sign-in only allows X pages. Use your X credentials in the sign-in form.")
         }
 
         private func reportNavigationError(_ error: Error) {
