@@ -3,7 +3,9 @@ Correction de la connexion à X (Twitter).
 - Détection de la connexion dès que X pose le cookie d'authentification, sans attendre le cookie CSRF.
 - Les appels à l'API X continuent d'exiger les deux cookies, pour éviter d'envoyer une requête incomplète.
 - Session X conservée dans un profil WebKit persistant séparé de Reddit, y compris après une fermeture complète de l'application ; la déconnexion efface les données de ce profil.
-- Chargement de l'accueil X au démarrage, laissant X rediriger vers le formulaire de connexion si nécessaire.
+- Connexion directe au formulaire X dès l’ouverture ; suppression du mode accueil et de son bouton de bascule.
+- Suppression du feed web X et retour de la fenêtre des sauvegardés à son fonctionnement Reddit précédent.
+- Le téléchargement des médias des profils X (`tw`) reste disponible avec la session X.
 
 Choix des médias X-Fetish : images, vidéos ou les deux.
 
