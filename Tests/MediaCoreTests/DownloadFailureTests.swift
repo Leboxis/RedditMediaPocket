@@ -45,6 +45,61 @@ final class DownloadFailureTests: XCTestCase {
             XCTFail("Cancellation must propagate")
         } catch is CancellationError { }
     }
+
+    /// La règle de relance vit dans `MediaCore` pour être testable ; elle était
+    /// dupliquée dans `Downloader` où rien ne pouvait la vérifier.
+    func testTransientFailureIsRetriedTwiceThenAbandoned() {
+        let transient = URLError(.networkConnectionLost)
+        XCTAssertTrue(RetryPolicy.shouldRetry(transient, attempt: 0))
+        XCTAssertTrue(RetryPolicy.shouldRetry(transient, attempt: 1))
+        XCTAssertFalse(RetryPolicy.shouldRetry(transient, attempt: 2))
+        XCTAssertFalse(RetryPolicy.shouldRetry(transient, attempt: 3))
+    }
+
+    func testRetryableSetMatchesTheSkipPolicy() {
+        // Une erreur non transitoire doit être ni rejouée, ni comptée « skipped » :
+        // les deux décisions utilisent la même classification.
+        // `URLError` et `NetworkError` n'ont pas de supertype commun utile : sans
+        // annotation explicite, le littéral serait typé `[Any]` et ne compilerait pas.
+        let transient: [Error] = [URLError(.timedOut), URLError(.notConnectedToInternet),
+                                  NetworkError.refused(408), NetworkError.refused(500),
+                                  NetworkError.refused(503)]
+        for error in transient {
+            XCTAssertTrue(RetryPolicy.shouldRetry(error, attempt: 0), "\(error)")
+            XCTAssertTrue(DownloadFailurePolicy.isTransient(error), "\(error)")
+        }
+        let fatal: [Error] = [NetworkError.refused(404), NetworkError.refused(403),
+                              NetworkError.refused(429),
+                              NetworkError.limited(service: "Reddit", until: nil),
+                              CancellationError(), URLError(.cancelled)]
+        for error in fatal {
+            XCTAssertFalse(RetryPolicy.shouldRetry(error, attempt: 0), "\(error)")
+        }
+    }
+
+    func testBackoffDoublesAndNeverHangs() {
+        XCTAssertEqual(RetryPolicy.delay(forAttempt: 1), .seconds(2))
+        XCTAssertEqual(RetryPolicy.delay(forAttempt: 2), .seconds(4))
+        // Une valeur aberrante ne doit pas produire une attente nulle ou négative.
+        XCTAssertGreaterThan(RetryPolicy.delay(forAttempt: 0), .zero)
+        XCTAssertGreaterThan(RetryPolicy.delay(forAttempt: -5), .zero)
+    }
+
+    /// Previously `precondition`: it killed the process instead of throwing.
+    func testNonPositiveConcurrencyLimitThrowsInsteadOfTrapping() async throws {
+        for limit in [0, -1] {
+            do {
+                try await ConcurrentDownloads.run([1, 2], limit: limit) { _ in
+                    XCTFail("Do not transfer with an invalid limit")
+                }
+                XCTFail("Expected invalid limit")
+            } catch ConcurrentDownloads.Failure.invalidLimit {
+                XCTAssertFalse(limit > 0)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
 }
 
 private actor FailedMediaProbe {

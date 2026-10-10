@@ -9,7 +9,10 @@ public enum XMediaTraversal {
         process: ([XPost]) async throws -> Void,
         persist: (String?) -> Void
     ) async throws -> Bool {
-        precondition(maximumPages > 0)
+        // Une limite nulle ou négative est un défaut de l'appelant : la lever
+        // comme une erreur rattrapable plutôt que de tuer le processus avec une
+        // `precondition`, qui plante même un build de release.
+        guard maximumPages > 0 else { throw XTwitterError.invalidPageLimit }
         var cursor = initialCursor
         var requested = Set<String>()
         if let cursor { requested.insert(cursor) }

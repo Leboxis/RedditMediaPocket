@@ -1,3 +1,21 @@
+Connexion X plus stable, galerie et reprise cohérentes.
+
+- L'indicateur de session X ne retombe plus tout seul en « accès à vérifier » : X renouvelle son jeton CSRF en cours de session, et ce renouvellement était lu comme une nouvelle connexion.
+- L'interface ne se redessine plus à chaque écriture de cookie par X. Les indicateurs de session ne sont rafraîchis que lorsqu'ils changent réellement, au lieu de redessiner l'écran entier à chaque requête.
+- Un média `.m4v` téléchargé apparaît maintenant dans la galerie et dans les compteurs, alors que le tagging et la déduplication le reconnaissaient déjà.
+- Un parcours X demandé avec une limite de pages nulle signale une erreur au lieu d'interrompre l'application.
+- La clé d'un média X (qui décide si le fichier est déjà sur disque) est écrite au même endroit que celle qui la relit : les deux ne peuvent plus diverger et faire retélécharger le média à chaque lancement.
+
+Reprise après une limitation de requêtes.
+
+- Reddit publie parfois plusieurs fenêtres dans un seul en-tête de limitation. Lues comme un nombre unique, elles étaient ignorées : aucune pause n'était enregistrée et chaque relance repartait sur un refus immédiat.
+- L'application n'inventorie plus tout le dossier après chaque fichier téléchargé, ce qui rendait la progression très lente sur une collection importante.
+
+Fiabilité du moteur de téléchargement.
+
+- La règle de relance sur erreur temporaire (réseau instable) a une source unique et testée, au lieu d'une copie dans le moteur de téléchargement qui pouvait diverger.
+- Une limite de transferts simultanés invalide lève une erreur au lieu d'arrêter l'application.
+
 Fiabilité des téléchargements et de la reprise.
 
 - L’ajout des métadonnées conserve le fichier original si le remplacement échoue.

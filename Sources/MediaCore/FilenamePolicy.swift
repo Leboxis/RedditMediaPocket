@@ -83,7 +83,8 @@ public enum FilenamePolicy {
     /// Recover the immutable media key of an X file. Titles change and a
     /// post can hold several media, so the scan compares this key rather than
     /// the whole filename. Images use `xm-<mediaId>`, videos and animated GIFs
-    /// use `xmv-<mediaId>`.
+    /// use `xmv-<mediaId>`. `XMedia.storageKey` writes this exact form; the
+    /// two must stay in step.
     public static func xMediaID(inFileName filename: String) -> String? {
         let file = URL(fileURLWithPath: filename)
         guard ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()) else { return nil }

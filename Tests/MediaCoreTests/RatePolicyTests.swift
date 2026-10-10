@@ -44,4 +44,19 @@ final class RatePolicyTests: XCTestCase {
         limits.record(service: "Reddit", until: now.addingTimeInterval(10))
         XCTAssertEqual(limits.blockedUntil(service: "Reddit", now: now), now.addingTimeInterval(900))
     }
+
+    /// Reddit a déjà publié plusieurs fenêtres dans un même en-tête
+    /// (`x-ratelimit-remaining: '9959.0, 93'`). Lu comme un nombre unique, un tel
+    /// en-tête renvoyait `nil` : aucune limite n'était enregistrée et le
+    /// redémarrage suivant repartait sur un 429 immédiat, en boucle.
+    func testMultiWindowRateLimitHeaderUsesTheNearestWindow() {
+        let now = Date(timeIntervalSince1970: 1000)
+        XCTAssertEqual(RatePolicy.retryDate(retryAfter: nil, reset: "374, 600", now: now),
+                       now.addingTimeInterval(374))
+        XCTAssertEqual(RatePolicy.retryDate(retryAfter: nil, reset: " 42 , 600", now: now),
+                       now.addingTimeInterval(42))
+        // Un en-tête réellement illisible reste sans deadline inventée.
+        XCTAssertNil(RatePolicy.retryDate(retryAfter: nil, reset: "abc, def", now: now))
+        XCTAssertNil(RatePolicy.retryDate(retryAfter: nil, reset: "-5, 600", now: now))
+    }
 }
