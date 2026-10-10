@@ -59,11 +59,6 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 }
 
-struct SavedMediaCount: Codable {
-    let count: Int
-    let computedAt: Date
-}
-
 @MainActor final class Downloader: ObservableObject {
     @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
     @Published var collections: [UserCollection] = []
@@ -353,6 +348,8 @@ struct SavedMediaCount: Codable {
         UserDefaults.standard.removeObject(forKey: Self.visitedKey(id))
         UserDefaults.standard.removeObject(forKey: Self.cursorKey(id))
         UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
+        Self.clearSavedMediaCount(for: id)
+        UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
         collections.removeAll { $0.id == id }
         saveCollections()
 
@@ -391,6 +388,10 @@ struct SavedMediaCount: Codable {
         let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && $0.lastPathComponent != "Inbox" } ?? []
         folders.forEach { try? fm.removeItem(at: $0) }
+        for collection in collections {
+            Self.clearSavedMediaCount(for: collection.id)
+            UserDefaults.standard.removeObject(forKey: "xMediaResume.\(collection.id)")
+        }
         collections = []
         saveCollections()
         activeUser = nil
@@ -650,6 +651,9 @@ struct SavedMediaCount: Codable {
         upsertCollection(source)
         reload()
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
+        if !fm.fileExists(atPath: folder.path) {
+            UserDefaults.standard.removeObject(forKey: "xMediaResume.\(canonical)")
+        }
         // Durcissement : dossier absent ou vide (suppression hors app) → l'historique
         // des posts vus est obsolète, on le purge pour que le run re-télécharge tout.
         if (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.isEmpty ?? true {
@@ -663,8 +667,8 @@ struct SavedMediaCount: Codable {
             try await runXFetish(model: model, canonical: canonical, folder: folder)
             return
         }
-        // Comptes X : fil `/media` authentifié, sans RSS et sans curseur — le
-        // dédoublonnage vient des noms de fichiers. Le chemin est branched avant
+        // Comptes X : fil `/media` authentifié, reprise au dernier lot terminé,
+        // dédoublonnage par noms de fichiers. Le chemin est séparé avant
         // la reprise RSS, dont la migration v2 est sans objet ici.
         if case .twitterUser(let handle) = source {
             var seenMedia = Set<Media>()
@@ -674,11 +678,8 @@ struct SavedMediaCount: Codable {
                                                  folder: folder, seenMedia: &seenMedia,
                                                  usedFilenames: &usedFilenames,
                                                  preparedCount: &preparedCount)
-            // Le plafond de pages n'est pas repris au curseur : relancer relit le
-            // fil depuis le début, ce qui ne coûte que des appels API puisque
-            // les médias déjà sur disque sont écartés.
             if !completed {
-                status = L("Parcours incomplet : profil plus long que 100 pages de médias. Relance pour couvrir la suite.", "Scan incomplete: profile is longer than 100 media pages. Relaunch to cover the rest.")
+                status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
             }
             return
         }
@@ -721,6 +722,15 @@ struct SavedMediaCount: Codable {
             }
             return
         }
+        // Older gallery failures were committed as empty posts. Revisit those
+        // pages once; the existing filenames still prevent duplicate downloads.
+        let galleryMigrationKey = "galleryResolutionVersion.\(canonical)"
+        if UserDefaults.standard.integer(forKey: galleryMigrationKey) < 1 {
+            UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+            UserDefaults.standard.set(1, forKey: galleryMigrationKey)
+        }
         let checkpoint = FeedCheckpoint(
             cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)),
             frontier: UserDefaults.standard.string(forKey: Self.frontierKey(canonical)),
@@ -760,7 +770,7 @@ struct SavedMediaCount: Codable {
             }, trace: { LogCenter.info($0) })
         LogCenter.info(L("Parcours des pages : \(pageNumber) lues, \(completed ? "complet" : "limite atteinte"), \(preparedCount) médias préparés.", "Page scan: \(pageNumber) read, \(completed ? "complete" : "limit reached"), \(preparedCount) media prepared."))
         if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
-            let snapshot = SavedMediaCount(count: preparedCount, computedAt: Date())
+            let snapshot = try SavedMediaCount(folder: folder)
             if let data = try? JSONEncoder().encode(snapshot) {
                 UserDefaults.standard.set(data, forKey: Self.savedMediaCountKey(canonical))
             }
@@ -978,16 +988,9 @@ struct SavedMediaCount: Codable {
 
     /// Parcours du fil `/media` d'un compte X.
     ///
-    /// Le fil se lit du plus récent au plus ancien et repart donc de la
-    /// première page à chaque exécution : c'est le coût assumé du choix « tous
-    /// les médias ». Aucun curseur n'est persisté, car reprendre au milieu
-    /// sauterait les posts publiés depuis la dernière exécution.
-    ///
-    /// Le dédoublonnage repose uniquement sur les clés `xm-…` / `xmv-…` lues
-    /// dans les noms de fichiers : une relance relit les pages mais ne
-    /// retélécharge rien.
-    ///
-    /// Retourne `false` si le plafond de pages est atteint sans fin de fil.
+    /// Le curseur est conservé uniquement pendant un parcours incomplet.
+    /// Après la fin, le parcours suivant revient aux publications récentes.
+    /// Les clés `xm-…` / `xmv-…` évitent de retélécharger les fichiers présents.
     private func runTwitter(username: String, canonical: String, folder: URL,
                             seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
                             preparedCount: inout Int) async throws -> Bool {
@@ -1001,25 +1004,21 @@ struct SavedMediaCount: Codable {
         let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.xMediaID(inFileName: $0.lastPathComponent)
         })
+        let resumeKey = "xMediaResume.\(canonical)"
+        let stored = UserDefaults.standard.dictionary(forKey: resumeKey) as? [String: String]
+        let resumeCursor = stored?["userID"] == userID ? stored?["cursor"] : nil
         var scanned = Set<String>()
         var scannedPages = 0
-        var requestedCursors = Set<String>()
-        var cursor: String?
-
-        while true {
-            try Task.checkCancellation()
+        let completed = try await XMediaTraversal.run(cursor: resumeCursor, fetch: { cursor in
             scannedPages += 1
-            guard scannedPages <= 100 else {
-                LogCenter.info(L("X : plafond de 100 pages atteint, parcours incomplet. Le profil dépasse cette limite : les médias les plus anciens n'ont pas été parcourus.", "X: 100-page limit reached, scan incomplete. The profile exceeds this limit: its oldest media was not scanned."))
-                return false
-            }
-            status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
-            let data = try await fetchXMediaPage(userID: userID, cursor: cursor)
+            self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
+            let data = try await self.fetchXMediaPage(userID: userID, cursor: cursor)
             let page = try XTwitterMedia.parseMediaPage(data)
             LogCenter.info(L("X : page \(scannedPages), \(page.posts.count) posts avec média.", "X: page \(scannedPages), \(page.posts.count) posts with media."))
-
+            return page
+        }, process: { pagePosts in
             var fresh: [XPost] = []
-            for post in page.posts where scanned.insert(post.id).inserted {
+            for post in pagePosts where scanned.insert(post.id).inserted {
                 // Un média déjà enregistré ne vaut pas une seconde page à relire
                 // pour lui : le post entier est écarté si tous ses médias sont là.
                 let missing = post.media.filter { !savedIDs.contains(Self.xMediaKey($0)) }
@@ -1056,10 +1055,14 @@ struct SavedMediaCount: Codable {
                 try await executeDownloads(downloads, &preparedCount)
             }
 
-            guard let next = page.nextCursor, !next.isEmpty else { break }
-            guard next != cursor, requestedCursors.insert(next).inserted else { throw XTwitterError.invalidTimeline }
-            cursor = next
-        }
+        }, persist: { cursor in
+            if let cursor {
+                UserDefaults.standard.set(["userID": userID, "cursor": cursor], forKey: resumeKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: resumeKey)
+            }
+        })
+        guard completed else { return false }
 
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
@@ -1310,14 +1313,10 @@ struct SavedMediaCount: Codable {
             try await withThrowingTaskGroup(of: (String, [Media]).self) { group in
                 for post in candidates {
                     group.addTask {
-                        do {
-                            let list = try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
-                            return (post.id, list)
-                        } catch NetworkError.limited(let service, let until) {
-                            throw NetworkError.limited(service: service, until: until)
-                        } catch {
-                            return (post.id, [])
+                        let list = try await GalleryFeed.resolve {
+                            try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
                         }
+                        return (post.id, list)
                     }
                 }
                 for try await (id, list) in group {
@@ -1514,14 +1513,8 @@ struct SavedMediaCount: Codable {
             CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, ptr)
         }
         guard ok, output.length > 0 else { return }
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        do {
-            try output.write(to: temp, options: .atomic)
-            _ = try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: temp, to: url)
-        } catch {
-            try? FileManager.default.removeItem(at: temp)
-        }
+        // Atomic write retains the original if staging or publication fails.
+        try? output.write(to: url, options: .atomic)
     }
 
     nonisolated private static func movieMetadataItems(author: String, comment: String?) -> [AVMetadataItem] {
@@ -1553,7 +1546,7 @@ struct SavedMediaCount: Codable {
         guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return }
         let ext = url.pathExtension.lowercased()
         export.outputFileType = ext == "mov" ? .mov : .mp4
-        let temp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(ext.isEmpty ? "mp4" : ext)
+        let temp = url.deletingLastPathComponent().appendingPathComponent("." + UUID().uuidString).appendingPathExtension(ext.isEmpty ? "mp4" : ext)
         export.outputURL = temp
         export.metadata = items
         await withTaskCancellationHandler {
@@ -1566,8 +1559,7 @@ struct SavedMediaCount: Codable {
         guard export.status == .completed else { try? FileManager.default.removeItem(at: temp); return }
         if Task.isCancelled { try? FileManager.default.removeItem(at: temp); return }
         do {
-            _ = try? FileManager.default.removeItem(at: url)
-            try FileManager.default.moveItem(at: temp, to: url)
+            try MediaFileReplacement.replace(url, with: temp)
         } catch {
             try? FileManager.default.removeItem(at: temp)
         }

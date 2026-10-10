@@ -4,6 +4,17 @@ import Foundation
 /// comme un lien vers la page `/gallery/<id>` et la miniature de couverture ;
 /// la liste ordonnée des originaux ne se trouve que dans le JSON du post.
 public enum GalleryFeed {
+    /// Only a permanently missing gallery can be treated as empty. Transport,
+    /// authentication and parsing failures must leave the feed page retryable.
+    public static func resolve(_ operation: () async throws -> [Media]) async throws -> [Media] {
+        do { return try await operation() }
+        catch {
+            try Task.checkCancellation()
+            if case NetworkError.refused(let code) = error, code == 404 || code == 410 { return [] }
+            throw error
+        }
+    }
+
     private static let linkedRegex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/[A-Za-z0-9]+["']"#)
     private static let linkedIDRegex = try! NSRegularExpression(pattern: #"(?i)href\s*=\s*["']https://www\.reddit\.com/gallery/([A-Za-z0-9]+)["']"#)
 

@@ -1,3 +1,10 @@
+Fiabilité des téléchargements et de la reprise.
+
+- L’ajout des métadonnées conserve le fichier original si le remplacement échoue.
+- Une erreur temporaire lors de la résolution d’une galerie Reddit interrompt la page sans la marquer comme traitée ; une relance peut la reprendre. L’historique Reddit est revérifié une fois pour récupérer les galeries auparavant ignorées, sans retélécharger les fichiers déjà présents.
+- Le compteur des sauvegardés compte les médias réellement présents, y compris ceux des exécutions précédentes.
+- Les profils X dépassant 100 pages reprennent après la dernière page terminée. Après la fin du parcours, le lancement suivant recherche les nouveautés depuis le début.
+
 Correction de la connexion à X (Twitter).
 
 - Détection de la connexion dès que X pose le cookie d'authentification, sans attendre le cookie CSRF.
