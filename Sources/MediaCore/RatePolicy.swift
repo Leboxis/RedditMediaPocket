@@ -22,7 +22,12 @@ public enum RatePolicy {
     /// invented: a nil deadline keeps a manual restart immediately possible.
     public static func retryDate(retryAfter: String?, reset: String?, now: Date) -> Date? {
         if let date = absolute(retryAfter, now: now) { return date }
-        guard let seconds = reset.flatMap(Double.init), seconds.isFinite, seconds > 0 else { return nil }
+        // Reddit publie parfois plusieurs fenêtres dans un même en-tête
+        // (`x-ratelimit-remaining: '9959.0, 93'`). La première valeur décrit la
+        // fenêtre la plus proche, donc celle qui libère la plus tôt.
+        guard let raw = reset?.split(separator: ",").first.map(String.init),
+              let seconds = Double(raw.trimmingCharacters(in: .whitespaces)),
+              seconds.isFinite, seconds > 0 else { return nil }
         return now.addingTimeInterval(seconds)
     }
 

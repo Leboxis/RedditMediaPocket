@@ -1,7 +1,7 @@
 import Foundation
 
 public enum XTwitterError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages, invalidPageLimit
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +19,8 @@ public enum XTwitterError: LocalizedError {
             return L("Fil des médias X illisible ou tronqué.", "X media timeline is unreadable or truncated.")
         case .tooManyPages:
             return L("Trop de pages de médias X à parcourir.", "Too many X media pages to scan.")
+        case .invalidPageLimit:
+            return L("Limite de pages invalide.", "Invalid page limit.")
         }
     }
 }

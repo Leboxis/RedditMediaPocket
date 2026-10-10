@@ -1021,7 +1021,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             for post in pagePosts where scanned.insert(post.id).inserted {
                 // Un média déjà enregistré ne vaut pas une seconde page à relire
                 // pour lui : le post entier est écarté si tous ses médias sont là.
-                let missing = post.media.filter { !savedIDs.contains(Self.xMediaKey($0)) }
+                let missing = post.media.filter { !savedIDs.contains($0.storageKey) }
                 guard !missing.isEmpty else { continue }
                 fresh.append(XPost(id: post.id, text: post.text, publishedAt: post.publishedAt, media: missing))
             }
@@ -1035,8 +1035,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         // c'est lui que `FilenamePolicy.xMediaID` relit au
                         // lancement suivant pour ne pas retélécharger. Un
                         // identifiant de post ne conviendrait pas, un même média
-                        // pouvant apparaître dans plusieurs posts.
-                        let id = Self.xMediaKey(media)
+                        // pouvant apparaître dans plusieurs posts. `storageKey`
+                        // est la forme canonique, écrite à côté de sa lecture.
+                        let id = media.storageKey
                         mediaOverrides[id] = [.direct(media.url)]
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
@@ -1081,14 +1082,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return true
     }
 
-    /// Clé de dédoublonnage d'un média X, alignée sur `FilenamePolicy.xMediaID`.
-    private static func xMediaKey(_ media: XMedia) -> String {
-        switch media.kind {
-        case .image: return "xm-\(media.id)"
-        case .video, .gif: return "xmv-\(media.id)"
-        }
-    }
-
+    /// Résout `@pseudo` en identifiant numérique, la seule forme acceptée par
+    /// la route `/media`. Le succès vaut aussi preuve que l'API accepte la
+    /// session, d'où l'enregistrement ci-dessous.
     private func fetchXUserID(username: String) async throws -> String {
         let data = try await fetchX(XTwitterAPI.userByScreenName(username: username))
         let userID = try XTwitterMedia.parseUser(data)
@@ -1392,31 +1388,19 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Relance bornée sur erreur transitoire (réseau mobile instable) :
     /// 3 essais max, backoff 2s/4s. Le 429 est exclu : il est déjà converti en
     /// `NetworkError.limited` par `Network.check` et n'est jamais réessayé.
+    /// La règle elle-même est testée dans `RetryPolicy`.
     private func saveWithRetry(_ item: Download) async throws {
         var attempt = 0
         while true {
             do {
                 return try await save(item)
             } catch {
-                if error is CancellationError { throw error }
-                guard Self.isTransient(error), attempt < 2 else { throw error }
+                guard RetryPolicy.shouldRetry(error, attempt: attempt) else { throw error }
                 attempt += 1
                 LogCenter.net(L("Réseau instable, nouvel essai \(attempt)/2 pour \(item.destination.lastPathComponent)…", "Unstable network, retry \(attempt)/2 for \(item.destination.lastPathComponent)…"))
-                try await Task.sleep(for: .seconds(1 << attempt))
+                try await Task.sleep(for: RetryPolicy.delay(forAttempt: attempt))
             }
         }
-    }
-
-    private static func isTransient(_ error: Error) -> Bool {
-        if let urlError = error as? URLError {
-            return [.timedOut, .networkConnectionLost, .notConnectedToInternet,
-                    .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
-                    .secureConnectionFailed].contains(urlError.code)
-        }
-        if case NetworkError.refused(let code) = error {
-            return code == 408 || (500...599).contains(code)
-        }
-        return false
     }
 
     /// Un média supprimé ou inaccessible (ex. HTTP 404) ne doit pas annuler
@@ -1470,7 +1454,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
         count += 1
         LogCenter.info(L("Gardé : \(item.destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(item.destination.lastPathComponent) (\(count)/\(discovered))."))
         // A scan started before this save must not overwrite the newly inserted file.
-        if reloadTask != nil { reload() }
+        if reloadTask != nil { invalidateReload() }
+    }
+
+    /// Écarte un scan en cours sans en lancer un nouveau. `save()` vient
+    /// d'insérer le fichier dans `files` et d'ajuster `totalBytes` : rescanner le
+    /// dossier entier après chaque téléchargement coûterait O(n²) en `stat` sur
+    /// une grosse collection, pour un résultat identique. Le seul risque réel
+    /// est qu'un scan démarré avant l'insertion n'écrase la liste affichée —
+    /// invalider sa révision suffit à l'en empêcher.
+    private func invalidateReload() {
+        reloadTask?.cancel()
+        reloadRevision += 1
+        reloadTask = nil
+        loadingFiles = false
     }
 
     /// Injection binaire fail-safe : JPG/PNG via EXIF sans recompression,

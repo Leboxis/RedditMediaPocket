@@ -37,6 +37,23 @@ public struct XMedia: Hashable, Sendable {
     }
 }
 
+public extension XMedia {
+    /// Clé de dédoublonnage et de nom de fichier : `xm-<id>` pour une image,
+    /// `xmv-<id>` pour une vidéo ou un GIF animé.
+    ///
+    /// `FilenamePolicy.xMediaID` relit exactement cette forme depuis le nom
+    /// présent sur disque pour ne pas retélécharger le média. Les deux vivent
+    /// dans `MediaCore` et doivent évoluer ensemble : produire la clé ailleurs
+    /// ferait retomber silencieusement le fichier en « nouveau » à chaque
+    /// lancement.
+    var storageKey: String {
+        switch kind {
+        case .image: return "xm-\(id)"
+        case .video, .gif: return "xmv-\(id)"
+        }
+    }
+}
+
 /// Un post du fil `/media`, avec tous ses médias.
 public struct XPost: Sendable {
     public let id: String

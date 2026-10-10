@@ -20,7 +20,6 @@ import MediaCore
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
     private var credentialValues: [String] = []
-    @Published private(set) var revision = 0
     @Published private(set) var clearing = false
 
     private override init() {
@@ -40,21 +39,32 @@ import MediaCore
     }
 
     /// Les cookies permettent de tenter un appel ; seul un succès API valide
-    /// leur acceptation par X. La validation est oubliée quand ils changent.
+    /// leur acceptation par X. La validation est oubliée quand l'identité de la
+    /// session change.
+    ///
+    /// Seul `auth_token` est comparé. X renouvelle `ct0` tout seul en cours de
+    /// session : l'inclure faisait retomber l'indicateur « API acceptée » au
+    /// moindre renouvellement de jeton, alors que la connexion n'avait pas
+    /// bougé. Le `ct0` utilisé part de `csrfToken()`, qui relit les cookies à
+    /// chaque appel : un jeton renouvelé est donc déjà pris en compte.
     func refresh() async {
         let cookies = await allCookies()
-        let values = cookies.filter { $0.name == "auth_token" || $0.name == "ct0" }
-            .map { "\($0.domain)|\($0.path)|\($0.name)|\($0.value)" }.sorted()
+        let identity = cookies.filter { $0.name == "auth_token" }
+            .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
         let ready = !clearing && XTwitterCookiePolicy.hasLoginCookie(cookies: cookies)
         let apiReady = ready && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
-        if values != credentialValues || !ready {
-            apiAccepted = false
-            apiRejected = false
+        let revoked = identity != credentialValues || !ready
+        credentialValues = identity
+        // `@Published` est réaffecté uniquement sur un changement réel.
+        // `refresh()` est appelé à chaque écriture de cookie par WebKit, et une
+        // réaffectation de même valeur émet quand même `objectWillChange` :
+        // toutes les vues observant l'objet se redessinaient pour rien.
+        if revoked {
+            if apiAccepted { apiAccepted = false }
+            if apiRejected { apiRejected = false }
         }
-        credentialValues = values
-        hasSession = ready
-        hasAPICredentials = apiReady
-        revision += 1
+        if hasSession != ready { hasSession = ready }
+        if hasAPICredentials != apiReady { hasAPICredentials = apiReady }
     }
 
     func recordAPIAcceptance(_ accepted: Bool) {
@@ -98,7 +108,7 @@ import MediaCore
         }
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
-        credentialValues = []; revision += 1; clearing = false
+        credentialValues = []; clearing = false
     }
 }
 

@@ -490,4 +490,27 @@ final class XTwitterTests: XCTestCase {
         let image = try? XCTUnwrap(FilenamePolicy.xMediaID(inFileName: "I - xm-111.jpg"))
         XCTAssertEqual(image, "xm-111")
     }
+
+    /// `XMedia.storageKey` écrit la clé, `FilenamePolicy.xMediaID` la relit.
+    /// C'est ce couple qui décide qu'un média déjà sur disque n'est pas
+    /// retéléchargé : si les deux formes divergent, le fichier repasse pour
+    /// nouveau à chaque lancement. L'aller-retour est donc verrouillé ici.
+    func testStorageKeyRoundTripsThroughTheFileName() throws {
+        let url = try XCTUnwrap(URL(string: "https://pbs.twimg.com/media/a.jpg"))
+        let cases: [(XMedia.Kind, String)] = [(.image, "xm-"), (.video, "xmv-"), (.gif, "xmv-")]
+        for (kind, prefix) in cases {
+            let media = XMedia(id: "1700000000000000001", kind: kind, url: url,
+                               width: 1280, height: 720, bitrate: 0)
+            let key = media.storageKey
+            XCTAssertEqual(key, prefix + "1700000000000000001")
+
+            let stem = FilenamePolicy.downloadStem(title: "Un post X", postID: key)
+            let ext = kind == .image ? "jpg" : "mp4"
+            XCTAssertEqual(FilenamePolicy.xMediaID(inFileName: "\(stem).\(ext)"), key)
+
+            // Un post sans texte ne produit qu'un nom nu : la forme doit rester relisible.
+            let bare = FilenamePolicy.downloadStem(title: "", postID: key)
+            XCTAssertEqual(FilenamePolicy.xMediaID(inFileName: "\(bare).\(ext)"), key)
+        }
+    }
 }

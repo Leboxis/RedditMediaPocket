@@ -31,7 +31,7 @@ public struct CollectionFiles: Sendable {
         var bytes: Int64 = 0
         for url in entries {
             try Task.checkCancellation()
-            guard ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov"].contains(url.pathExtension.lowercased()),
+            guard ["jpg", "jpeg", "png", "gif", "webp", "mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()),
                   let values = try? url.resourceValues(forKeys: keys),
                   values.isRegularFile == true else { continue }
             bytes += Int64(values.fileSize ?? 0)

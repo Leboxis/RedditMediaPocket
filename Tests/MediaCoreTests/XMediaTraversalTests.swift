@@ -52,4 +52,22 @@ final class XMediaTraversalTests: XCTestCase {
             XCTFail("Expected invalid timeline")
         } catch XTwitterError.invalidTimeline { }
     }
+
+    /// Previously `precondition`: it killed the process, release builds
+    /// included, instead of throwing an error the caller can handle.
+    @MainActor func testNonPositivePageLimitThrowsInsteadOfTrapping() async {
+        for limit in [0, -1] {
+            do {
+                _ = try await XMediaTraversal.run(cursor: nil, maximumPages: limit,
+                    fetch: { _ in XMediaPage(posts: [], nextCursor: nil) },
+                    process: { _ in XCTFail("Do not fetch with an invalid limit") },
+                    persist: { _ in })
+                XCTFail("Expected invalid page limit")
+            } catch XTwitterError.invalidPageLimit {
+                XCTAssertFalse(limit > 0)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
 }
