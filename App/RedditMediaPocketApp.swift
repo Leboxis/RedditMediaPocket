@@ -42,6 +42,7 @@ struct ContentView: View {
                 metricsRow
                 transferBarRow
                 statusRow
+                incompleteBanner
                 gallerySection
             }
             .navigationTitle("")
@@ -276,6 +277,31 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 16).padding(.bottom, 6)
+        }
+    }
+
+    /// Le parcours n'a pas atteint la fin du contenu : le budget de pages a été
+    /// consommé et il reste des pages à voir. Ce n'est pas une erreur — rien
+    /// n'est perdu, une relance reprend où le parcours s'était arrêté — mais il
+    /// faut le dire assez fort pour qu'on ne croie pas l'archive complète.
+    @ViewBuilder private var incompleteBanner: some View {
+        if model.scanIncomplete {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
+                Text(L("Archive incomplète : le parcours a atteint sa limite de pages. Relance pour continuer.",
+                       "Incomplete archive: the scan reached its page limit. Relaunch to continue."))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .foregroundStyle(Color.orange)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 6)
+            .accessibilityElement(children: .combine)
         }
     }
 

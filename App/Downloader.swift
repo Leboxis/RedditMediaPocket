@@ -66,6 +66,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published var running = false
     @Published var status = ""
     @Published var errorMessage: String?
+    /// Vrai quand le dernier parcours s'est arrêté avant la fin du contenu
+    /// disponible : le budget de pages a été atteint et il reste des pages à
+    /// voir. Relancer reprend exactement où le parcours s'était arrêté, donc
+    /// aucun média n'est perdu — mais l'archive n'est pas complète. Le bandeau
+    /// d'information le signale sans bloquer, et disparaît au lancement suivant.
+    @Published private(set) var scanIncomplete = false
     @Published var files: [URL] = []
     @Published private(set) var loadingFiles = false
     @Published var count = 0
@@ -461,6 +467,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
         running = true; discovered = 0; count = 0; status = ""; failed = 0
+        scanIncomplete = false
         transferUnit = nil
         task = Task {
             defer { running = false; active = 0; task = nil }
@@ -473,6 +480,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 if Task.isCancelled || DownloadFailurePolicy.isCancellation(error) {
                     status = L("Arrêté", "Stopped")
                     LogCenter.info(L("Parcours arrêté après \(Int(Date().timeIntervalSince(started))) s : \(count) fichiers conservés pendant cette session.", "Run stopped after \(Int(Date().timeIntervalSince(started))) s: \(count) files kept during this run."))
+                } else if case XFetishError.tooManyPages = error {
+                    // X-Fetish compte ses pages à part et signale le plafond en
+                    // levant. Ce n'est pas une panne : rien n'est perdu et une
+                    // relance reprend après la dernière page parcourue. Le
+                    // traiter comme une erreur envoyait une alerte rouge pour
+                    // un simple « il reste des pages ».
+                    scanIncomplete = true
+                    status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
+                    LogCenter.info(L("Parcours X-Fetish incomplet après \(Int(Date().timeIntervalSince(started))) s : \(count) conservés. Relance pour continuer.", "Incomplete X-Fetish scan after \(Int(Date().timeIntervalSince(started))) s: \(count) kept. Relaunch to continue."))
                 } else {
                     status = ""
                     LogCenter.err(L("Parcours interrompu après \(Int(Date().timeIntervalSince(started))) s (\(count) conservés, \(failed) ignorés) : \(error.localizedDescription)", "Run failed after \(Int(Date().timeIntervalSince(started))) s (\(count) kept, \(failed) skipped): \(error.localizedDescription)"))
@@ -679,6 +695,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                                  usedFilenames: &usedFilenames,
                                                  preparedCount: &preparedCount)
             if !completed {
+                scanIncomplete = true
                 status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
             }
             return
@@ -711,6 +728,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 saveCollections()
             }
             if !completed {
+                scanIncomplete = true
                 status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
             } else if failed == 0 {
                 status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
@@ -780,6 +798,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             saveCollections()
         }
         if !completed {
+            scanIncomplete = true
             status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
         } else if failed == 0 {
             status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
@@ -1016,7 +1035,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let page = try XTwitterMedia.parseMediaPage(data)
             LogCenter.info(L("X : page \(scannedPages), \(page.posts.count) posts avec média.", "X: page \(scannedPages), \(page.posts.count) posts with media."))
             return page
-        }, process: { pagePosts in
+        }, process: { pagePosts -> Bool in
             var fresh: [XPost] = []
             for post in pagePosts where scanned.insert(post.id).inserted {
                 // Un média déjà enregistré ne vaut pas une seconde page à relire
@@ -1025,37 +1044,39 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 guard !missing.isEmpty else { continue }
                 fresh.append(XPost(id: post.id, text: post.text, publishedAt: post.publishedAt, media: missing))
             }
+            // Rien de nouveau sur cette page : le parcours la comptera comme
+            // « rattrapé ». Un média en échec reste `missing`, donc sa page est
+            // toujours considérée comme nouvelle et se voit retenter.
+            guard !fresh.isEmpty else { return false }
 
-            if !fresh.isEmpty {
-                var mediaOverrides: [String: [Media]] = [:]
-                var posts: [Post] = []
-                for post in fresh {
-                    for media in post.media {
-                        // L'identifiant du média entre dans le nom de fichier :
-                        // c'est lui que `FilenamePolicy.xMediaID` relit au
-                        // lancement suivant pour ne pas retélécharger. Un
-                        // identifiant de post ne conviendrait pas, un même média
-                        // pouvant apparaître dans plusieurs posts. `storageKey`
-                        // est la forme canonique, écrite à côté de sa lecture.
-                        let id = media.storageKey
-                        mediaOverrides[id] = [.direct(media.url)]
-                        posts.append(Post(id: id, title: post.text, html: "",
-                                          publishedAt: post.publishedAt,
-                                          link: "https://x.com/i/status/\(post.id)"))
-                    }
+            var mediaOverrides: [String: [Media]] = [:]
+            var posts: [Post] = []
+            for post in fresh {
+                for media in post.media {
+                    // L'identifiant du média entre dans le nom de fichier :
+                    // c'est lui que `FilenamePolicy.xMediaID` relit au
+                    // lancement suivant pour ne pas retélécharger. Un
+                    // identifiant de post ne conviendrait pas, un même média
+                    // pouvant apparaître dans plusieurs posts. `storageKey`
+                    // est la forme canonique, écrite à côté de sa lecture.
+                    let id = media.storageKey
+                    mediaOverrides[id] = [.direct(media.url)]
+                    posts.append(Post(id: id, title: post.text, html: "",
+                                      publishedAt: post.publishedAt,
+                                      link: "https://x.com/i/status/\(post.id)"))
                 }
-                let downloads = try await prepareDownloads(posts, folder: folder,
-                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
-                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
-                // La barre suit la page : X n'annonce aucun total global et le
-                // parcours en découvre en continu, donc une unité de nombre
-                // connu est la seule progression exacte possible. `downloads`
-                // et non le nombre de médias vus : ceux déjà sur disque en sont
-                // exclus, et la barre ne doit pas annoncer plus que le lot.
-                beginTransferUnit(total: downloads.count)
-                try await executeDownloads(downloads, &preparedCount)
             }
-
+            let downloads = try await prepareDownloads(posts, folder: folder,
+                seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
+            // La barre suit la page : X n'annonce aucun total global et le
+            // parcours en découvre en continu, donc une unité de nombre
+            // connu est la seule progression exacte possible. `downloads`
+            // et non le nombre de médias vus : ceux déjà sur disque en sont
+            // exclus, et la barre ne doit pas annoncer plus que le lot.
+            beginTransferUnit(total: downloads.count)
+            try await executeDownloads(downloads, &preparedCount)
+            return true
         }, persist: { cursor in
             if let cursor {
                 UserDefaults.standard.set(["userID": userID, "cursor": cursor], forKey: resumeKey)
