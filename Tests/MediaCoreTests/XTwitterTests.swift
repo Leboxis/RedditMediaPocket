@@ -49,7 +49,7 @@ final class XTwitterTests: XCTestCase {
     }
 
     func testKDriveFolderNameForTwitter() {
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("tw/nasa"), "Twnasa")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("tw/nasa"), "Nasa - X")
         // Distinct de `u/nasa` : les deux portent le même pseudo.
         XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("tw/nasa"),
                           FilenamePolicy.kDriveFolderName("u/nasa"))

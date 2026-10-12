@@ -215,17 +215,18 @@ public enum FilenamePolicy {
         // jamais coïncider avec un pseudo Reddit tel que `u/xfoo`.
         // RedGifs utilise `Rg` (distinct de `R` des subreddits).
         var typePrefix = ""
+        var typeSuffix = ""
         if parts.count > 1, let first = parts.first?.lowercased() {
             if first == "x" { typePrefix = "X-Fetish " }
             else if first == "rg" { typePrefix = "Rg" }
             // `tw` doit rester distinct de `t` : un compte X ne doit jamais
             // hériter du dossier d'un profil Reddit au même pseudo.
-            else if first == "tw" { typePrefix = "Tw" }
+            else if first == "tw" { typeSuffix = " - X" }
             else if ["u", "r", "saved"].contains(first) { typePrefix = String(first.prefix(1)).uppercased() }
         }
         if let last = parts.last { base = last }
         if base.isEmpty { base = fallback }
-        base = typePrefix + base
+        base = typePrefix + base + typeSuffix
 
         base = base.precomposedStringWithCanonicalMapping.unicodeScalars
             .map { scalar in
