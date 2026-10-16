@@ -35,13 +35,14 @@ public enum DownloadFailurePolicy {
         return false
     }
 
-    public static func attempt(_ operation: () async throws -> Void) async throws -> Bool {
+    public static func attempt(abortOn403: Bool = false, _ operation: () async throws -> Void) async throws -> Bool {
         do {
             try await operation()
             return true
         } catch {
             try Task.checkCancellation()
             if isCancellation(error) { throw error }
+            if abortOn403, case NetworkError.refused(403) = error { throw error }
             if case NetworkError.limited = error { throw error }
             if isTransient(error) { throw error }
             return false

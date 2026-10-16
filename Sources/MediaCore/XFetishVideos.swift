@@ -54,6 +54,8 @@ public enum XFetishVideos {
     /// accepté comme média téléchargeable.
     private static let signedRouteRegex = try! NSRegularExpression(
         pattern: #"^/get_file/\d+/[0-9a-f]{8,64}/\d+/\d+/([0-9]+(?:_[0-9A-Za-z._-]+)?\.mp4)$"#)
+    private static let adjacentTokenRegex = try! NSRegularExpression(
+        pattern: #"^[\s,]*["']?v-acctoken["']?\s*:\s*['"]([^'"\r\n]+)['"]"#)
 
     public static func listingURL(model: String, page: Int) -> URL {
         let suffix = page <= 1 ? "" : "\(page)/"
@@ -87,6 +89,34 @@ public enum XFetishVideos {
         return ListingPage(videos: videos, nextPage: nextPage)
     }
 
+    /// Collect a bounded batch before downloading. Commit the next page only
+    /// after processing succeeds; a completed scan restarts at the head next time.
+    @MainActor public static func run(page initialPage: Int = 1, maximumPages: Int = 100,
+        fetch: (Int) async throws -> ListingPage,
+        process: ([Video]) async throws -> Void,
+        persist: (Int?) -> Void) async throws -> Bool {
+        guard initialPage > 0, maximumPages > 0 else { throw XFetishVideoError.invalidListing }
+        var page = initialPage
+        var nextPage: Int?
+        var pending: [Video] = []
+        var seen = Set<String>()
+        for _ in 0..<maximumPages {
+            try Task.checkCancellation()
+            let listing = try await fetch(page)
+            try Task.checkCancellation()
+            for video in listing.videos where seen.insert(video.id).inserted { pending.append(video) }
+            nextPage = listing.nextPage
+            guard let next = nextPage else { break }
+            guard next > page else { throw XFetishVideoError.invalidListing }
+            page = next
+        }
+        try Task.checkCancellation()
+        try await process(pending)
+        try Task.checkCancellation()
+        persist(nextPage)
+        return nextPage == nil
+    }
+
     /// Route signée du lecteur. Le jeton reste dans l'URL retournée et n'est
     /// jamais journalisé (`LogDiagnostics`).
     public static func parseFileURL(_ data: Data, video: Video) throws -> URL {
@@ -97,7 +127,7 @@ public enum XFetishVideos {
             throw XFetishVideoError.invalidPlayer
         }
         let raw = ns.substring(with: match.range(at: 1))
-        guard let url = XFetishHTML.siteURL(raw, relativeTo: XFetishHTML.siteRoot),
+        guard var url = XFetishHTML.siteURL(raw, relativeTo: XFetishHTML.siteRoot),
               let route = signedRouteRegex.firstMatch(in: url.path,
                                                       range: NSRange(url.path.startIndex..., in: url.path)) else {
             throw XFetishVideoError.invalidPlayer
@@ -108,6 +138,43 @@ public enum XFetishVideos {
         guard name == "\(video.id).mp4" || name.hasPrefix("\(video.id)_") else {
             throw XFetishVideoError.invalidPlayer
         }
+        if var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           !(components.queryItems ?? []).contains(where: { $0.name == "v-acctoken" }) {
+            // Some players publish the token beside video_url, not inside it.
+            let suffix = ns.substring(with: NSRange(location: NSMaxRange(match.range),
+                length: min(512, ns.length - NSMaxRange(match.range))))
+            if let found = adjacentTokenRegex.firstMatch(in: suffix, range: NSRange(suffix.startIndex..., in: suffix)) {
+                let value = (suffix as NSString).substring(with: found.range(at: 1))
+                // PHP treats a literal '+' as a space. Preserve the original
+                // escaped query and encode only the newly appended credential.
+                let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "+&=%"))
+                guard let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) else {
+                    throw XFetishVideoError.invalidPlayer
+                }
+                let prefix = components.percentEncodedQuery.map { $0.isEmpty ? "" : $0 + "&" } ?? ""
+                components.percentEncodedQuery = prefix + "v-acctoken=" + encoded
+                guard let signed = components.url else { throw XFetishVideoError.invalidPlayer }
+                url = signed
+            }
+        }
         return url
+    }
+
+    /// Resolve only when a worker is ready. A 403 gets one fresh player page;
+    /// cancellation, rate limiting and the second refusal escape to the caller.
+    public static func download(_ video: Video, page: (URL) async throws -> Data,
+                                transfer: (URL) async throws -> URL) async throws -> URL {
+        for attempt in 0...1 {
+            try Task.checkCancellation()
+            do {
+                let url = try parseFileURL(try await page(video.url), video: video)
+                try Task.checkCancellation()
+                return try await transfer(url)
+            } catch {
+                try Task.checkCancellation()
+                guard attempt == 0, case NetworkError.refused(403) = error else { throw error }
+            }
+        }
+        throw NetworkError.refused(403)
     }
 }

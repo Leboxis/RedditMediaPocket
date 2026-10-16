@@ -502,6 +502,23 @@ private struct DownloadSettings: View {
                     Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 6. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 6. Higher values may increase server rate limiting."))
                 }
                 Section {
+                    Stepper(value: $model.xFetishSegments, in: 1...12) {
+                        HStack {
+                            Text(L("Morceaux par vidéo", "Parts per video"))
+                            Spacer()
+                            Text("\(model.xFetishSegments)").monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityValue("\(model.xFetishSegments)")
+                } header: {
+                    Text("X-Fetish")
+                } footer: {
+                    Text(L("Vidéos uniquement. 1 = connexion unique, 4 par défaut. Repli automatique si les plages HTTP ne sont pas prises en charge. Plus de morceaux peut augmenter les refus 403/429.", "Videos only. 1 = single connection, 4 by default. Falls back automatically when HTTP ranges are unsupported. More parts may increase 403/429 refusals."))
+                    if model.running {
+                        Text(L("Appliqué au prochain lancement. En cours : \(model.sessionSegments).", "Applies to the next run. Current: \(model.sessionSegments)."))
+                    }
+                }
+                Section {
                     RedditSessionIndicator()
                     Button(reddit.hasSession ? L("Session détectée · ouvrir Reddit", "Session detected · open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit")) { loginPresented = true }
                         .disabled(model.running || reddit.clearing)

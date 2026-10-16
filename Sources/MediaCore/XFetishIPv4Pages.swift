@@ -92,6 +92,7 @@ public enum XFetishIPv4Pages {
     }
 
     public static func data(for url: URL, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
+        try Task.checkCancellation()
         guard let host = url.host, host.lowercased() == "x-fetish.tube" else {
             throw XFetishIPv4Error.invalidResponse
         }
@@ -103,12 +104,16 @@ public enum XFetishIPv4Pages {
         params.preferNoProxies = true
         let connection = NWConnection(host: NWEndpoint.Host(ipv4), port: NWEndpoint.Port(443), using: params)
         let queue = DispatchQueue(label: "XFetishIPv4Pages")
-        return try await withCheckedThrowingContinuation { continuation in
+        let cancellation = XFetishIPv4Cancellation()
+        return try await withTaskCancellationHandler {
+          try Task.checkCancellation()
+          return try await withCheckedThrowingContinuation { continuation in
             var finished = false
             var buffer = Data()
             func finish(_ result: Result<(Data, HTTPURLResponse), Error>) {
                 guard !finished else { return }
                 finished = true
+                cancellation.clear()
                 connection.cancel()
                 continuation.resume(with: result)
             }
@@ -139,10 +144,16 @@ public enum XFetishIPv4Pages {
                 default: break
                 }
             }
-            connection.start(queue: queue)
-            queue.asyncAfter(deadline: .now() + 30) {
-                finish(.failure(XFetishIPv4Error.connectionFailed))
+            queue.async {
+                connection.start(queue: queue)
+                cancellation.register { queue.async { finish(.failure(CancellationError())) } }
+                queue.asyncAfter(deadline: .now() + 30) {
+                    finish(.failure(XFetishIPv4Error.connectionFailed))
+                }
             }
+          }
+        } onCancel: {
+            cancellation.cancel()
         }
     }
 }

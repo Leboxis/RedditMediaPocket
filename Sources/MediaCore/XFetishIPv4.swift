@@ -111,6 +111,7 @@ public enum XFetishIPv4 {
     /// retourne le `Location` (URL `remote_control.php?file=…&acctoken=…` liée
     /// à l'IPv4).
     public static func storageURL(for media: URL, userAgent: String, referer: String) async throws -> URL {
+        try Task.checkCancellation()
         guard let host = media.host, isSignedMediaRoute(media) else {
             throw XFetishIPv4Error.invalidResponse
         }
@@ -135,13 +136,18 @@ public enum XFetishIPv4 {
         let params = NWParameters(tls: tls)
         params.preferNoProxies = true
         let conn = NWConnection(host: NWEndpoint.Host(ipv4), port: NWEndpoint.Port(443), using: params)
+        let queue = DispatchQueue(label: "XFetishIPv4Redirect")
+        let cancellation = XFetishIPv4Cancellation()
 
-        return try await withCheckedThrowingContinuation { cont in
+        return try await withTaskCancellationHandler {
+          try Task.checkCancellation()
+          return try await withCheckedThrowingContinuation { cont in
             var resumed = false
             var buffer = Data()
             func resume(_ result: Result<URL, Error>) {
                 guard !resumed else { return }
                 resumed = true
+                cancellation.clear()
                 conn.cancel()
                 cont.resume(with: result)
             }
@@ -182,10 +188,39 @@ public enum XFetishIPv4 {
                     break
                 }
             }
-            conn.start(queue: .global(qos: .userInitiated))
-            DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
-                resume(.failure(XFetishIPv4Error.connectionFailed))
+            queue.async {
+                conn.start(queue: queue)
+                cancellation.register { queue.async { resume(.failure(CancellationError())) } }
+                queue.asyncAfter(deadline: .now() + 30) {
+                    resume(.failure(XFetishIPv4Error.connectionFailed))
+                }
             }
+          }
+        } onCancel: {
+            cancellation.cancel()
         }
+    }
+}
+
+/// Handles cancellation before or after the Network.framework callback is installed.
+final class XFetishIPv4Cancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var action: (() -> Void)?
+
+    func register(_ action: @escaping () -> Void) {
+        lock.lock()
+        self.action = action
+        let cancelled = self.cancelled
+        lock.unlock()
+        if cancelled { action() }
+    }
+    func clear() { lock.lock(); action = nil; lock.unlock() }
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let action = self.action
+        lock.unlock()
+        action?()
     }
 }

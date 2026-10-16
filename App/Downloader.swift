@@ -77,15 +77,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published var count = 0
     @Published private(set) var totalBytes: Int64 = 0
     @Published private(set) var discovered = 0
-    /// Avancé de l'unité de téléchargement en cours : un album, ou une page de
-    /// vidéos. X-Fetish n'annonce aucun total global et le parcours en découvre
-    /// en continu, donc la barre ne porte pas sur le profil mais sur une unité
-    /// dont le nombre de médias est connu : elle est exacte, pas estimée, et le
-    /// compteur « repérés » garde son sens propre.
+    /// Avancé de l'unité de téléchargement en cours : un album, ou la liste
+    /// des vidéos collectées (100 pages maximum). La barre porte sur cette
+    /// unité connue, pas sur un historique exhaustif du profil. Les octets des
+    /// vidéos en cours complètent les fichiers terminés, et le compteur
+    /// « repérés » garde son sens propre.
     struct TransferUnit: Equatable {
         var done = 0
         var total = 0
-        var fraction: Double { total > 0 ? min(1, Double(done) / Double(total)) : 0 }
+        var inFlight: [String: Double] = [:]
+        var fraction: Double { total > 0 ? min(1, (Double(done) + inFlight.values.reduce(0, +)) / Double(total)) : 0 }
     }
     @Published private(set) var transferUnit: TransferUnit?
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
@@ -104,6 +105,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
         didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
     }
     @Published private(set) var sessionLimit = 3
+    @Published var xFetishSegments = XFetishRangeDownload.segmentCount(
+        UserDefaults.standard.object(forKey: XFetishRangeDownload.defaultsKey) as? Int) {
+        didSet {
+            let valid = XFetishRangeDownload.segmentCount(xFetishSegments)
+            if valid != xFetishSegments { xFetishSegments = valid }
+            UserDefaults.standard.set(valid, forKey: XFetishRangeDownload.defaultsKey)
+        }
+    }
+    @Published private(set) var sessionSegments = 4
     /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
@@ -356,6 +366,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
         Self.clearSavedMediaCount(for: id)
         UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
+        UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(id))
         collections.removeAll { $0.id == id }
         saveCollections()
 
@@ -397,6 +408,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for collection in collections {
             Self.clearSavedMediaCount(for: collection.id)
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(collection.id)")
+            UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(collection.id))
         }
         collections = []
         saveCollections()
@@ -459,6 +471,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
+        sessionSegments = XFetishRangeDownload.segmentCount(xFetishSegments)
         errorMessage = nil
         let target = sourceKind == "saved" ? "saved/" : "\(sourceKind)/\(username)"
         let started = Date()
@@ -637,6 +650,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let author: String
         let postLink: String?
         let headers: [String: String]?
+        var xFetishVideo: XFetishVideos.Video? = nil
     }
 
     private func run() async throws {
@@ -669,6 +683,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
         if !fm.fileExists(atPath: folder.path) {
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(canonical)")
+            UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(canonical))
         }
         // Durcissement : dossier absent ou vide (suppression hors app) → l'historique
         // des posts vus est obsolète, on le purge pour que le run re-télécharge tout.
@@ -814,6 +829,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// X-Fetish has no RSS cursor. Rescan every public page on each run so new
     /// media in an older album or a new video is found; stable `xf-…` / `xfv-…`
     /// keys skip the files already on disk.
+    /// An unfinished video scan resumes its next batch before returning to the head.
     private func runXFetish(model: String, canonical: String, folder: URL) async throws {
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
@@ -948,61 +964,42 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                   savedVideoIDs: Set<String>,
                                   seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
                                   preparedCount: inout Int) async throws {
-        var page = 1
-        var scannedPages = Set<Int>()
-        var scannedVideos = Set<String>()
-
-        while true {
-            try Task.checkCancellation()
-            guard scannedPages.insert(page).inserted, scannedPages.count <= 500 else {
-                throw XFetishError.tooManyPages
-            }
-            status = L("Recherche des vidéos X-Fetish…", "Finding X-Fetish videos…")
+        let resumeKey = Self.xFetishVideoResumeKey(canonical)
+        let firstPage = max(1, UserDefaults.standard.integer(forKey: resumeKey))
+        var scannedPages = 0
+        var scannedVideos = 0
+        let completed = try await XFetishVideos.run(page: firstPage, fetch: { page in
+            scannedPages += 1
+            status = L("Recherche des vidéos X-Fetish… page \(page)", "Finding X-Fetish videos… page \(page)")
             let listingData = try await network.data(XFetishVideos.listingURL(model: model, page: page))
             let listing = try XFetishVideos.parseListing(listingData, model: model, page: page)
             LogCenter.info(L("X-Fetish vidéos : page \(page), \(listing.videos.count) vidéos.", "X-Fetish videos: page \(page), \(listing.videos.count) videos."))
-            var fresh: [XFetishVideos.Video] = []
-            for video in listing.videos {
-                try Task.checkCancellation()
-                guard scannedVideos.insert(video.id).inserted else { continue }
-                guard !savedVideoIDs.contains("xfv-\(video.id)") else { continue }
-                fresh.append(video)
+            return listing
+        }, process: { listed in
+            scannedVideos = listed.count
+            let pending = listed.filter { !savedVideoIDs.contains("xfv-\($0.id)") }
+            // La liste ne garde que les pages publiques, jamais les URL signées.
+            // Chaque worker résout sa vidéo dès qu'un transfert se libère : aucun
+            // `v-acctoken` ne vieillit dans une file ou derrière un lot lent.
+            var mediaOverrides: [String: [Media]] = [:]
+            var videos: [String: XFetishVideos.Video] = [:]
+            let posts = pending.map { video -> Post in
+                let id = "xfv-\(video.id)"
+                videos[id] = video
+                mediaOverrides[id] = [.direct(video.url)]
+                return Post(id: id, title: video.title, html: "", link: video.url.absoluteString)
             }
-            beginTransferUnit(total: fresh.count)
-            // Vidéos préparées par lots de `sessionLimit` : au-delà, une URL
-            // signée attendrait derrière tous les transferts de la page et le
-            // `v-acctoken` pourrait expirer. La barre suit la page entière, pas
-            // le lot, donc elle reste lisse malgré la découpe.
-            for start in stride(from: 0, to: fresh.count, by: max(1, sessionLimit)) {
-                try Task.checkCancellation()
-                let chunk = Array(fresh[start..<min(start + max(1, sessionLimit), fresh.count)])
-                var mediaOverrides: [String: [Media]] = [:]
-                var mediaHeaders: [String: [String: String]] = [:]
-                var posts: [Post] = []
-                for video in chunk {
-                    try Task.checkCancellation()
-                    let id = "xfv-\(video.id)"
-                    status = L("Vidéo \(scannedVideos.count) : \(video.title)", "Video \(scannedVideos.count): \(video.title)")
-                    let pageData = try await network.data(video.url)
-                    let fileURL = try XFetishVideos.parseFileURL(pageData, video: video)
-                    let media = Media.direct(fileURL)
-                    mediaOverrides[id] = [media]
-                    // Anti-hotlink : le stockage exige le Referer de la page vidéo.
-                    mediaHeaders[media.key] = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
-                    posts.append(Post(id: id, title: video.title, html: "", link: video.url.absoluteString))
-                }
-                let downloads = try await prepareDownloads(posts, folder: folder,
-                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
-                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
-                try await executeDownloads(downloads, &preparedCount)
-            }
-
-            guard let next = listing.nextPage else { break }
-            guard next > page else { throw XFetishVideoError.invalidListing }
-            page = next
-        }
-
-        LogCenter.info(L("X-Fetish vidéos : \(scannedPages.count) pages, \(scannedVideos.count) vidéos, \(preparedCount) médias préparés.", "X-Fetish videos: \(scannedPages.count) pages, \(scannedVideos.count) videos, \(preparedCount) media prepared."))
+            let downloads = try await prepareDownloads(posts, folder: folder,
+                seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                author: canonical, mediaOverrides: mediaOverrides, xFetishVideos: videos)
+            beginTransferUnit(total: downloads.count)
+            try await executeDownloads(downloads, &preparedCount)
+        }, persist: { next in
+            if let next { UserDefaults.standard.set(next, forKey: resumeKey) }
+            else { UserDefaults.standard.removeObject(forKey: resumeKey) }
+        })
+        LogCenter.info(L("X-Fetish vidéos : \(scannedPages) pages, \(scannedVideos) vidéos, \(preparedCount) médias préparés.", "X-Fetish videos: \(scannedPages) pages, \(scannedVideos) videos, \(preparedCount) media prepared."))
+        if !completed { throw XFetishError.tooManyPages }
     }
 
     /// Parcours du fil `/media` d'un compte X.
@@ -1141,6 +1138,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
+    private static func xFetishVideoResumeKey(_ canonical: String) -> String { "xFetishVideoResume.\(canonical)" }
     private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
     /// été parcourues, pour reprendre là où une session interrompue s'est arrêtée.
@@ -1313,6 +1311,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
         transferUnit = unit
     }
 
+    private func recordVideoProgress(_ id: String, received: Int64, total: Int64) {
+        // Late callbacks from a cancelled or completed attempt must not update a new unit.
+        guard total > 0, var unit = transferUnit, unit.inFlight[id] != nil else { return }
+        unit.inFlight[id] = min(1, Double(received) / Double(total))
+        transferUnit = unit
+    }
+
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
     /// Les posts galerie (lien `/gallery/` sans média direct) sont résolus via
     /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
@@ -1323,7 +1328,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                    usedFilenames: inout Set<String>,
                                    author: String = "",
                                    mediaOverrides: [String: [Media]] = [:],
-                                   mediaHeaders: [String: [String: String]] = [:]) async throws -> [Download] {
+                                   mediaHeaders: [String: [String: String]] = [:],
+                                   xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
@@ -1362,7 +1368,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 // `pbs.twimg.com/media/<id>.jpg` peut être servie en `png` ou
                 // `webp` : le chemin reste donc la seule source fiable ici, et
                 // une extension vide se replie sur `jpg`.
-                if case .direct(let url) = item {
+                if xFetishVideos[post.id] != nil { ext = "mp4" }
+                else if case .direct(let url) = item {
                     let path = url.pathExtension.lowercased()
                     ext = path.isEmpty ? "jpg" : path
                 } else { ext = "mp4" }
@@ -1395,7 +1402,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     renamedExisting = true
                 } else {
                     let postLink = BinaryMetadata.postLink(postID: post.id, link: post.link)
-                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink, headers: mediaHeaders[item.key]))
+                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink, headers: mediaHeaders[item.key], xFetishVideo: xFetishVideos[post.id]))
                 }
             }
         }
@@ -1429,9 +1436,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Seules l'annulation, les erreurs de flux RSS et un HTTP 429 restent
     /// fatales : un refus du serveur arrête la session entière, même au milieu
     /// d'un lot, et l'utilisateur choisit quand relancer.
+    /// Pour X-Fetish, le 403 reste fatal après l'éventuel renouvellement vidéo.
     private func saveIgnoringInaccessible(_ item: Download) async throws {
         do {
-            let saved = try await DownloadFailurePolicy.attempt {
+            let saved = try await DownloadFailurePolicy.attempt(abortOn403: item.author.hasPrefix("x/")) {
                 do { try await self.saveWithRetry(item) }
                 catch {
                     if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) && !DownloadFailurePolicy.isTransient(error) {
@@ -1456,7 +1464,24 @@ struct UserCollection: Codable, Identifiable, Equatable {
         try Task.checkCancellation()
         active += 1
         defer { active -= 1 }
-        let temporary = try await resolveAndDownload(item.media, headers: item.headers)
+        let progressID = UUID().uuidString
+        defer { transferUnit?.inFlight.removeValue(forKey: progressID) }
+        let temporary: URL
+        if let video = item.xFetishVideo {
+            transferUnit?.inFlight[progressID] = 0
+            // Anti-hotlink : le stockage exige le Referer de la page vidéo.
+            let headers = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
+            temporary = try await XFetishVideos.download(video, page: { url in
+                try await self.network.data(url, headers: headers)
+            }, transfer: { url in
+                try await self.network.downloadXFetishVideo(url, segments: self.sessionSegments, headers: headers,
+                    progress: { received, total in
+                        Task { @MainActor in self.recordVideoProgress(progressID, received: received, total: total) }
+                    })
+            })
+        } else {
+            temporary = try await resolveAndDownload(item.media, headers: item.headers)
+        }
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
         try fm.moveItem(at: temporary, to: item.destination)
