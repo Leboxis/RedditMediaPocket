@@ -1,6 +1,10 @@
 import Foundation
 
 public enum ConcurrentDownloads {
+    public static func configuredLimit(_ stored: Int?, isXFetish: Bool = false) -> Int {
+        max(1, min(6, stored ?? (isXFetish ? 6 : 3)))
+    }
+
     /// Une limite invalide est un défaut de l'appelant, pas une panne réseau :
     /// la lever comme une erreur rattrapable plutôt que de tuer le processus
     /// avec une `precondition`, comme le fait `XMediaTraversal`.

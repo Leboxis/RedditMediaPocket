@@ -11,6 +11,21 @@ private actor TransferProbe {
 }
 
 final class ConcurrentDownloadsTests: XCTestCase {
+    func testDefaultLimitIsSixForXFetishAndThreeForOtherSources() {
+        XCTAssertEqual(ConcurrentDownloads.configuredLimit(nil, isXFetish: true), 6)
+        XCTAssertEqual(ConcurrentDownloads.configuredLimit(nil, isXFetish: false), 3)
+    }
+
+    func testSavedLimitWinsOverTheSourceDefault() {
+        for isXFetish in [false, true] {
+            for stored in 1...6 {
+                XCTAssertEqual(ConcurrentDownloads.configuredLimit(stored, isXFetish: isXFetish), stored)
+            }
+            XCTAssertEqual(ConcurrentDownloads.configuredLimit(0, isXFetish: isXFetish), 1)
+            XCTAssertEqual(ConcurrentDownloads.configuredLimit(99, isXFetish: isXFetish), 6)
+        }
+    }
+
     func testConfiguredLimitsOneAndSix() async throws {
         for limit in [1, 6] {
             let probe = TransferProbe()

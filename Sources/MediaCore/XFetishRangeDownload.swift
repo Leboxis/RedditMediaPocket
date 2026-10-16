@@ -3,6 +3,8 @@ import Foundation
 /// HTTP byte ranges of one MP4, not DASH tracks. Bodies stream straight to disk.
 public enum XFetishRangeDownload {
     public static let defaultsKey = "xFetishDownloadSegments"
+    public static let segmentOptions = [8, 16, 24, 32]
+    private static let maximumSegments = 32
 
     public enum Failure: LocalizedError {
         case unsupportedRanges, invalidResponse, http(HTTPURLResponse)
@@ -19,10 +21,13 @@ public enum XFetishRangeDownload {
         }
     }
 
-    public static func segmentCount(_ stored: Int?) -> Int { max(1, min(12, stored ?? 4)) }
+    public static func segmentCount(_ stored: Int?) -> Int {
+        guard let stored, segmentOptions.contains(stored) else { return 24 }
+        return stored
+    }
 
     static func ranges(total: Int64, count: Int) -> [ClosedRange<Int64>] {
-        let count = segmentCount(count)
+        let count = max(1, min(maximumSegments, count))
         guard count > 1, total > 4 * 1024 * 1024, total <= 2 * 1024 * 1024 * 1024 else { return [] }
         return (0..<count).map { index in
             (total * Int64(index) / Int64(count))...(total * Int64(index + 1) / Int64(count) - 1)
@@ -61,7 +66,7 @@ public enum XFetishRangeDownload {
         configuration.urlCredentialStorage = nil
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
-        configuration.httpMaximumConnectionsPerHost = 12
+        configuration.httpMaximumConnectionsPerHost = maximumSegments
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 1800
         var request = request
@@ -74,7 +79,7 @@ public enum XFetishRangeDownload {
         var ownsPart = false
         defer { if ownsPart { try? fm.removeItem(at: part) } }
 
-        let count = segmentCount(segments)
+        let count = max(1, min(maximumSegments, segments))
         if count > 1 {
             do {
                 let probe = try await RangeStream.fetch(fullRequest, configuration: configuration, range: 0...0)

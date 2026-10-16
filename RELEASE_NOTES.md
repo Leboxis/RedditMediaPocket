@@ -1,3 +1,9 @@
+Choix X-Fetish : 8, 16, 24 ou 32 morceaux par vidéo.
+
+- Réglages → X-Fetish → Morceaux par vidéo propose quatre boutons, avec 24 morceaux et 6 téléchargements simultanés par défaut pour X-Fetish. Les autres sources gardent 3 téléchargements simultanés par défaut. Le choix reste mémorisé et s'applique au prochain parcours ; les anciennes valeurs de morceaux non proposées reviennent à 24. Les préférences valides déjà enregistrées restent inchangées.
+- Le moteur accepte jusqu'à 32 plages HTTP par vidéo. Le repli automatique en connexion unique, l'annulation, les contrôles d'intégrité et le renouvellement du jeton restent inchangés.
+- Les images X-Fetish et les pistes DASH Reddit ne sont pas concernées. Davantage de morceaux peut augmenter les refus 403/429.
+
 Téléchargement des vidéos X-Fetish par morceaux HTTP parallèles.
 
 - Réglages → X-Fetish → Morceaux par vidéo : tous les entiers de 1 à 12, 4 par défaut. Le choix est conservé et s'applique au prochain parcours ; 1 garde une connexion unique.

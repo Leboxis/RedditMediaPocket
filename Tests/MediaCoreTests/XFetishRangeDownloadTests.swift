@@ -2,16 +2,21 @@ import XCTest
 @testable import MediaCore
 
 final class XFetishRangeDownloadTests: XCTestCase {
-    func testSegmentPreferenceDefaultsAndClamps() {
-        XCTAssertEqual(XFetishRangeDownload.segmentCount(nil), 4)
-        for count in 1...12 { XCTAssertEqual(XFetishRangeDownload.segmentCount(count), count) }
-        XCTAssertEqual(XFetishRangeDownload.segmentCount(-1), 1)
-        XCTAssertEqual(XFetishRangeDownload.segmentCount(99), 12)
+    func testSegmentPreferenceUsesOnlyTheFourSupportedChoices() {
+        XCTAssertEqual(XFetishRangeDownload.segmentOptions, [8, 16, 24, 32])
+        XCTAssertEqual(XFetishRangeDownload.segmentCount(nil), 24)
+        for count in [8, 16, 24, 32] { XCTAssertEqual(XFetishRangeDownload.segmentCount(count), count) }
+    }
+
+    func testLegacyAndInvalidPreferencesFallBackToTwentyFour() {
+        for count in [-1, 0, 1, 2, 4, 6, 10, 12, 15, 17, 31, 33, 99] {
+            XCTAssertEqual(XFetishRangeDownload.segmentCount(count), 24)
+        }
     }
 
     func testRangesCoverAnUnevenFileWithoutOverlaps() {
         let total: Int64 = 4 * 1024 * 1024 + 17
-        for count in 2...12 {
+        for count in Array(2...12) + [16, 24, 32] {
             let ranges = XFetishRangeDownload.ranges(total: total, count: count)
             XCTAssertEqual(ranges.count, count)
             XCTAssertEqual(ranges.first?.lowerBound, 0)
@@ -21,6 +26,11 @@ final class XFetishRangeDownloadTests: XCTestCase {
                 XCTAssertEqual(ranges[index - 1].upperBound + 1, ranges[index].lowerBound)
             }
         }
+    }
+
+    func testRangeCountRemainsBoundedAt32() {
+        let ranges = XFetishRangeDownload.ranges(total: 4 * 1024 * 1024 + 17, count: 99)
+        XCTAssertEqual(ranges.count, 32)
     }
 
     func testSmallUnknownAndOversizedTotalsUseOneConnection() {
@@ -61,19 +71,22 @@ final class XFetishRangeDownloadTests: XCTestCase {
     }
 
     func testParallelRangesProduceExactFileAndProgress() async throws {
-        let fixture = try RangeFixture()
-        defer { fixture.remove() }
-        let progress = ByteProgress()
-        try await XFetishRangeDownload.download(fixture.request, to: fixture.output, segments: 4,
-            configuration: fixture.configuration, progress: { received, total in progress.record(received, total) })
-        XCTAssertEqual(try Data(contentsOf: fixture.output), fixture.body)
-        let requests = fixture.server.ranges
-        XCTAssertEqual(requests.count, 5)
-        XCTAssertTrue(requests.contains("bytes=0-0"))
-        XCTAssertFalse(requests.contains("full"))
-        XCTAssertEqual(progress.last?.0, Int64(fixture.body.count))
-        XCTAssertEqual(progress.last?.1, Int64(fixture.body.count))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.output.appendingPathExtension("part").path))
+        for count in [8, 16, 24, 32] {
+            let fixture = try RangeFixture()
+            defer { fixture.remove() }
+            let progress = ByteProgress()
+            try await XFetishRangeDownload.download(fixture.request, to: fixture.output, segments: count,
+                configuration: fixture.configuration, progress: { received, total in progress.record(received, total) })
+            XCTAssertEqual(try Data(contentsOf: fixture.output), fixture.body)
+            let requests = fixture.server.ranges
+            XCTAssertEqual(requests.count, count + 1, "One probe followed by the selected number of ranges")
+            XCTAssertEqual(Set(requests).count, count + 1, "Ranges must be distinct")
+            XCTAssertTrue(requests.contains("bytes=0-0"))
+            XCTAssertFalse(requests.contains("full"))
+            XCTAssertEqual(progress.last?.0, Int64(fixture.body.count))
+            XCTAssertEqual(progress.last?.1, Int64(fixture.body.count))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.output.appendingPathExtension("part").path))
+        }
     }
 
     func testOneSegmentSkipsProbe() async throws {
@@ -115,14 +128,14 @@ final class XFetishRangeDownloadTests: XCTestCase {
     func testCancellationCancelsSiblingsWithoutFallbackOrPartFile() async throws {
         let fixture = try RangeFixture(mode: .waits)
         defer { fixture.remove() }
-        let started = expectation(description: "Four ranges started")
-        started.expectedFulfillmentCount = 4
+        let started = expectation(description: "All 32 ranges started")
+        started.expectedFulfillmentCount = 32
         fixture.server.started = { started.fulfill() }
         let task = Task {
-            try await XFetishRangeDownload.download(fixture.request, to: fixture.output, segments: 4,
+            try await XFetishRangeDownload.download(fixture.request, to: fixture.output, segments: 32,
                                                     configuration: fixture.configuration)
         }
-        await fulfillment(of: [started], timeout: 5)
+        await fulfillment(of: [started], timeout: 10)
         task.cancel()
         do { try await task.value; XCTFail("Expected cancellation") }
         catch { XCTAssertTrue(DownloadFailurePolicy.isCancellation(error)) }
