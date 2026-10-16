@@ -1444,15 +1444,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
 
-    /// Un média supprimé ou inaccessible (ex. HTTP 404) ne doit pas annuler
-    /// tout le parcours : on le comptabilise et on continue avec les autres.
-    /// Seules l'annulation, les erreurs de flux RSS et un HTTP 429 restent
-    /// fatales : un refus du serveur arrête la session entière, même au milieu
-    /// d'un lot, et l'utilisateur choisit quand relancer.
-    /// Pour X-Fetish, le 403 reste fatal après l'éventuel renouvellement vidéo.
+    /// Un média supprimé ou inaccessible (ex. HTTP 404 ou 403 vidéo après
+    /// renouvellement) ne doit pas annuler tout le parcours : on le
+    /// comptabilise et on continue avec les autres. Seules l'annulation, les
+    /// erreurs de flux RSS et un HTTP 429 restent fatales.
     private func saveIgnoringInaccessible(_ item: Download) async throws {
         do {
-            let saved = try await DownloadFailurePolicy.attempt(abortOn403: item.author.hasPrefix("x/")) {
+            let saved = try await DownloadFailurePolicy.attempt {
                 do { try await self.saveWithRetry(item) }
                 catch {
                     if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) && !DownloadFailurePolicy.isTransient(error) {
@@ -1486,8 +1484,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let headers = XFetishAPI.headers(referer: video.url, accept: XFetishAPI.videoAccept)
             temporary = try await XFetishVideos.download(video, page: { url in
                 try await self.network.data(url, headers: headers)
-            }, transfer: { url in
-                try await self.network.downloadXFetishVideo(url, segments: self.sessionSegments, headers: headers,
+            }, transfer: { url, attempt in
+                // Premier essai avec les morceaux choisis, second essai propre
+                // en connexion unique avec une URL fraîche.
+                let segments = attempt == 0 ? self.sessionSegments : 1
+                return try await self.network.downloadXFetishVideo(url, segments: segments, headers: headers,
                     progress: { received, total in
                         Task { @MainActor in self.recordVideoProgress(progressID, received: received, total: total) }
                     })

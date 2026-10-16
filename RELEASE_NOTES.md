@@ -11,7 +11,7 @@ Téléchargement des vidéos X-Fetish par morceaux HTTP parallèles.
 - Les parcours de plus de 100 pages reprennent à la page suivante après le lot terminé. Un arrêt ou une erreur garde le lot à reprendre ; les fichiers complets ne sont pas retéléchargés. Après la fin, le parcours suivant recherche les nouveautés depuis la page 1.
 - Les jetons publiés à côté de l'URL vidéo sont encodés sans altérer la requête existante : un signe `+` reste un `+` pour le serveur, au lieu d'être lu comme un espace.
 - Les MP4 de plus de 4 Mio et d'au plus 2 Gio utilisent les plages HTTP si le stockage les accepte. Écriture sur disque, contrôle des plages et des tailles, progression agrégée et repli automatique en connexion unique si nécessaire.
-- Un HTTP 403 relit une seule fois la page pour obtenir un jeton frais. Un second 403, un HTTP 429 ou un arrêt annule les transferts restants ; les fichiers terminés restent conservés.
+- Un HTTP 403 relit une seule fois la page pour obtenir un jeton frais, puis retente en connexion unique. Si ce second essai échoue, la vidéo est ignorée et le parcours continue ; seul un HTTP 429 arrête les transferts restants. Les fichiers terminés restent conservés. Un hôte de stockage inattendu bascule aussi en connexion unique au lieu d'être rejeté.
 - Les images X-Fetish, les pistes DASH Reddit et les noms de fichiers ne changent pas. Plus de morceaux peut augmenter les refus du serveur.
 
 Moins de requêtes sur les comptes X déjà archivés, et un avertissement clair quand l'archive est incomplète.

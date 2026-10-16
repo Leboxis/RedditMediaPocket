@@ -275,7 +275,10 @@ import MediaCore
         try Task.checkCancellation()
         guard generation == requestGeneration else { throw CancellationError() }
         guard XFetishRangeDownload.allowsStorage(storage) else {
-            throw NetworkError.invalid(L("Destination vidéo X-Fetish refusée.", "X-Fetish video destination refused."))
+            // Comportement historique : un hôte inattendu mais même opérateur
+            // reste téléchargé en connexion unique au lieu d'être rejeté.
+            LogCenter.net(L("Vidéo X-Fetish : hôte inattendu, repli connexion unique.", "X-Fetish video: unexpected host, single-connection fallback."))
+            return try await download(storage, headers: headers)
         }
         let req = try await request(storage, bearer: nil, headers: headers)
         let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
