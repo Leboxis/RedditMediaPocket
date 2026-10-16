@@ -160,16 +160,16 @@ public enum XFetishVideos {
         return url
     }
 
-    /// Resolve only when a worker is ready. A 403 gets one fresh player page;
-    /// cancellation, rate limiting and the second refusal escape to the caller.
+    /// Resolve only when a worker is ready. A 403 gets one fresh player page and
+    /// a clean single-connection retry; the second refusal escapes to the caller.
     public static func download(_ video: Video, page: (URL) async throws -> Data,
-                                transfer: (URL) async throws -> URL) async throws -> URL {
+                                transfer: (URL, Int) async throws -> URL) async throws -> URL {
         for attempt in 0...1 {
             try Task.checkCancellation()
             do {
                 let url = try parseFileURL(try await page(video.url), video: video)
                 try Task.checkCancellation()
-                return try await transfer(url)
+                return try await transfer(url, attempt)
             } catch {
                 try Task.checkCancellation()
                 guard attempt == 0, case NetworkError.refused(403) = error else { throw error }

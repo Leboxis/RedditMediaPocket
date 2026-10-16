@@ -212,11 +212,13 @@ final class XFetishVideosTests: XCTestCase {
     func testForbiddenTransferResolvesAFreshURLExactlyOnce() async throws {
         var pageReads = 0
         var tokens: [String] = []
+        var attempts: [Int] = []
         let output = URL(fileURLWithPath: "/temporary/video.mp4")
         let result = try await XFetishVideos.download(video(), page: { _ in
             pageReads += 1
             return Data("video_url: '/get_file/11/abcdef0123456789/708000/708259/708259.mp4/?v-acctoken=token\(pageReads)'".utf8)
-        }, transfer: { url in
+        }, transfer: { url, attempt in
+            attempts.append(attempt)
             tokens.append(URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first!.value!)
             if tokens.count == 1 { throw NetworkError.refused(403) }
             return output
@@ -224,6 +226,7 @@ final class XFetishVideosTests: XCTestCase {
         XCTAssertEqual(result, output)
         XCTAssertEqual(pageReads, 2)
         XCTAssertEqual(tokens, ["token1", "token2"])
+        XCTAssertEqual(attempts, [0, 1])
     }
 
     func testSecondForbiddenAndRateLimitNeverRefreshAgain() async throws {
@@ -233,7 +236,7 @@ final class XFetishVideosTests: XCTestCase {
                 _ = try await XFetishVideos.download(video(), page: { _ in
                     pageReads += 1
                     return Data(Self.playerPage.utf8)
-                }, transfer: { _ in
+                }, transfer: { _, _ in
                     if status == 429 { throw NetworkError.limited(service: "X-Fetish", until: nil) }
                     throw NetworkError.refused(403)
                 })
@@ -250,7 +253,7 @@ final class XFetishVideosTests: XCTestCase {
             return try await XFetishVideos.download(self.video(), page: { _ in
                 XCTFail("Cancelled work must not resolve a signed URL")
                 return Data()
-            }, transfer: { _ in
+            }, transfer: { _, _ in
                 XCTFail("Cancelled work must not download")
                 return URL(fileURLWithPath: "/unused")
             })
