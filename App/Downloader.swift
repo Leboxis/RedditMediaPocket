@@ -101,8 +101,21 @@ struct UserCollection: Codable, Identifiable, Equatable {
     static func clearSavedMediaCount(for canonical: String) {
         UserDefaults.standard.removeObject(forKey: savedMediaCountKey(canonical))
     }
-    @Published var concurrentLimit = max(1, min(6, UserDefaults.standard.object(forKey: "concurrentLimit") as? Int ?? 3)) {
-        didSet { UserDefaults.standard.set(max(1, min(6, concurrentLimit)), forKey: "concurrentLimit") }
+    @Published private var storedConcurrentLimit = UserDefaults.standard.object(forKey: "concurrentLimit") as? Int
+    var concurrentLimit: Int {
+        get {
+            let isXFetish: Bool
+            if let source = resolvedSource {
+                if case .xFetish = source { isXFetish = true }
+                else { isXFetish = false }
+            } else { isXFetish = sourceKind == "x" }
+            return ConcurrentDownloads.configuredLimit(storedConcurrentLimit, isXFetish: isXFetish)
+        }
+        set {
+            let valid = ConcurrentDownloads.configuredLimit(newValue)
+            storedConcurrentLimit = valid
+            UserDefaults.standard.set(valid, forKey: "concurrentLimit")
+        }
     }
     @Published private(set) var sessionLimit = 3
     @Published var xFetishSegments = XFetishRangeDownload.segmentCount(
@@ -113,7 +126,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.set(valid, forKey: XFetishRangeDownload.defaultsKey)
         }
     }
-    @Published private(set) var sessionSegments = 4
+    @Published private(set) var sessionSegments = XFetishRangeDownload.segmentCount(nil)
     /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
