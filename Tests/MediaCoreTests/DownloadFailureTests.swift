@@ -22,6 +22,15 @@ final class DownloadFailureTests: XCTestCase {
         XCTAssertFalse(saved)
     }
 
+    func testXFetishForbiddenStopsTheRunWithoutChangingOtherSources() async throws {
+        let otherSource = try await DownloadFailurePolicy.attempt { throw NetworkError.refused(403) }
+        XCTAssertFalse(otherSource)
+        do {
+            _ = try await DownloadFailurePolicy.attempt(abortOn403: true) { throw NetworkError.refused(403) }
+            XCTFail("An exhausted X-Fetish token must stop the run")
+        } catch NetworkError.refused(let code) { XCTAssertEqual(code, 403) }
+    }
+
     func testURLSessionCancellationIsNeverSkippable() async throws {
         do {
             _ = try await DownloadFailurePolicy.attempt { throw URLError(.cancelled) }

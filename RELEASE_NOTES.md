@@ -1,3 +1,13 @@
+Téléchargement des vidéos X-Fetish par morceaux HTTP parallèles.
+
+- Réglages → X-Fetish → Morceaux par vidéo : tous les entiers de 1 à 12, 4 par défaut. Le choix est conservé et s'applique au prochain parcours ; 1 garde une connexion unique.
+- Les vidéos sont listées avant les transferts (100 pages maximum), puis leur fichier signé est résolu à la libération de chaque emplacement, sans attendre un lot lent.
+- Les parcours de plus de 100 pages reprennent à la page suivante après le lot terminé. Un arrêt ou une erreur garde le lot à reprendre ; les fichiers complets ne sont pas retéléchargés. Après la fin, le parcours suivant recherche les nouveautés depuis la page 1.
+- Les jetons publiés à côté de l'URL vidéo sont encodés sans altérer la requête existante : un signe `+` reste un `+` pour le serveur, au lieu d'être lu comme un espace.
+- Les MP4 de plus de 4 Mio et d'au plus 2 Gio utilisent les plages HTTP si le stockage les accepte. Écriture sur disque, contrôle des plages et des tailles, progression agrégée et repli automatique en connexion unique si nécessaire.
+- Un HTTP 403 relit une seule fois la page pour obtenir un jeton frais. Un second 403, un HTTP 429 ou un arrêt annule les transferts restants ; les fichiers terminés restent conservés.
+- Les images X-Fetish, les pistes DASH Reddit et les noms de fichiers ne changent pas. Plus de morceaux peut augmenter les refus du serveur.
+
 Moins de requêtes sur les comptes X déjà archivés, et un avertissement clair quand l'archive est incomplète.
 
 - Relancer un compte X déjà téléchargé ne relit plus tout le fil : le parcours s'arrête dès qu'il a rattrapé l'historique, au lieu de redemander les 100 pages à chaque lancement. Un média en échec reste retenté, et un fil jamais terminé continue de s'arrêter à la limite de pages pour reprendre au même endroit.

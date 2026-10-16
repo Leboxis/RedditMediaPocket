@@ -252,4 +252,45 @@ import MediaCore
             return persistent
         } catch { try? FileManager.default.removeItem(at: temp); throw error }
     }
+
+    /// Signed video pages and get_file use IPv4; their storage host is IPv4-only.
+    /// Never retry the signed route through the default, potentially IPv6 session.
+    func downloadXFetishVideo(_ url: URL, segments: Int, headers: [String: String],
+                              progress: @escaping @Sendable (Int64, Int64) -> Void) async throws -> URL {
+        guard XFetishIPv4.isSignedMediaRoute(url), url.path.hasPrefix("/get_file/") else {
+            throw XFetishVideoError.invalidPlayer
+        }
+        let generation = requestGeneration
+        _ = try await request(url, bearer: nil, headers: headers)
+        transfers += 1
+        defer { transfers -= 1 }
+        let storage: URL
+        do {
+            storage = try await XFetishIPv4.storageURL(for: url, userAgent: XFetishAPI.userAgent,
+                referer: headers["Referer"] ?? "https://x-fetish.tube/")
+        } catch XFetishIPv4Error.unexpectedStatus(let code) {
+            if code == 429 { throw NetworkError.limited(service: "X-Fetish", until: nil) }
+            throw NetworkError.refused(code)
+        }
+        try Task.checkCancellation()
+        guard generation == requestGeneration else { throw CancellationError() }
+        guard XFetishRangeDownload.allowsStorage(storage) else {
+            throw NetworkError.invalid(L("Destination vidéo X-Fetish refusée.", "X-Fetish video destination refused."))
+        }
+        let req = try await request(storage, bearer: nil, headers: headers)
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
+        LogCenter.net(L("Vidéo X-Fetish : jusqu’à \(segments) morceaux HTTP.", "X-Fetish video: up to \(segments) HTTP ranges."))
+        do {
+            try await XFetishRangeDownload.download(req, to: output, segments: segments, progress: progress)
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            return output
+        } catch {
+            try? FileManager.default.removeItem(at: output)
+            if case XFetishRangeDownload.Failure.http(let response) = error {
+                try check(response, requestedURL: storage)
+            }
+            throw error
+        }
+    }
 }

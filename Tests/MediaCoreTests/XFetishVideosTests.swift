@@ -119,6 +119,147 @@ final class XFetishVideosTests: XCTestCase {
                        "https://x-fetish.tube/get_file/11/abcdef0123456789/708000/708259/708259.mp4/?v-acctoken=x")
     }
 
+    func testPlayerAttachesAdjacentTokenWithoutReplacingExistingToken() throws {
+        let route = "https://x-fetish.tube/get_file/11/abcdef0123456789/708000/708259/708259.mp4/"
+        let separate = "video_url: '\(route)', 'v-acctoken': 'fresh-token'"
+        let url = try XFetishVideos.parseFileURL(Data(separate.utf8), video: video())
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "fresh-token")
+        let existing = "video_url: '\(route)?v-acctoken=original', 'v-acctoken': 'other'"
+        let kept = try XFetishVideos.parseFileURL(Data(existing.utf8), video: video())
+        XCTAssertEqual(URLComponents(url: kept, resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "original")
+    }
+
+    func testAdjacentTokenEscapesPlusAndPreservesExistingQueryBytes() throws {
+        let route = "https://x-fetish.tube/get_file/11/abcdef0123456789/708000/708259/708259.mp4/"
+        let existing = "other=a%2Bb%252Fc+space&flag"
+        for token in ["abc+def/ghi==&%", "literal%2B+token"] {
+            let script = "video_url: '\(route)?\(existing)', 'v-acctoken': '\(token)'"
+            let url = try XFetishVideos.parseFileURL(Data(script.utf8), video: video())
+            let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+            let query = try XCTUnwrap(components.percentEncodedQuery)
+            XCTAssertTrue(query.hasPrefix(existing + "&v-acctoken="))
+            XCTAssertTrue(query.contains("%2B"))
+            XCTAssertEqual(components.queryItems?.first(where: { $0.name == "v-acctoken" })?.value, token)
+            XCTAssertFalse(query.components(separatedBy: "v-acctoken=").last!.contains("+"))
+        }
+    }
+
+    @MainActor func testPageBudgetResumesAt101ThenRestartsAtHead() async throws {
+        var resume: Int?
+        var requested: [Int] = []
+        var processed: [Int] = []
+        let fetch: (Int) async throws -> XFetishVideos.ListingPage = { page in
+            requested.append(page)
+            return .init(videos: [self.video("\(page)")], nextPage: page < 101 ? page + 1 : nil)
+        }
+        let first = try await XFetishVideos.run(page: resume ?? 1, fetch: fetch, process: { videos in
+            XCTAssertEqual(requested.count, 100, "Collect listings before resolving any signed files")
+            XCTAssertNil(resume, "Do not advance the checkpoint before downloads finish")
+            processed.append(videos.count)
+        }, persist: { resume = $0 })
+        XCTAssertFalse(first)
+        XCTAssertEqual(resume, 101)
+        let second = try await XFetishVideos.run(page: resume ?? 1, fetch: fetch,
+            process: { processed.append($0.count) }, persist: { resume = $0 })
+        XCTAssertTrue(second)
+        XCTAssertNil(resume)
+        _ = try await XFetishVideos.run(page: resume ?? 1, maximumPages: 1, fetch: fetch,
+            process: { processed.append($0.count) }, persist: { resume = $0 })
+        XCTAssertEqual(Array(requested.suffix(2)), [101, 1])
+        XCTAssertEqual(processed, [100, 1, 1])
+    }
+
+    @MainActor func testFailedOrCancelledBatchKeepsItsStartingPage() async throws {
+        let errors: [Error] = [NetworkError.refused(503), CancellationError()]
+        for error in errors {
+            var resume: Int? = 101
+            do {
+                _ = try await XFetishVideos.run(page: resume!, maximumPages: 1,
+                    fetch: { _ in .init(videos: [self.video()], nextPage: 102) },
+                    process: { _ in throw error }, persist: { resume = $0 })
+                XCTFail("Expected the batch to fail")
+            } catch { XCTAssertEqual(resume, 101) }
+        }
+    }
+
+    @MainActor func testRepeatedVideosAreCollectedOnceAndBadPaginationNeverCommits() async throws {
+        var received: [String] = []
+        _ = try await XFetishVideos.run(maximumPages: 2,
+            fetch: { page in .init(videos: [self.video()], nextPage: page + 1) },
+            process: { received = $0.map(\.id) }, persist: { XCTAssertEqual($0, 3) })
+        XCTAssertEqual(received, ["708259"])
+        do {
+            _ = try await XFetishVideos.run(page: 101,
+                fetch: { _ in .init(videos: [], nextPage: 101) },
+                process: { _ in XCTFail("Do not process a pagination cycle") },
+                persist: { _ in XCTFail("Do not commit a pagination cycle") })
+            XCTFail("Expected invalid listing")
+        } catch XFetishVideoError.invalidListing { }
+    }
+
+    @MainActor func testInvalidPageOrBudgetDoesNotFetchOrCommit() async throws {
+        for (page, budget) in [(0, 100), (-1, 100), (1, 0), (1, -1)] {
+            do {
+                _ = try await XFetishVideos.run(page: page, maximumPages: budget,
+                    fetch: { _ in XCTFail("Do not fetch invalid pagination"); return .init(videos: [], nextPage: nil) },
+                    process: { _ in XCTFail("Do not process invalid pagination") },
+                    persist: { _ in XCTFail("Do not commit invalid pagination") })
+                XCTFail("Expected invalid listing")
+            } catch XFetishVideoError.invalidListing { }
+        }
+    }
+
+    func testForbiddenTransferResolvesAFreshURLExactlyOnce() async throws {
+        var pageReads = 0
+        var tokens: [String] = []
+        let output = URL(fileURLWithPath: "/temporary/video.mp4")
+        let result = try await XFetishVideos.download(video(), page: { _ in
+            pageReads += 1
+            return Data("video_url: '/get_file/11/abcdef0123456789/708000/708259/708259.mp4/?v-acctoken=token\(pageReads)'".utf8)
+        }, transfer: { url in
+            tokens.append(URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems!.first!.value!)
+            if tokens.count == 1 { throw NetworkError.refused(403) }
+            return output
+        })
+        XCTAssertEqual(result, output)
+        XCTAssertEqual(pageReads, 2)
+        XCTAssertEqual(tokens, ["token1", "token2"])
+    }
+
+    func testSecondForbiddenAndRateLimitNeverRefreshAgain() async throws {
+        for status in [403, 429] {
+            var pageReads = 0
+            do {
+                _ = try await XFetishVideos.download(video(), page: { _ in
+                    pageReads += 1
+                    return Data(Self.playerPage.utf8)
+                }, transfer: { _ in
+                    if status == 429 { throw NetworkError.limited(service: "X-Fetish", until: nil) }
+                    throw NetworkError.refused(403)
+                })
+                XCTFail("Expected refusal")
+            } catch NetworkError.refused(let code) { XCTAssertEqual(code, 403) }
+              catch NetworkError.limited { XCTAssertEqual(status, 429) }
+            XCTAssertEqual(pageReads, status == 403 ? 2 : 1)
+        }
+    }
+
+    func testCancelledVideoDoesNotResolveOrRefresh() async throws {
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await XFetishVideos.download(self.video(), page: { _ in
+                XCTFail("Cancelled work must not resolve a signed URL")
+                return Data()
+            }, transfer: { _ in
+                XCTFail("Cancelled work must not download")
+                return URL(fileURLWithPath: "/unused")
+            })
+        }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch is CancellationError { }
+    }
+
     func testOnlyVideoRoutesAreForcedOverIPv4() {
         XCTAssertFalse(XFetishIPv4.isSignedMediaRoute(URL(string: "https://x-fetish.tube/video/708259/slug/")!))
         XCTAssertFalse(XFetishIPv4.isSignedMediaRoute(URL(string: "https://x-fetish.tube/models/example/videos/")!))
