@@ -46,7 +46,7 @@ public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)
     case saved(String)
-    case xFetish(String)
+    case xFetish(XFetishAlbums.Target)
     case redgifsUser(String)
     case twitterUser(String)
 
@@ -87,7 +87,13 @@ public enum FeedSource: Hashable, Sendable {
             return try .user(MediaExtractor.username(String(trimmed.dropFirst(2))))
         }
         if lower.hasPrefix("x/") {
-            return try .xFetish(XFetishAlbums.modelName(String(trimmed.dropFirst(2))))
+            return try .xFetish(XFetishAlbums.parseTarget(String(trimmed.dropFirst(2))))
+        }
+        // Adresse X-Fetish collée sans préfixe : vidéo, album ou profil.
+        if lower.contains("x-fetish.tube") {
+            if let target = try? XFetishAlbums.parseTarget(trimmed) {
+                return .xFetish(target)
+            }
         }
         return try .user(MediaExtractor.username(trimmed))
     }
@@ -107,7 +113,7 @@ public enum FeedSource: Hashable, Sendable {
         case .user(let name): return "u/\(name)"
         case .subreddit(let name): return "r/\(name)"
         case .saved(let name): return "saved/\(name)"
-        case .xFetish(let name): return "x/\(name)"
+        case .xFetish(let target): return "x/\(target.collectionName)"
         case .redgifsUser(let name): return "rg/\(name)"
         case .twitterUser(let name): return "tw/\(name)"
         }
@@ -128,7 +134,7 @@ public enum FeedSource: Hashable, Sendable {
         case .user(let name): return name
         case .subreddit(let name): return "r.\(name)"
         case .saved(let name): return "saved.\(name)"
-        case .xFetish(let name): return "x.\(name)"
+        case .xFetish(let target): return "x.\(target.collectionName)"
         case .redgifsUser(let name): return "redgifs.\(name)"
         case .twitterUser(let name): return "tw.\(name)"
         }
@@ -143,8 +149,16 @@ public enum FeedSource: Hashable, Sendable {
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
         if let after { items.append(URLQueryItem(name: "after", value: after)) }
         switch self {
-        case .xFetish(let name):
-            return XFetishAlbums.listingURL(model: name, page: 1)
+        case .xFetish(let target):
+            if let model = target.model {
+                return XFetishAlbums.listingURL(model: model, page: 1)
+            }
+            // Sélection sans modèle : l'URL de départ ne sert qu'à l'affichage,
+            // le parcours lit chaque adresse collée.
+            if let first = target.videos.first?.url ?? target.albums.first?.url {
+                return first
+            }
+            return XFetishAlbums.listingURL(model: target.collectionName, page: 1)
         case .user(let name):
             var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
             components.queryItems = items

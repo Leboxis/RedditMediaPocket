@@ -37,7 +37,7 @@ final class XFetishAlbumsTests: XCTestCase {
 
     func testProfileSourceUsesDistinctCollectionAndListing() throws {
         let source = try FeedSource.parse(" X/ItWasAlwaysMySolesVIP ")
-        XCTAssertEqual(source, .xFetish("itwasalwaysmysolesvip"))
+        XCTAssertEqual(source, .xFetish(XFetishAlbums.Target(model: "itwasalwaysmysolesvip", videos: [], albums: [])))
         XCTAssertEqual(source.id, "x/itwasalwaysmysolesvip")
         XCTAssertEqual(source.folderName, "x.itwasalwaysmysolesvip")
         XCTAssertEqual(source.feedURL().absoluteString,
@@ -210,6 +210,62 @@ final class XFetishAlbumsTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testSingleVideoRefIsAVideoNotAModel() {
+        let video = XFetishAlbums.parseVideoRef("https://x-fetish.tube/video/631644/jazzy-toes-vip-03-28-2026-onlyfans-video/")
+        XCTAssertEqual(video?.id, "631644")
+        XCTAssertEqual(video?.url.absoluteString, "https://x-fetish.tube/video/631644/jazzy-toes-vip-03-28-2026-onlyfans-video/")
+        for input in ["x/example", "https://x-fetish.tube/models/example/", "", "https://evil.test/video/631644/x/", "https://x-fetish.tube/video/notanumber/x/", "https://x-fetish.tube/albums/12/x/"] {
+            XCTAssertNil(XFetishAlbums.parseVideoRef(input), input)
+        }
+    }
+
+    func testSingleAlbumRefIsAnAlbumNotAModel() {
+        let album = XFetishAlbums.parseAlbumRef("https://x-fetish.tube/albums/3948/example-pictures/")
+        XCTAssertEqual(album?.id, "3948")
+        XCTAssertEqual(album?.url.absoluteString, "https://x-fetish.tube/albums/3948/example-pictures/")
+        for input in ["x/example", "https://x-fetish.tube/models/example/", "", "https://evil.test/albums/3948/x/", "https://x-fetish.tube/albums/notanumber/x/", "https://x-fetish.tube/video/631644/x/"] {
+            XCTAssertNil(XFetishAlbums.parseAlbumRef(input), input)
+        }
+    }
+
+    func testTargetAcceptsProfileVideosAndAlbumsTogether() throws {
+        let target = try XFetishAlbums.parseTarget("https://x-fetish.tube/video/631644/a-b/\nhttps://x-fetish.tube/albums/3948/x-y/\nx/jazzy-toes-vip")
+        XCTAssertEqual(target.model, "jazzy-toes-vip")
+        XCTAssertEqual(target.videos.map(\.id), ["631644"])
+        XCTAssertEqual(target.albums.map(\.id), ["3948"])
+        // Doublons ignorés.
+        let dupes = try XFetishAlbums.parseTarget("https://x-fetish.tube/video/631644/a/\nhttps://x-fetish.tube/video/631644/a/")
+        XCTAssertEqual(dupes.videos.map(\.id), ["631644"])
+        XCTAssertThrowsError(try XFetishAlbums.parseTarget("   "))
+        XCTAssertThrowsError(try XFetishAlbums.parseTarget("x/../other"))
+    }
+
+    func testAlbumURLIsNotAModel() {
+        // Une adresse d'album n'est jamais lue comme un modèle `3948`.
+        XCTAssertThrowsError(try XFetishAlbums.modelName("https://x-fetish.tube/albums/3948/x/"))
+        XCTAssertThrowsError(try XFetishAlbums.modelName("https://x-fetish.tube/video/631644/x/"))
+        XCTAssertEqual(try XFetishAlbums.modelName("https://x-fetish.tube/models/Example/"), "example")
+    }
+
+    func testSelectionSourceUsesStableCollection() throws {
+        let source = try FeedSource.parse("x/https://x-fetish.tube/video/631644/a-b/\nhttps://x-fetish.tube/albums/3948/x-y/")
+        XCTAssertEqual(source.id, "x/videos")
+        XCTAssertEqual(source.folderName, "x.videos")
+        let albumsOnly = try FeedSource.parse("https://x-fetish.tube/albums/3948/x-y/")
+        XCTAssertEqual(albumsOnly.id, "x/albums")
+        XCTAssertEqual(albumsOnly.folderName, "x.albums")
+    }
+
+    func testOwnerIsReadFromTheVideoPageNotSuggestedModels() {
+        let page = """
+        <div class="media-info__row media-models"><div class="media-info__lists"><span class="media-info__label">Models:</span>
+          <a class="btn" href="https://x-fetish.tube/models/jazzy-toes-vip/">Jazzy Toes VIP</a></div></div>
+        <div class="media-info__row media-related"><a href="/models/tha-goddess-reign/">Tha</a><a href="/models/mia-bunny/">Mia</a></div>
+        """
+        XCTAssertEqual(XFetishVideos.modelSlug(fromPage: Data(page.utf8)), "jazzy-toes-vip")
+        XCTAssertNil(XFetishVideos.modelSlug(fromPage: Data("<div class=\"media-info__row\"><a href=\"/models/tha-goddess-reign/\">Tha</a></div>".utf8)))
     }
 
     func testIPv4NonHTTPSLocationIsRejectedWithoutTokenDisclosure() {

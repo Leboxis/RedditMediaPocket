@@ -29,7 +29,7 @@ final class XTwitterTests: XCTestCase {
         XCTAssertEqual(try FeedSource.parse("@nasa"), .twitterUser("nasa"))
         XCTAssertEqual(try FeedSource.parse("https://x.com/nasa"), .twitterUser("nasa"))
         // `x/` reste X-Fetish : le préfixe `tw/` est le seul à déclencher X.
-        XCTAssertEqual(try FeedSource.parse("x/someone"), .xFetish("someone"))
+        XCTAssertEqual(try FeedSource.parse("x/someone"), .xFetish(XFetishAlbums.Target(model: "someone", videos: [], albums: [])))
     }
 
     func testTwitterMapping() {
@@ -43,7 +43,7 @@ final class XTwitterTests: XCTestCase {
     /// un profil Reddit nu.
     func testFolderNoCollision() {
         XCTAssertNotEqual(FeedSource.twitterUser("nasa").folderName,
-                          FeedSource.xFetish("nasa").folderName)
+                          FeedSource.xFetish(XFetishAlbums.Target(model: "nasa", videos: [], albums: [])).folderName)
         XCTAssertNotEqual(FeedSource.twitterUser("nasa").folderName,
                           FeedSource.user("nasa").folderName)
     }

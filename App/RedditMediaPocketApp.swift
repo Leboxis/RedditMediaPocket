@@ -122,7 +122,7 @@ struct ContentView: View {
             } else {
                 TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") :
                           (model.sourceKind == "rg" ? L("pseudo RedGifs", "RedGifs username") :
-                            (model.sourceKind == "x" ? L("profil X-Fetish", "X-Fetish profile") :
+                            (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
                               (model.sourceKind == "tw" ? L("compte X", "X account") : L("pseudo", "username")))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)

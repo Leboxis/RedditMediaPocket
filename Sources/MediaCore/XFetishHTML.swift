@@ -57,6 +57,16 @@ enum XFetishHTML {
     /// Section `<div id="…">` balancing nested divs, used to ignore the
     /// vignettes, les vidéos recommandées et les blocs hors galerie.
     static func divSection(id: String, in html: String) -> String? {
+        divSectionWhere(html) { attributes($0)["id"] == id }
+    }
+
+    /// Même chose, désignée par une classe : la page vidéo range le créateur
+    /// dans `media-models`, à côté des modèles suggérés par le site.
+    static func divSection(className name: String, in html: String) -> String? {
+        divSectionWhere(html) { attributes($0)["class"]?.split(separator: " ").contains(name) == true }
+    }
+
+    private static func divSectionWhere(_ html: String, matches: (String) -> Bool) -> String? {
         let ns = html as NSString
         let tags = divRegex.matches(in: html, range: NSRange(location: 0, length: ns.length))
         var start: Int?
@@ -64,7 +74,7 @@ enum XFetishHTML {
         for match in tags {
             let tag = ns.substring(with: match.range)
             if start == nil {
-                guard !tag.hasPrefix("</"), attributes(tag)["id"] == id else { continue }
+                guard !tag.hasPrefix("</"), matches(tag) else { continue }
                 start = match.range.location
             }
             depth += tag.hasPrefix("</") ? -1 : 1

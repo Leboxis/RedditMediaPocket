@@ -249,6 +249,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     /// Affiche une collection dans le champ : nom nu + sélecteur positionné.
+    /// Clé mémorisant les adresses collées d'une sélection X-Fetish (`x.videos`
+    /// ou `x.albums`) : sans modèle, le champ ne peut pas être reconstruit
+    /// depuis le seul nom de la collection.
+    private static func xFetishSelectionKey(_ canonical: String) -> String {
+        "xFetishSelection.\(canonical)"
+    }
+
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
@@ -256,7 +263,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         else if collection.isRedGifs { sourceKind = "rg" }
         else if collection.isSubreddit { sourceKind = "r" }
         else { sourceKind = "u" }
-        username = collection.name
+        if collection.isXFetish, (collection.name == "videos" || collection.name == "albums") {
+            username = UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(collection.id)) ?? ""
+        } else {
+            username = collection.name
+        }
     }
 
     private func loadCollections() {
@@ -277,7 +288,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 case .user(let name): sourceKind = "u"; username = name
                 case .subreddit(let name): sourceKind = "r"; username = name
                 case .saved(let name): sourceKind = "saved"; username = name
-                case .xFetish(let name): sourceKind = "x"; username = name
+                case .xFetish(let target): sourceKind = "x"; username = target.model ?? UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(source.id)) ?? ""
                 case .redgifsUser(let name): sourceKind = "rg"; username = name
                 case .twitterUser(let name): sourceKind = "tw"; username = name
                 }
@@ -340,12 +351,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .user(let name): sourceKind = "u"; username = name
             case .subreddit(let name): sourceKind = "r"; username = name
             case .saved(let name): sourceKind = "saved"; username = name
-            case .xFetish(let name): sourceKind = "x"; username = name
+            case .xFetish(let target): sourceKind = "x"; username = target.model ?? UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(source.id)) ?? ""
             case .redgifsUser(let name): sourceKind = "rg"; username = name
             case .twitterUser(let name): sourceKind = "tw"; username = name
             }
         } else {
             username = id
+        }
+        // Sélection X-Fetish sans adresses mémorisées : afficher la collection
+        // sans lancer un parcours du modèle neutre (`videos`/`albums`).
+        if sourceKind == "x", username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            activeUser = id
+            UserDefaults.standard.set(id, forKey: "lastUsername")
+            reload()
+            return
         }
         start()
     }
@@ -359,7 +378,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .user(let name): collections.append(UserCollection(name: name))
             case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
             case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
-            case .xFetish(let name): collections.append(UserCollection(name: name, isXFetish: true))
+            case .xFetish(let target): collections.append(UserCollection(name: target.collectionName, isXFetish: true))
             case .redgifsUser(let name): collections.append(UserCollection(name: name, isRedGifs: true))
             case .twitterUser(let name): collections.append(UserCollection(name: name, isTwitter: true))
             }
@@ -380,6 +399,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         Self.clearSavedMediaCount(for: id)
         UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
         UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(id))
+        UserDefaults.standard.removeObject(forKey: Self.xFetishSelectionKey(id))
         collections.removeAll { $0.id == id }
         saveCollections()
 
@@ -707,8 +727,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
         }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        if case .xFetish(let model) = source {
-            try await runXFetish(model: model, canonical: canonical, folder: folder)
+        if case .xFetish(let target) = source {
+            // Les adresses collées sont mémorisées : sans modèle, le champ ne
+            // pourrait pas être reconstruit au prochain lancement.
+            if !target.videos.isEmpty || !target.albums.isEmpty {
+                UserDefaults.standard.set(username, forKey: Self.xFetishSelectionKey(canonical))
+            }
+            try await runXFetish(target: target, canonical: canonical, folder: folder)
             return
         }
         // Comptes X : fil `/media` authentifié, reprise au dernier lot terminé,
@@ -843,7 +868,19 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// media in an older album or a new video is found; stable `xf-…` / `xfv-…`
     /// keys skip the files already on disk.
     /// An unfinished video scan resumes its next batch before returning to the head.
-    private func runXFetish(model: String, canonical: String, folder: URL) async throws {
+    private func runXFetish(target: XFetishAlbums.Target, canonical: String, folder: URL) async throws {
+        // Adresses collées : seuls ces albums et vidéos sont téléchargés, sans
+        // parcourir le catalogue. Ce sont les adresses qui décident, pas le
+        // sélecteur Images / Vidéos.
+        if !target.videos.isEmpty || !target.albums.isEmpty {
+            try await runXFetishSelected(target: target, canonical: canonical, folder: folder)
+            if let index = collections.firstIndex(where: { $0.id == canonical }) {
+                collections[index].lastRun = Date()
+                saveCollections()
+            }
+            return
+        }
+        guard let model = target.model else { throw FeedError.invalidXFetishProfile }
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
@@ -900,6 +937,108 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
 
+    /// Téléchargement d'un album déjà connu (catalogue ou adresse collée) :
+    /// galerie + fragments Show More, puis mise en file des originaux.
+    private func downloadXFetishAlbum(_ album: XFetishAlbums.Album, canonical: String, folder: URL,
+                                      savedImageIDs: Set<String>,
+                                      seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                      preparedCount: inout Int) async throws {
+        let galleryData = try await network.data(album.url)
+        let gallery = try XFetishAlbums.parseGallery(galleryData, album: album)
+        var images = gallery.images
+        var imageIDs = Set(images.map(\.id))
+
+        if gallery.extraPages > 0 {
+            for extraPage in 1...gallery.extraPages {
+                try Task.checkCancellation()
+                let fragment = try await network.data(XFetishAlbums.extraImagesURL(album: album, page: extraPage))
+                guard let extraImages = try XFetishAlbums.parseExtraImages(fragment, albumID: album.id,
+                                                                           hasEarlierImages: !images.isEmpty) else {
+                    LogCenter.info(L("X-Fetish : album \(album.id), page supplémentaire vide, fin de la galerie.",
+                                     "X-Fetish: album \(album.id), empty extra page, end of gallery."))
+                    break
+                }
+                for image in extraImages where imageIDs.insert(image.id).inserted {
+                    images.append(image)
+                }
+            }
+        }
+        LogCenter.info(L("X-Fetish : album \(album.id), \(images.count) images.", "X-Fetish: album \(album.id), \(images.count) images."))
+
+        var mediaOverrides: [String: [Media]] = [:]
+        var mediaHeaders: [String: [String: String]] = [:]
+        let newImages = images.filter { !savedImageIDs.contains("xf-\(album.id)-\($0.id)") }
+        let posts = newImages.map { image -> Post in
+            let id = "xf-\(album.id)-\(image.id)"
+            let media = Media.direct(image.url)
+            mediaOverrides[id] = [media]
+            // Anti-hotlink : le stockage exige le Referer de l'album.
+            mediaHeaders[media.key] = XFetishAPI.headers(referer: album.url)
+            return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
+        }
+        let downloads = try await prepareDownloads(posts, folder: folder,
+            seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+            author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
+        beginTransferUnit(total: downloads.count)
+        try await executeDownloads(downloads, &preparedCount)
+    }
+
+    /// Adresses uniques collées dans le champ : seuls ces albums et vidéos sont
+    /// téléchargés, sans lire le catalogue du modèle. Les clés stables
+    /// (`xf-…` / `xfv-…`) évitent tout retéléchargement à la relance.
+    private func runXFetishSelected(target: XFetishAlbums.Target, canonical: String, folder: URL) async throws {
+        var seenMedia = Set<Media>()
+        var usedFilenames = Set<String>()
+        var preparedCount = 0
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.xFetishMediaID(inFileName: $0.lastPathComponent)
+        })
+        let savedImageIDs = Set(savedIDs.filter { $0.hasPrefix("xf-") })
+        let savedVideoIDs = Set(savedIDs.filter { $0.hasPrefix("xfv-") })
+        var seenAlbums = Set<String>()
+        var seenVideos = Set<String>()
+
+        for album in target.albums {
+            try Task.checkCancellation()
+            guard seenAlbums.insert(album.id).inserted else { continue }
+            status = L("Album : \(album.title)", "Album: \(album.title)")
+            try await downloadXFetishAlbum(album, canonical: canonical, folder: folder,
+                                           savedImageIDs: savedImageIDs,
+                                           seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                           preparedCount: &preparedCount)
+        }
+
+        // La route signée `get_file` n'est résolue qu'au moment du transfert
+        // (voir `save`), jamais mise en file : aucun `v-acctoken` ne vieillit.
+        var mediaOverrides: [String: [Media]] = [:]
+        var videos: [String: XFetishVideos.Video] = [:]
+        var posts: [Post] = []
+        for video in target.videos {
+            try Task.checkCancellation()
+            guard seenVideos.insert(video.id).inserted else { continue }
+            guard !savedVideoIDs.contains("xfv-\(video.id)") else { continue }
+            let id = "xfv-\(video.id)"
+            videos[id] = video
+            mediaOverrides[id] = [.direct(video.url)]
+            posts.append(Post(id: id, title: video.title, html: "", link: video.url.absoluteString))
+        }
+        let downloads = try await prepareDownloads(posts, folder: folder,
+            seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+            author: canonical, mediaOverrides: mediaOverrides, xFetishVideos: videos)
+        beginTransferUnit(total: downloads.count)
+        try await executeDownloads(downloads, &preparedCount)
+        LogCenter.info(L("X-Fetish sélection : \(preparedCount) médias préparés.", "X-Fetish selection: \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) médias inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                             "\(failed) media unavailable or unsaved.\n\(kept) media files kept.")
+            return
+        }
+        status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media")
+                            : L("\(count) médias téléchargés", "\(count) media downloaded")
+    }
+
     private func runXFetishAlbums(model: String, canonical: String, folder: URL,
                                   savedImageIDs: Set<String>,
                                   seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
@@ -922,44 +1061,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 try Task.checkCancellation()
                 guard scannedAlbums.insert(album.id).inserted else { continue }
                 status = L("Album \(scannedAlbums.count) : \(album.title)", "Album \(scannedAlbums.count): \(album.title)")
-                let galleryData = try await network.data(album.url)
-                let gallery = try XFetishAlbums.parseGallery(galleryData, album: album)
-                var images = gallery.images
-                var imageIDs = Set(images.map(\.id))
-
-                if gallery.extraPages > 0 {
-                    for extraPage in 1...gallery.extraPages {
-                        try Task.checkCancellation()
-                        let fragment = try await network.data(XFetishAlbums.extraImagesURL(album: album, page: extraPage))
-                        guard let extraImages = try XFetishAlbums.parseExtraImages(fragment, albumID: album.id,
-                                                                                   hasEarlierImages: !images.isEmpty) else {
-                            LogCenter.info(L("X-Fetish : album \(album.id), page supplémentaire vide, fin de la galerie.",
-                                             "X-Fetish: album \(album.id), empty extra page, end of gallery."))
-                            break
-                        }
-                        for image in extraImages where imageIDs.insert(image.id).inserted {
-                            images.append(image)
-                        }
-                    }
-                }
-                LogCenter.info(L("X-Fetish : album \(album.id), \(images.count) images.", "X-Fetish: album \(album.id), \(images.count) images."))
-
-                var mediaOverrides: [String: [Media]] = [:]
-                var mediaHeaders: [String: [String: String]] = [:]
-                let newImages = images.filter { !savedImageIDs.contains("xf-\(album.id)-\($0.id)") }
-                let posts = newImages.map { image -> Post in
-                    let id = "xf-\(album.id)-\(image.id)"
-                    let media = Media.direct(image.url)
-                    mediaOverrides[id] = [media]
-                    // Anti-hotlink : le stockage exige le Referer de l'album.
-                    mediaHeaders[media.key] = XFetishAPI.headers(referer: album.url)
-                    return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
-                }
-                let downloads = try await prepareDownloads(posts, folder: folder,
-                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
-                    author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: mediaHeaders)
-                beginTransferUnit(total: downloads.count)
-                try await executeDownloads(downloads, &preparedCount)
+                try await downloadXFetishAlbum(album, canonical: canonical, folder: folder,
+                                               savedImageIDs: savedImageIDs,
+                                               seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                               preparedCount: &preparedCount)
             }
 
             guard let next = listing.nextPage else { break }

@@ -31,7 +31,7 @@ public enum XFetishMediaKind: String, CaseIterable, Sendable {
 /// n'est valable que peu de temps, d'où une lecture de page par vidéo et par
 /// exécution. La même adresse IPv4 que `get_file` sert ensuite au téléchargement.
 public enum XFetishVideos {
-    public struct Video: Sendable {
+    public struct Video: Hashable, Sendable {
         public let id: String
         public let title: String
         public let url: URL
@@ -115,6 +115,25 @@ public enum XFetishVideos {
         try Task.checkCancellation()
         persist(nextPage)
         return nextPage == nil
+    }
+
+    /// Modèle propriétaire d'une page vidéo (ou d'album) : le site encadre le
+    /// créateur dans un bloc `media-models` et affiche ailleurs des modèles
+    /// suggérés sans rapport. Sans bloc, aucun nom n'est inventé.
+    public static func modelSlug(fromPage data: Data) -> String? {
+        let html = String(decoding: data, as: UTF8.self)
+        guard let section = XFetishHTML.divSection(className: "media-models", in: html) else { return nil }
+        let base = XFetishHTML.siteRoot
+        for tag in XFetishHTML.anchorTags(section) {
+            guard let raw = XFetishHTML.attributes(tag)["href"],
+                  let url = XFetishHTML.siteURL(raw, relativeTo: base) else { continue }
+            let parts = XFetishHTML.pathParts(url)
+            guard parts.count == 2, parts[0] == "models" else { continue }
+            let slug = parts[1].lowercased()
+            guard XFetishHTML.slug(slug) else { continue }
+            return slug
+        }
+        return nil
     }
 
     /// Route signée du lecteur. Le jeton reste dans l'URL retournée et n'est
