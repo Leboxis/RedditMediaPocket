@@ -152,31 +152,44 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Recherche et tri de la galerie. Purement locaux : ils ne changent que
     /// l'ordre d'affichage des fichiers déjà sur l'écran, jamais ce qui est
     /// téléchargé.
-    @Published var gallerySearch = ""
+    @Published var gallerySearch = "" {
+        didSet { applyGalleryOrdering() }
+    }
     @Published var gallerySort: GallerySort = {
         GallerySort(rawValue: UserDefaults.standard.string(forKey: "gallerySort") ?? "") ?? .newest
     }() {
-        didSet { UserDefaults.standard.set(gallerySort.rawValue, forKey: "gallerySort") }
+        didSet {
+            UserDefaults.standard.set(gallerySort.rawValue, forKey: "gallerySort")
+            applyGalleryOrdering()
+        }
     }
-    @Published var galleryKindFilter: GalleryKindFilter = .all
+    @Published var galleryKindFilter: GalleryKindFilter = .all {
+        didSet { applyGalleryOrdering() }
+    }
 
-    /// Fichiers affichés par la galerie : `files` filtré et trié. Le tri par
-    /// défaut est celui de `CollectionFiles.scan` (date décroissante), un
-    /// fichier sans date passant en dernier.
+    /// Fichiers affichés par la galerie : `files` filtré et trié.
     ///
-    /// La recherche s'appuie sur `searchIndex`, construit une fois par
-    /// rechargement : lire le sidecar de chaque fichier à chaque frappe aurait
-    /// coûté des milliers d'accès disque sur une grosse collection.
-    var displayedFiles: [URL] {
-        let query = gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    /// C'est une valeur **stockée**, recalculée par `applyGalleryOrdering()`
+    /// chaque fois qu'une entrée change. La calculer à la volée dans le corps
+    /// de la vue ne suffisait pas : SwiftUI ne relit une propriété dérivée que
+    /// s'il a une raison de réévaluer le corps, et le tri semblait alors sans
+    /// effet. Une valeur publiée rend le changement explicite.
+    @Published private(set) var displayedFiles: [URL] = []
+
+    /// Recalcule `displayedFiles` à partir de l'état courant. Appelée au
+    /// rechargement et à chaque changement de recherche, de tri ou de filtre.
+    private func applyGalleryOrdering() {
+        let query = gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines)
         var result = files.filter { url in
             guard galleryKindFilter.allows(url) else { return false }
             guard !query.isEmpty else { return true }
-            if url.lastPathComponent.lowercased().contains(query) { return true }
-            return searchIndex[url]?.contains(query) == true
+            // `localizedStandardContains` gère casse et diacritiques, comme la
+            // recherche d'un `UISearchBar` : « cafe » trouve « Café ».
+            if url.lastPathComponent.localizedStandardContains(query) { return true }
+            return searchIndex[url]?.localizedStandardContains(query) == true
         }
         result = gallerySort.sorted(result, dates: fileDates, sizes: fileSizes)
-        return result
+        if result != displayedFiles { displayedFiles = result }
     }
 
     /// Date de création et taille par fichier, relevées au rechargement avec la
@@ -715,10 +728,18 @@ struct UserCollection: Codable, Identifiable, Equatable {
             files = []
             totalBytes = 0
             displayedCollectionID = activeUser
+            // Les tables de tri décrivent l'ancienne collection : les vider
+            // évite d'afficher les fichiers de la nouvelle avec les dates de
+            // l'ancienne pendant le scan.
+            searchIndex = [:]
+            fileDates = [:]
+            fileSizes = [:]
+            applyGalleryOrdering()
         }
         guard let collection = activeCollection else {
             files = []; totalBytes = 0; reloadTask = nil
             loadingFiles = false
+            applyGalleryOrdering()
             return
         }
         loadingFiles = true
@@ -742,11 +763,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
                 self.reloadTask = nil
                 self.loadingFiles = false
-                self.files = snapshot.files
-                self.totalBytes = snapshot.totalBytes
+                // L'ordre est recalculé après l'affectation des tables : sinon
+                // le tri par date ou par taille s'appuierait sur des tables
+                // encore vides et retomberait sur l'ordre alphabétique.
                 self.searchIndex = index
                 self.fileDates = facts.dates
                 self.fileSizes = facts.sizes
+                self.files = snapshot.files
+                self.totalBytes = snapshot.totalBytes
+                self.applyGalleryOrdering()
             } catch is CancellationError {
                 return
             } catch {
@@ -2101,8 +2126,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
             try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: item.destination.path)
         }
         MediaMetadata(downloadedAt: Date(), postDate: item.postDate, author: item.author.isEmpty ? nil : item.author, postLink: item.postLink).save(for: item.destination)
+        // Une seule lecture des attributs, réutilisée pour le total et pour la
+        // table de tri : `files.insert` seul laisserait le tri par date ou par
+        // taille sans entrée pour ce fichier.
+        let attributes = try? item.destination.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+        let size = Int64(attributes?.fileSize ?? 0)
         files.insert(item.destination, at: 0)
-        totalBytes += Int64((try? item.destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        totalBytes += size
+        fileSizes[item.destination] = size
+        if let date = item.postDate ?? attributes?.creationDate { fileDates[item.destination] = date }
+        applyGalleryOrdering()
         count += 1
         LogCenter.info(L("Gardé : \(item.destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(item.destination.lastPathComponent) (\(count)/\(discovered))."))
         // A scan started before this save must not overwrite the newly inserted file.

@@ -363,53 +363,7 @@ struct ContentView: View {
     /// que l'ordre et la visibilité des fichiers déjà présents, jamais ce qui
     /// est téléchargé — d'où leur place ici plutôt que dans les Réglages.
     private var galleryToolbar: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                HStack(spacing: 5) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField(L("Rechercher", "Search"), text: $model.gallerySearch)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.search)
-                    if !model.gallerySearch.isEmpty {
-                        Button { model.gallerySearch = "" } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(L("Effacer la recherche", "Clear search"))
-                    }
-                }
-                .font(.footnote)
-                .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
-
-                Menu {
-                    Picker(L("Tri", "Sort"), selection: $model.gallerySort) {
-                        ForEach(Downloader.GallerySort.allCases, id: \.self) { sort in
-                            Text(sort.label).tag(sort)
-                        }
-                    }
-                    Divider()
-                    Picker(L("Type", "Type"), selection: $model.galleryKindFilter) {
-                        ForEach(Downloader.GalleryKindFilter.allCases, id: \.self) { kind in
-                            Text(kind.label).tag(kind)
-                        }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.footnote.weight(.semibold))
-                        .frame(width: 30, height: 30)
-                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
-                }
-                .accessibilityLabel(L("Tri et filtre", "Sort and filter"))
-            }
-            if model.displayedFiles.count != model.files.count {
-                Text(L("\(model.displayedFiles.count) sur \(model.files.count) médias", "\(model.displayedFiles.count) of \(model.files.count) media"))
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(.horizontal, 12).padding(.bottom, 6)
+        GalleryToolbar(model: model)
     }
 
     private var toolbarContent: some ToolbarContent {
