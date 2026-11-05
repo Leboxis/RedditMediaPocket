@@ -1,0 +1,11 @@
+fix: un nom de profil X-Fetish avec espace doit etre refuse
+
+`parseTarget` decoupait toute entree sur les espaces des le commit
+59c4ada : `x/not a slug` devenait trois noms valides au lieu d'un nom
+invalide, et le test `testProfileSourceUsesDistinctCollectionAndListing`
+echouait en CI.
+
+Le decoupage ne s'applique plus qu'a une vraie selection, c'est-a-dire
+quand au moins une adresse de video ou d'album est reconnue. Sinon
+l'entree entiere est lue comme un nom de profil, et un espace la rend
+invalide comme avant.
