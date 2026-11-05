@@ -63,7 +63,9 @@ enum XFetishHTML {
     /// Même chose, désignée par une classe : la page vidéo range le créateur
     /// dans `media-models`, à côté des modèles suggérés par le site.
     static func divSection(className name: String, in html: String) -> String? {
-        divSectionWhere(html) { attributes($0)["class"]?.split(separator: " ").contains(name) == true }
+        // `split` rend des `Substring` : les comparer directement à `name`
+        // (un `String`) ne compile pas, d'où la conversion explicite.
+        divSectionWhere(html) { attributes($0)["class"]?.split(separator: " ").map(String.init).contains(name) == true }
     }
 
     private static func divSectionWhere(_ html: String, matches: (String) -> Bool) -> String? {
