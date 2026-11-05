@@ -12,15 +12,25 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var isXFetish = false
     var isRedGifs = false
     var isTwitter = false
+    /// Tag RedGifs (`rg/#tag`) : même parcours paginé qu'un compte, mais la
+    /// liste vient de `/v2/gifs/search` au lieu de `/v2/users/…/search`.
+    var isRedGifsTag = false
+    /// GIF RedGifs unique (`rg/gif/<id>`) : aucun parcours, un seul média.
+    var isRedGifsGif = false
+    /// Posts Reddit isolés (`r/posts`) : seuls les posts collés sont lus.
+    var isRedditPosts = false
     var archived = false
     var lastRun: Date?
     /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
-    /// `rg/pseudo` ou `tw/pseudo`.
+    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo` ou `r/posts`.
     var id: String {
         if isTwitter { return "tw/\(name)" }
+        if isRedGifsTag { return "rg/#\(name)" }
+        if isRedGifsGif { return "rg/gif/\(name)" }
         if isRedGifs { return "rg/\(name)" }
         if isSaved { return "saved/\(name)" }
         if isXFetish { return "x/\(name)" }
+        if isRedditPosts { return "reddit/posts" }
         return (isSubreddit ? "r/" : "u/") + name
     }
     var displayName: String { isSaved ? "Saved" : id }
@@ -29,20 +39,28 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// collection existante ne peut entrer en collision.
     var folderName: String {
         if isTwitter { return "tw.\(name)" }
+        if isRedGifsTag { return "redgifs.tag.\(name)" }
+        if isRedGifsGif { return "redgifs.gif.\(name)" }
         if isRedGifs { return "redgifs.\(name)" }
         if isSaved { return "saved.\(name)" }
         if isXFetish { return "x.\(name)" }
+        if isRedditPosts { return "reddit.posts" }
         return isSubreddit ? "r.\(name)" : name
     }
 
-    enum CodingKeys: String, CodingKey { case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, archived, lastRun }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+    }
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
         self.isXFetish = isXFetish
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
+        self.isRedGifsTag = isRedGifsTag
+        self.isRedGifsGif = isRedGifsGif
+        self.isRedditPosts = isRedditPosts
         self.archived = archived
         self.lastRun = lastRun
     }
@@ -54,8 +72,29 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
+        isRedGifsTag = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsTag) ?? false
+        isRedGifsGif = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsGif) ?? false
+        isRedditPosts = try container.decodeIfPresent(Bool.self, forKey: .isRedditPosts) ?? false
         archived = try container.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         lastRun = try container.decodeIfPresent(Date.self, forKey: .lastRun)
+    }
+
+    /// Collection correspondant à une source. Point unique de vérité pour la
+    /// correspondance source → collection : les six commutateurs qui la
+    /// répétaient pouvaient diverger, ce qui suffisait à créer deux entrées
+    /// pour la même source.
+    init(source: FeedSource) {
+        switch source {
+        case .user(let name): self.init(name: name)
+        case .subreddit(let name): self.init(name: name, isSubreddit: true)
+        case .saved(let name): self.init(name: name, isSaved: true)
+        case .xFetish(let target): self.init(name: target.collectionName, isXFetish: true)
+        case .redgifsUser(let name): self.init(name: name, isRedGifs: true)
+        case .redgifsTag(let tag): self.init(name: tag, isRedGifsTag: true)
+        case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
+        case .twitterUser(let name): self.init(name: name, isTwitter: true)
+        case .redditPosts: self.init(name: "posts", isRedditPosts: true)
+        }
     }
 }
 
@@ -91,7 +130,176 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published private(set) var transferUnit: TransferUnit?
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
 
+    /// Médias reçus lors du dernier parcours terminé, par collection. Sert au
+    /// compteur « nouveautés » des pastilles : `lastRun` existait déjà mais
+    /// n'était affiché nulle part, ce qui rendait invisible ce qui avait été
+    /// réellement ajouté au passage précédent.
+    @Published private(set) var lastRunCounts: [String: Int] = [:]
+
+    /// Filtres de téléchargement, par collection. Rechargé au changement de
+    /// collection active, jamais partagé entre deux sources.
+    @Published var downloadFilter = DownloadFilter()
+
+    /// Plafond d'espace disque, global. Zéro signifie « sans limite ».
+    @Published var storageQuota = StorageQuota.load() {
+        didSet { StorageQuota.save(storageQuota) }
+    }
+
+    /// Dernier écart lié au plafond d'espace : affiché en information, pas en
+    /// erreur — rien n'est cassé, la session s'est arrêtée proprement.
+    @Published private(set) var storageLimitReached = false
+
+    /// Recherche et tri de la galerie. Purement locaux : ils ne changent que
+    /// l'ordre d'affichage des fichiers déjà sur l'écran, jamais ce qui est
+    /// téléchargé.
+    @Published var gallerySearch = ""
+    @Published var gallerySort: GallerySort = {
+        GallerySort(rawValue: UserDefaults.standard.string(forKey: "gallerySort") ?? "") ?? .newest
+    }() {
+        didSet { UserDefaults.standard.set(gallerySort.rawValue, forKey: "gallerySort") }
+    }
+    @Published var galleryKindFilter: GalleryKindFilter = .all
+
+    /// Fichiers affichés par la galerie : `files` filtré et trié. Le tri par
+    /// défaut est celui de `CollectionFiles.scan` (date décroissante), un
+    /// fichier sans date passant en dernier.
+    ///
+    /// La recherche s'appuie sur `searchIndex`, construit une fois par
+    /// rechargement : lire le sidecar de chaque fichier à chaque frappe aurait
+    /// coûté des milliers d'accès disque sur une grosse collection.
+    var displayedFiles: [URL] {
+        let query = gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var result = files.filter { url in
+            guard galleryKindFilter.allows(url) else { return false }
+            guard !query.isEmpty else { return true }
+            if url.lastPathComponent.lowercased().contains(query) { return true }
+            return searchIndex[url]?.contains(query) == true
+        }
+        result = gallerySort.sorted(result, dates: fileDates, sizes: fileSizes)
+        return result
+    }
+
+    /// Date de création et taille par fichier, relevées au rechargement avec la
+    /// liste. Les trier à la volée aurait relu les attributs de chaque fichier
+    /// à chaque rendu, sur une collection qui peut compter des milliers
+    /// d'entrées.
+    @Published private var fileDates: [URL: Date] = [:]
+    @Published private var fileSizes: [URL: Int64] = [:]
+
+    /// Relève date et taille d'un lot de fichiers, hors du fil principal.
+    /// Seuls les attributs déjà en cache du système sont demandés : la liste
+    /// vient d'être scannée, une lecture disque supplémentaire serait inutile.
+    nonisolated static func buildFileFacts(_ files: [URL]) -> (dates: [URL: Date], sizes: [URL: Int64]) {
+        var dates: [URL: Date] = [:]
+        var sizes: [URL: Int64] = [:]
+        let keys: Set<URLResourceKey> = [.creationDateKey, .fileSizeKey]
+        for url in files {
+            guard let values = try? url.resourceValues(forKeys: keys) else { continue }
+            if let date = values.creationDate { dates[url] = date }
+            if let size = values.fileSize { sizes[url] = Int64(size) }
+        }
+        return (dates, sizes)
+    }
+
+    /// Texte cherchable par fichier : auteur et lien du post, lus une fois au
+    /// rechargement. Les noms de fichiers ne sont pas dupliqués ici.
+    @Published private var searchIndex: [URL: String] = [:]
+
+    /// Reconstruit l'index de recherche depuis les sidecars. Appelé par
+    /// `reload()`, hors du chemin de rendu.
+    nonisolated static func buildSearchIndex(_ files: [URL]) -> [URL: String] {
+        var index: [URL: String] = [:]
+        for url in files {
+            guard let metadata = MediaMetadata.read(for: url) else { continue }
+            let parts = [metadata.author, metadata.postLink].compactMap { $0 }
+            guard !parts.isEmpty else { continue }
+            index[url] = parts.joined(separator: " ").lowercased()
+        }
+        return index
+    }
+
+    /// Ordres proposés par la galerie.
+    enum GallerySort: String, CaseIterable, Sendable {
+        case newest, oldest, largest, smallest, name
+
+        var label: String {
+            switch self {
+            case .newest: return L("Plus récent", "Newest")
+            case .oldest: return L("Plus ancien", "Oldest")
+            case .largest: return L("Plus lourd", "Largest")
+            case .smallest: return L("Plus léger", "Smallest")
+            case .name: return L("Nom", "Name")
+            }
+        }
+
+        /// Un fichier sans date connue passe toujours en dernier : il ne doit
+        /// pas se retrouver artificiellement en tête d'un tri par récence.
+        /// `dates` et `sizes` sont les tables relevées au rechargement : aucun
+        /// accès disque n'est fait ici.
+        func sorted(_ files: [URL], dates: [URL: Date], sizes: [URL: Int64]) -> [URL] {
+            switch self {
+            case .newest, .oldest:
+                let ascending = self == .oldest
+                return files.sorted { lhs, rhs in
+                    let left = dates[lhs], right = dates[rhs]
+                    switch (left, right) {
+                    case let (l?, r?):
+                        if l == r { return lhs.lastPathComponent < rhs.lastPathComponent }
+                        return ascending ? l < r : l > r
+                    case (nil, nil): return lhs.lastPathComponent < rhs.lastPathComponent
+                    case (nil, _): return false
+                    case (_, nil): return true
+                    }
+                }
+            case .largest, .smallest:
+                let ascending = self == .smallest
+                return files.sorted { lhs, rhs in
+                    let left = sizes[lhs] ?? 0, right = sizes[rhs] ?? 0
+                    if left == right { return lhs.lastPathComponent < rhs.lastPathComponent }
+                    return ascending ? left < right : left > right
+                }
+            case .name:
+                return files.sorted {
+                    $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+                }
+            }
+        }
+    }
+
+    /// Filtre rapide par type, indépendant du filtre de téléchargement.
+    enum GalleryKindFilter: String, CaseIterable, Sendable {
+        case all, images, videos
+
+        var label: String {
+            switch self {
+            case .all: return L("Tout", "All")
+            case .images: return L("Images", "Images")
+            case .videos: return L("Vidéos", "Videos")
+            }
+        }
+
+        func allows(_ url: URL) -> Bool {
+            let ext = url.pathExtension.lowercased()
+            switch self {
+            case .all: return true
+            case .images: return ["jpg", "jpeg", "png", "gif", "webp"].contains(ext)
+            case .videos: return ["mp4", "mov", "m4v"].contains(ext)
+            }
+        }
+    }
+
     private static func savedMediaCountKey(_ canonical: String) -> String { "savedMediaCount.\(canonical)" }
+    private static func lastRunCountKey(_ canonical: String) -> String { "lastRunCount.\(canonical)" }
+
+    private static func loadLastRunCount(_ canonical: String) -> Int? {
+        let value = UserDefaults.standard.object(forKey: lastRunCountKey(canonical)) as? NSNumber
+        return value?.intValue
+    }
+
+    private func recordLastRunCount(_ canonical: String) {
+        lastRunCounts[canonical] = count
+        UserDefaults.standard.set(count, forKey: Self.lastRunCountKey(canonical))
+    }
 
     static func savedMediaCount(for canonical: String) -> SavedMediaCount? {
         guard let data = UserDefaults.standard.data(forKey: savedMediaCountKey(canonical)) else { return nil }
@@ -153,8 +361,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
             return try? FeedSource.parse(text)
         }
         if sourceKind == "rg" {
-            let text = username.contains("/") || username.lowercased().contains("redgifs.com") ? username : "rg/\(username)"
+            let text = username.contains("/") || username.lowercased().contains("redgifs.com")
+                || username.hasPrefix("#")
+                ? username : "rg/\(username)"
             return try? FeedSource.parse(text)
+        }
+        // En mode `r`, une adresse de post collée est une sélection, pas un
+        // subreddit nommé `pics` : le texte explicite garde la priorité.
+        if sourceKind == "r", username.lowercased().contains("reddit.com/") || username.lowercased().contains("redd.it/") {
+            return try? FeedSource.parse(username)
         }
         let text = username.contains("/") ? username : "\(sourceKind)/\(username)"
         return try? FeedSource.parse(text)
@@ -225,6 +440,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         loadCollections()
         migrateFolders()
         Self.cleanupStalePreviewTemps()
+        // Compteurs « nouveautés » du passage précédent : relus une fois pour
+        // que les pastilles les affichent dès l'ouverture, sans attendre un
+        // premier parcours.
+        for collection in collections {
+            if let value = Self.loadLastRunCount(collection.id) { lastRunCounts[collection.id] = value }
+        }
         if activeUser == nil { activeUser = liveCollections.first?.id ?? collections.first?.id }
         if let current = collections.first(where: { $0.id == activeUser }) { display(current) }
         reload()
@@ -256,18 +477,34 @@ struct UserCollection: Codable, Identifiable, Equatable {
         "xFetishSelection.\(canonical)"
     }
 
+    /// Même besoin pour une sélection de posts Reddit (`r/posts`) : le champ ne
+    /// peut pas être reconstruit depuis le seul nom de collection.
+    private static func redditSelectionKey(_ canonical: String) -> String {
+        "redditSelection.\(canonical)"
+    }
+
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
         else if collection.isXFetish { sourceKind = "x" }
-        else if collection.isRedGifs { sourceKind = "rg" }
-        else if collection.isSubreddit { sourceKind = "r" }
+        else if collection.isRedGifs || collection.isRedGifsTag || collection.isRedGifsGif { sourceKind = "rg" }
+        else if collection.isSubreddit || collection.isRedditPosts { sourceKind = "r" }
         else { sourceKind = "u" }
         if collection.isXFetish, (collection.name == "videos" || collection.name == "albums") {
             username = UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(collection.id)) ?? ""
+        } else if collection.isRedditPosts {
+            username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(collection.id)) ?? ""
+        } else if collection.isRedGifsTag {
+            username = "#\(collection.name)"
+        } else if collection.isRedGifsGif {
+            username = "redgifs.com/watch/\(collection.name)"
         } else {
             username = collection.name
         }
+        // Les filtres sont propres à chaque collection : les recharger ici
+        // évite qu'un filtre posé sur une source s'applique silencieusement à
+        // la suivante.
+        downloadFilter = DownloadFilterStore.load(collection.id)
     }
 
     private func loadCollections() {
@@ -290,7 +527,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 case .saved(let name): sourceKind = "saved"; username = name
                 case .xFetish(let target): sourceKind = "x"; username = target.model ?? UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(source.id)) ?? ""
                 case .redgifsUser(let name): sourceKind = "rg"; username = name
+                case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
+                case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
+                case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
                 }
             } else {
                 username = last
@@ -313,11 +553,19 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
         for folder in fresh {
-            // Les dossiers `r.…`, `saved.…`, `x.…`, `redgifs.…` et `tw.…` viennent
-            // des subreddits, sauvegardés, profils X-Fetish, comptes RedGifs et
-            // comptes X (le point est impossible dans un pseudo).
+            // Les dossiers `r.…`, `saved.…`, `x.…`, `redgifs.…`, `tw.…` et
+            // `reddit.…` viennent des subreddits, sauvegardés, profils X-Fetish,
+            // comptes RedGifs, comptes X et sélections de posts (le point est
+            // impossible dans un pseudo). Les variantes `redgifs.tag.` et
+            // `redgifs.gif.` sont testées avant le préfixe `redgifs.` nu.
             if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
                 collections.append(UserCollection(name: sub, isSubreddit: true))
+            } else if folder == "reddit.posts" {
+                collections.append(UserCollection(name: "posts", isRedditPosts: true))
+            } else if folder.hasPrefix("redgifs.tag."), let tag = try? RedgifsAPI.tag(String(folder.dropFirst(12))) {
+                collections.append(UserCollection(name: tag, isRedGifsTag: true))
+            } else if folder.hasPrefix("redgifs.gif."), let id = RedgifsAPI.gifID(String(folder.dropFirst(12))) {
+                collections.append(UserCollection(name: id, isRedGifsGif: true))
             } else if folder.hasPrefix("redgifs."), let owner = try? RedgifsAPI.username(String(folder.dropFirst(8))) {
                 collections.append(UserCollection(name: owner, isRedGifs: true))
             } else if folder.hasPrefix("saved."), let owner = try? MediaExtractor.username(String(folder.dropFirst(6))) {
@@ -342,6 +590,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
         reload()
     }
 
+    /// Mémorise les filtres de la collection active. Appelé par le panneau de
+    /// filtres : sans cet enregistrement, un réglage saisi serait perdu à la
+    /// fermeture de la feuille.
+    func saveActiveFilter() {
+        guard let id = activeUser else { return }
+        DownloadFilterStore.save(downloadFilter, for: id)
+    }
+
+    /// Compteurs « nouveautés » du passage précédent, pour l'affichage.
+    func lastRunCount(for id: String) -> Int? { lastRunCounts[id] }
+
     func download(user id: String) {
         guard !running else { return }
         if let collection = collections.first(where: { $0.id == id }) {
@@ -353,7 +612,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .saved(let name): sourceKind = "saved"; username = name
             case .xFetish(let target): sourceKind = "x"; username = target.model ?? UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(source.id)) ?? ""
             case .redgifsUser(let name): sourceKind = "rg"; username = name
+            case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
+            case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
+            case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
             }
         } else {
             username = id
@@ -374,14 +636,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if let index = collections.firstIndex(where: { $0.id == id }) {
             collections[index].archived = false
         } else {
-            switch source {
-            case .user(let name): collections.append(UserCollection(name: name))
-            case .subreddit(let name): collections.append(UserCollection(name: name, isSubreddit: true))
-            case .saved(let name): collections.append(UserCollection(name: name, isSaved: true))
-            case .xFetish(let target): collections.append(UserCollection(name: target.collectionName, isXFetish: true))
-            case .redgifsUser(let name): collections.append(UserCollection(name: name, isRedGifs: true))
-            case .twitterUser(let name): collections.append(UserCollection(name: name, isTwitter: true))
-            }
+            collections.append(UserCollection(source: source))
         }
         saveCollections()
     }
@@ -470,10 +725,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
         reloadTask = Task { [weak self] in
             let worker = Task.detached(priority: .userInitiated) {
-                try CollectionFiles.scan(folder)
+                // L'index de recherche et les attributs de tri sont bâtis avec
+                // la liste, hors du fil principal : le rendu ne doit jamais
+                // toucher au disque.
+                let snapshot = try CollectionFiles.scan(folder)
+                let index = Downloader.buildSearchIndex(snapshot.files)
+                let facts = Downloader.buildFileFacts(snapshot.files)
+                return (snapshot, index, facts)
             }
             do {
-                let snapshot = try await withTaskCancellationHandler {
+                let (snapshot, index, facts) = try await withTaskCancellationHandler {
                     try await worker.value
                 } onCancel: {
                     worker.cancel()
@@ -483,6 +744,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 self.loadingFiles = false
                 self.files = snapshot.files
                 self.totalBytes = snapshot.totalBytes
+                self.searchIndex = index
+                self.fileDates = facts.dates
+                self.fileSizes = facts.sizes
             } catch is CancellationError {
                 return
             } catch {
@@ -727,6 +991,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
         }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Plafond d'espace : vérifié avant tout parcours, puis à chaque page par
+        // `checkStorageQuota`. Un plafond atteint arrête proprement la session
+        // au lieu de remplir l'appareil ; les fichiers terminés sont conservés.
+        storageLimitReached = false
+        try checkStorageQuota(folder: folder, canonical: canonical)
         if case .xFetish(let target) = source {
             // Les adresses collées sont mémorisées : sans modèle, le champ ne
             // pourrait pas être reconstruit au prochain lancement.
@@ -766,6 +1035,64 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
+        // Posts Reddit collés : seuls ces posts sont lus, aucun flux parcouru.
+        if case .redditPosts(let target) = source {
+            UserDefaults.standard.set(username, forKey: Self.redditSelectionKey(canonical))
+            try await runRedditSelection(target, canonical: canonical, folder: folder,
+                                         seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                         preparedCount: &preparedCount)
+            return
+        }
+        // Un GIF RedGifs unique ne demande aucun parcours : la route `gif` du
+        // chemin existant suffit, et la clé de collection le rend relançable.
+        if case .redgifsGif(let gifID) = source {
+            let downloads = prepareRedgifsDownloads([gifID], folder: folder,
+                seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
+            if downloads.isEmpty {
+                status = L("GIF déjà présent", "GIF already saved")
+            } else {
+                beginTransferUnit(total: downloads.count)
+                try await executeDownloads(downloads, &preparedCount)
+                status = count == 0 ? L("GIF déjà présent", "GIF already saved")
+                                    : L("\(count) GIF téléchargé", "\(count) GIF downloaded")
+            }
+            if let index = collections.firstIndex(where: { $0.id == canonical }) {
+                collections[index].lastRun = Date()
+                saveCollections()
+            }
+            recordLastRunCount(canonical)
+            if failed > 0 {
+                let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+                errorMessage = L("Média RedGifs inaccessible.\n\(kept) médias conservés.",
+                                 "RedGifs media unavailable.\n\(kept) media files kept.")
+            }
+            return
+        }
+        // Tags RedGifs : même pagination et même préparation qu'un compte, seule
+        // la route de listing change (`/v2/gifs/search`).
+        if case .redgifsTag(let tag) = source {
+            let completed = try await runRedgifsTag(
+                tag: tag, canonical: canonical, folder: folder,
+                seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                preparedCount: &preparedCount)
+            if let index = collections.firstIndex(where: { $0.id == canonical }) {
+                collections[index].lastRun = Date()
+                saveCollections()
+            }
+            recordLastRunCount(canonical)
+            if !completed {
+                scanIncomplete = true
+                status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
+            } else if failed == 0 {
+                status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media") : L("\(count) téléchargés", "\(count) downloaded")
+            }
+            if failed > 0 {
+                let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+                errorMessage = L("\(failed) médias inaccessibles ou non enregistrés (le plus souvent supprimés par leur hébergeur).\n\(kept) médias conservés.",
+                                 "\(failed) media files unavailable or unsaved (most often deleted by their host).\n\(kept) media files kept.")
+            }
+            return
+        }
         // Comptes RedGifs : pagination numérique de l'API search, pas de RSS.
         // La meilleure qualité (HD puis SD) passe par le chemin existant
         // `downloadRedgifs(id:)` ; le listing ne sert qu'à recenser les IDs.
@@ -780,6 +1107,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 collections[index].lastRun = Date()
                 saveCollections()
             }
+            recordLastRunCount(canonical)
             if !completed {
                 scanIncomplete = true
                 status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
@@ -829,6 +1157,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 return posts
             }, process: { posts in
                 LogCenter.info(L("Page \(pageNumber) : préparation de \(posts.count) posts…", "Page \(pageNumber): preparing \(posts.count) posts…"))
+                // Plafond d'espace vérifié à chaque page : `prepareDownloads`
+                // n'écrit rien, mais la page suivante ne doit pas démarrer si
+                // la précédente a rempli le quota.
+                try self.checkStorageQuota(folder: folder, canonical: canonical)
                 let downloads = try await self.prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
                 LogCenter.info(L("Page \(pageNumber) : \(downloads.count) nouveaux médias à prendre.", "Page \(pageNumber): \(downloads.count) new media to fetch."))
@@ -850,6 +1182,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             collections[index].lastRun = Date()
             saveCollections()
         }
+        recordLastRunCount(canonical)
         if !completed {
             scanIncomplete = true
             status = L("Parcours incomplet — relance pour continuer", "Scan incomplete — relaunch to continue")
@@ -903,6 +1236,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                        preparedCount: &preparedCount)
         }
 
+        recordLastRunCount(canonical)
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
             saveCollections()
@@ -1299,16 +1633,41 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func runRedgifsUser(username: String, canonical: String, folder: URL,
                                 seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
                                 preparedCount: inout Int) async throws -> Bool {
+        try await runRedgifsList(label: username, canonical: canonical, folder: folder,
+                                 seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                 preparedCount: &preparedCount) { page in
+            try await self.fetchRedgifsUserPage(username: username, page: page)
+        }
+    }
+
+    /// Tag ou mot-clé : même pagination que la recherche de compte, seule la
+    /// route diffère. Le parcours est partagé pour que les deux ne puissent pas
+    /// diverger sur la reprise ou le dédoublonnage.
+    private func runRedgifsTag(tag: String, canonical: String, folder: URL,
+                               seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                               preparedCount: inout Int) async throws -> Bool {
+        try await runRedgifsList(label: "#\(tag)", canonical: canonical, folder: folder,
+                                 seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                                 preparedCount: &preparedCount) { page in
+            try await self.fetchRedgifsSearchPage(tag: tag, page: page)
+        }
+    }
+
+    /// Parcours commun aux listes RedGifs (compte ou tag).
+    private func runRedgifsList(label: String, canonical: String, folder: URL,
+                                seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                preparedCount: inout Int,
+                                fetch: (Int) async throws -> RedgifsUserSearchResponse) async throws -> Bool {
         var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
         var orderedVisited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         var seenPages = Set<[String]>()
         for page in 1...100 {
             try Task.checkCancellation()
             status = L("Recherche RedGifs… page \(page)", "Searching RedGifs… page \(page)")
-            LogCenter.net(L("RedGifs \(username) : page \(page) demandée…", "RedGifs \(username): page \(page) requested…"))
-            let response = try await fetchRedgifsUserPage(username: username, page: page)
+            LogCenter.net(L("RedGifs \(label) : page \(page) demandée…", "RedGifs \(label): page \(page) requested…"))
+            let response = try await fetch(page)
             let ids = response.gifs.map(\.id)
-            LogCenter.net(L("RedGifs \(username) : page \(page) reçue, \(ids.count) médias.", "RedGifs \(username): page \(page) received, \(ids.count) media."))
+            LogCenter.net(L("RedGifs \(label) : page \(page) reçue, \(ids.count) médias.", "RedGifs \(label): page \(page) received, \(ids.count) media."))
             if ids.isEmpty { break }
             guard seenPages.insert(ids).inserted else { break }
             let fresh = ids.filter { !visited.contains($0) }
@@ -1341,6 +1700,27 @@ struct UserCollection: Codable, Identifiable, Equatable {
             return try JSONDecoder().decode(RedgifsUserSearchResponse.self, from: data)
         } catch NetworkError.refused(let code) where code == 404 {
             throw NetworkError.invalid(L("Compte RedGifs introuvable : \(username).", "RedGifs account not found: \(username)."))
+        }
+    }
+
+    /// Page de recherche par tag. Même décodage que la recherche de compte :
+    /// seule l'adresse diffère, la forme de la réponse est identique.
+    private func fetchRedgifsSearchPage(tag: String, page: Int) async throws -> RedgifsUserSearchResponse {
+        let bearer = try await redgifsToken()
+        do {
+            let data = try await network.data(
+                RedgifsAPI.searchURL(text: tag, page: page),
+                bearer: bearer, headers: RedgifsAPI.headers(id: tag))
+            return try JSONDecoder().decode(RedgifsUserSearchResponse.self, from: data)
+        } catch NetworkError.refused(let code) where code == 401 {
+            token = nil
+            let bearer = try await redgifsToken()
+            let data = try await network.data(
+                RedgifsAPI.searchURL(text: tag, page: page),
+                bearer: bearer, headers: RedgifsAPI.headers(id: tag))
+            return try JSONDecoder().decode(RedgifsUserSearchResponse.self, from: data)
+        } catch NetworkError.refused(let code) where code == 404 {
+            throw NetworkError.invalid(L("Aucun contenu RedGifs pour « \(tag) ».", "No RedGifs content for “\(tag)”."))
         }
     }
 
@@ -1423,6 +1803,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
         transferUnit = total > 0 ? TransferUnit(done: 0, total: total) : nil
     }
 
+    /// Plafond d'espace disque, vérifié avant un parcours. Lève une erreur qui
+    /// n'est pas une panne : la session s'arrête proprement et les fichiers
+    /// terminés restent en place.
+    private func checkStorageQuota(folder: URL, canonical: String) throws {
+        guard storageQuota.isActive else { return }
+        let used = (try? CollectionFiles.scan(folder).totalBytes) ?? totalBytes
+        guard storageQuota.isReached(currentBytes: used) else { return }
+        storageLimitReached = true
+        LogCenter.info(L("Plafond d’espace atteint (\(ByteCountFormatter.string(fromByteCount: used, countStyle: .file)) sur \(ByteCountFormatter.string(fromByteCount: storageQuota.bytes, countStyle: .file))) : parcours arrêté.",
+                         "Storage limit reached (\(ByteCountFormatter.string(fromByteCount: used, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: storageQuota.bytes, countStyle: .file))): scan stopped."))
+        throw NetworkError.invalid(L("Plafond d’espace atteint : \(ByteCountFormatter.string(fromByteCount: used, countStyle: .file)) utilisés. Augmente la limite dans les Réglages ou supprime des médias.",
+                                     "Storage limit reached: \(ByteCountFormatter.string(fromByteCount: used, countStyle: .file)) used. Raise the limit in Settings or delete media."))
+    }
+
     private func recordTransferredItem() {
         guard var unit = transferUnit else { return }
         unit.done = min(unit.done + 1, unit.total)
@@ -1436,9 +1830,63 @@ struct UserCollection: Codable, Identifiable, Equatable {
         transferUnit = unit
     }
 
+    /// Posts Reddit collés dans le champ : seuls ces posts sont lus, sans
+    /// parcourir de flux. Le JSON du post fournit son titre, sa date et ses
+    /// médias — la même route que la résolution des galeries, qui expose aussi
+    /// les crossposts et les vidéos `v.redd.it`.
+    private func runRedditSelection(_ target: RedditPostRef.Target, canonical: String,
+                                    folder: URL, seenMedia: inout Set<Media>,
+                                    usedFilenames: inout Set<String>,
+                                    preparedCount: inout Int) async throws {
+        var prepared = 0
+        for post in target.posts {
+            try Task.checkCancellation()
+            status = L("Post \(post.id.dropFirst(3))…", "Post \(post.id.dropFirst(3))…")
+            guard let url = RedditPostRef.jsonURL(for: post) else { continue }
+            let data: Data
+            do {
+                data = try await network.data(url)
+            } catch {
+                // Un post supprimé ne doit pas annuler la sélection entière.
+                if case NetworkError.refused(let code) = error, code == 404 || code == 410 {
+                    LogCenter.info(L("Post introuvable, ignoré : \(post.id).", "Post not found, skipped: \(post.id)"))
+                    failed += 1
+                    continue
+                }
+                throw error
+            }
+            let resolved = try RedditPostRef.parsePost(data, fallback: post)
+            guard !resolved.media.isEmpty else {
+                LogCenter.info(L("Post sans média pris en charge, ignoré : \(post.id).", "Post without supported media, skipped: \(post.id)"))
+                continue
+            }
+            let downloads = try await prepareDownloads(
+                [Post(id: resolved.id, title: resolved.title, html: "",
+                      publishedAt: resolved.publishedAt, link: resolved.url.absoluteString)],
+                folder: folder, seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                author: canonical, mediaOverrides: [resolved.id: resolved.media])
+            prepared += downloads.count
+            beginTransferUnit(total: downloads.count)
+            try await executeDownloads(downloads, &preparedCount)
+        }
+        LogCenter.info(L("Posts collés : \(target.posts.count) lus, \(prepared) médias à prendre.", "Pasted posts: \(target.posts.count) read, \(prepared) media to fetch."))
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        recordLastRunCount(canonical)
+        if failed > 0 {
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) posts introuvables ou sans média.\n\(kept) médias conservés.",
+                             "\(failed) posts missing or without media.\n\(kept) media files kept.")
+            return
+        }
+        status = count == 0 ? L("Aucun nouveau média accessible", "No new accessible media")
+                            : L("\(count) médias téléchargés", "\(count) media downloaded")
+    }
+
     /// Keeps naming, deduplication and legacy migration identical across feed pages.
-    /// Les posts galerie (lien `/gallery/` sans média direct) sont résolus via
-    /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
+    /// Les posts galerie (lien `/gallery/` sans média direct) sont résolus via    /// le JSON du post, comme la prévisualisation : images `i.redd.it` et
     /// vidéos `v.redd.it` (DASH). Un échec galerie ignore juste ce post, sauf
     /// un refus HTTP 429 qui arrête la session comme n'importe quel autre.
     private func prepareDownloads(_ posts: [Post], folder: URL,
@@ -1451,17 +1899,28 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
+            // Borné au même plafond que les transferts : une page de 100 posts
+            // galerie lançait auparavant 100 requêtes simultanées vers
+            // reddit.com, très au-delà du réglage affiché et du budget serveur.
+            let limit = max(1, sessionLimit)
             try await withThrowingTaskGroup(of: (String, [Media]).self) { group in
-                for post in candidates {
-                    group.addTask {
-                        let list = try await GalleryFeed.resolve {
-                            try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
+                var next = 0
+                func enqueue(until target: Int) {
+                    while next < min(target, candidates.count) {
+                        let post = candidates[next]
+                        next += 1
+                        group.addTask {
+                            let list = try await GalleryFeed.resolve {
+                                try await self.previewGalleryMedia(feedID: post.id, galleryID: GalleryFeed.linkedID(post.html))
+                            }
+                            return (post.id, list)
                         }
-                        return (post.id, list)
                     }
                 }
+                enqueue(until: limit)
                 for try await (id, list) in group {
                     galleryLists[id] = list
+                    enqueue(until: next + 1)
                 }
             }
             try Task.checkCancellation()
@@ -1470,6 +1929,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var renamedExisting = false
         var skippedExisting = 0
         var skippedSeen = 0
+        var skippedFilter = 0
+        let filter = downloadFilter
         if !candidates.isEmpty {
             let resolved = galleryLists.values.reduce(0) { $0 + $1.count }
             LogCenter.info(L("Galeries : \(candidates.count) à résoudre, \(resolved) médias trouvés.", "Galleries: \(candidates.count) to resolve, \(resolved) media found."))
@@ -1481,6 +1942,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
             for (index, item) in media.enumerated() {
                 guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
+                // Filtres appliqués avant toute mise en file : un média écarté
+                // n'est jamais demandé au réseau. Le post reste « vu », sinon un
+                // filtre exigeant ferait relire tout le flux à chaque lancement.
+                if filter.isActive {
+                    let kind = Self.mediaKind(for: item, xFetishVideo: xFetishVideos[post.id] != nil)
+                    guard filter.allows(kind: kind, title: post.title, publishedAt: post.publishedAt) else {
+                        skippedFilter += 1
+                        continue
+                    }
+                }
                 let ext: String
                 // Une URL de média X porte son format dans le chemin pour les vidéos, mais
                 // `pbs.twimg.com/media/<id>.jpg` peut être servie en `png` ou
@@ -1524,11 +1995,27 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 }
             }
         }
-        if skippedExisting > 0 || skippedSeen > 0 {
-            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen."))
+        if skippedExisting > 0 || skippedSeen > 0 || skippedFilter > 0 {
+            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus, \(skippedFilter) écartés par les filtres.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen, \(skippedFilter) filtered out."))
         }
         if renamedExisting { reload() }
         return downloads
+    }
+
+    /// Nature d'un média candidat, pour les filtres. Une vidéo Reddit ou
+    /// X-Fetish est une vidéo ; un GIF animé X arrive en `.mp4` et compte comme
+    /// vidéo, faute d'information contraire dans le flux.
+    private static func mediaKind(for media: Media, xFetishVideo: Bool) -> DownloadFilter.MediaKind {
+        if xFetishVideo { return .video }
+        switch media {
+        case .redditVideo: return .video
+        case .redgifs: return .gif
+        case .direct(let url):
+            let ext = url.pathExtension.lowercased()
+            if ["mp4", "mov", "m4v"].contains(ext) { return .video }
+            if ext == "gif" { return .gif }
+            return .image
+        }
     }
 
     /// Relance bornée sur erreur transitoire (réseau mobile instable) :

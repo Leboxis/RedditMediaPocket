@@ -222,6 +222,9 @@ public enum FilenamePolicy {
             // `tw` doit rester distinct de `t` : un compte X ne doit jamais
             // hériter du dossier d'un profil Reddit au même pseudo.
             else if first == "tw" { typeSuffix = " - X" }
+            // Sélection de posts Reddit : `reddit/posts` ne doit pas produire
+            // le dossier `Rposts` d'un subreddit nommé « posts ».
+            else if first == "reddit" { typePrefix = "Posts " }
             else if ["u", "r", "saved"].contains(first) { typePrefix = String(first.prefix(1)).uppercased() }
         }
         if let last = parts.last { base = last }

@@ -1,7 +1,9 @@
 import Foundation
 
 /// Sidecars contain dates only, never session cookies or private feed URLs.
-public struct MediaMetadata: Codable, Equatable {
+/// `Sendable` : la galerie la lit hors du fil principal pour bâtir son index
+/// de recherche.
+public struct MediaMetadata: Codable, Equatable, Sendable {
     public let downloadedAt: Date
     public let postDate: Date?
     public let author: String?

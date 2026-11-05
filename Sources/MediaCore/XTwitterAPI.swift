@@ -1,7 +1,7 @@
 import Foundation
 
 public enum XTwitterError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages, invalidPageLimit
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +21,8 @@ public enum XTwitterError: LocalizedError {
             return L("Trop de pages de médias X à parcourir.", "Too many X media pages to scan.")
         case .invalidPageLimit:
             return L("Limite de pages invalide.", "Invalid page limit.")
+        case .postUnsupported:
+            return L("Les posts X isolés ne sont pas pris en charge. Colle l'adresse du compte : les médias de ses posts seront parcourus.", "Single X posts are not supported. Paste the account address instead: the media of its posts will be scanned.")
         }
     }
 }
@@ -105,6 +107,15 @@ public enum XTwitterAPI {
             throw XTwitterError.invalidUsername
         }
         return name
+    }
+
+    /// Adresse d'un post isolé (`x.com/<pseudo>/status/<id>`). Détectée
+    /// seulement pour refuser la saisie avec un message utile : ce cas n'est
+    /// pas pris en charge, et le dire vaut mieux qu'une erreur de pseudo
+    /// (« status » n'est pas un compte).
+    public static func isStatusURL(_ text: String) -> Bool {
+        text.range(of: "(?:^|//)(?:www\\.)?(?:x|twitter)\\.com/[A-Za-z0-9_]+/status/",
+                   options: .regularExpression) != nil
     }
 
     /// En-têtes des appels API. `ct0` est le jeton CSRF, renvoyé par X dans un

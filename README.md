@@ -2,6 +2,37 @@
 
 Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish) et `tw` (médias publics d'un compte X). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
+## Liens et sélections
+
+Dans tous les modes sauf `♥`, une **adresse collée** est reconnue et prend la priorité sur le nom :
+
+| Forme collée | Effet |
+|---|---|
+| `https://www.reddit.com/r/<sub>/` | même effet que saisir `r/<sub>` |
+| `https://www.reddit.com/r/<sub>/comments/<id>/…` ou `https://redd.it/<id>` | seuls ces posts sont lus, sans parcourir de flux |
+| `https://www.redgifs.com/watch/<id>` ou `/ifr/<id>` | un GIF unique |
+| `rg/#<tag>`, `https://www.redgifs.com/niches/<tag>` | un tag RedGifs, parcouru page par page |
+| `https://x-fetish.tube/video/<id>/…` ou `/albums/<id>/…` | seuls ces médias X-Fetish sont téléchargés |
+| `https://x.com/<compte>` | même effet que `tw/<compte>` |
+
+Plusieurs adresses de posts Reddit peuvent être collées ensemble (retours à la ligne, virgules ou espaces) : elles partagent la collection stable `reddit/posts`, et les adresses sont mémorisées pour la relance. Une adresse de post X isolée (`x.com/<compte>/status/<id>`) est refusée avec un message explicite : X n'expose pas cette lecture sans parcourir le compte.
+
+## Filtres de téléchargement
+
+Le bouton **Filtres** (trois lignes, dans la barre) décide de ce qui est **téléchargé**, par collection : types de médias (images / vidéos / GIF), date de publication minimale, taille minimale, mots-clés exigés ou exclus dans le titre. Un filtre actif se repère à son icône pleine. Les filtres sont mémorisés pour la source concernée et ne s'appliquent jamais à une autre.
+
+Un média écarté par un filtre n'est pas téléchargé mais reste « vu » : il ne sera pas réévalué au lancement suivant. C'est volontaire — sans cela, un filtre exigeant ferait relire tout le flux à chaque exécution.
+
+## Espace disque
+
+**Réglages → Stockage → Espace disque maximal** propose une limite de 5 à 100 Go, ou aucune. Le plafond porte sur la collection en cours et est vérifié avant chaque page : quand il est atteint, le parcours s'arrête proprement et les médias déjà téléchargés restent en place.
+
+## Galerie : recherche et tri
+
+Au-dessus de la grille, la recherche porte sur le nom des fichiers, l'auteur et le lien du post (lus depuis les métadonnées des téléchargements). Le menu voisin propose un tri (plus récent, plus ancien, plus lourd, plus léger, nom) et un filtre rapide images / vidéos. Ces réglages ne changent que l'affichage : ils ne modifient jamais ce qui est téléchargé.
+
+Chaque pastille de collection affiche `+N` lorsque le dernier parcours y a ajouté N médias.
+
 ## État réel
 
 Le code et le workflow sont disponibles dans ce dépôt. GitHub Actions compile et publie une IPA à chaque push sur main. Consulter le résultat du dernier workflow avant de télécharger une release. Les essais dans LiveContainer sur iPhone restent à effectuer. Un appel public au RSS de `u/reddit` a répondu HTTP 200 le 5 septembre 2026. Ce résultat ne garantit pas l'accès depuis un autre réseau ou pour un autre profil.
@@ -11,6 +42,8 @@ Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronque
 Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencontrer une page entièrement déjà connue : c'est là que les nouveaux posts s'arrêtent. Si une session précédente a été interrompue au milieu de cette lecture, le point d'arrivée est mémorisé et l'exécution suivante saute directement dessus au lieu de conclure à tort qu'elle a tout vu. Ce point est effacé dès que le parcours rejoint l'historique, ou conservé si les 100 pages ont été consommées sans l'atteindre.
 
 Les profils (`u/pseudo`, flux `submitted`), les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) et les comptes RedGifs (`RG/pseudo` ou URL `redgifs.com/users/pseudo`, tri Nouveaux via `order=new`, 80 par page, 100 pages max côté API) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`), ceux des comptes RedGifs `redgifs.` (ex. `redgifs.upset_trash_3094`) et les clés `rg/pseudo` pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
+
+Les tags RedGifs utilisent la même pagination sous `redgifs.tag.<tag>` (clé `rg/#<tag>`), et un GIF unique sous `redgifs.gif.<id>` (clé `rg/gif/<id>`) : aucun parcours n'est nécessaire pour un GIF seul. Les trois formes restent des collections distinctes.
 
 Albums X-Fetish (`x/`) : saisir le nom dans l'adresse du profil après `/models/`, par exemple `itwasalwaysmysolesvip` pour `https://x-fetish.tube/models/itwasalwaysmysolesvip/` (l'adresse du profil peut aussi être collée telle quelle), ou coller une ou plusieurs adresses de vidéo `/video/<id>/…` ou d'album `/albums/<id>/…`, séparées par des retours à la ligne, des virgules ou des espaces. Un sélecteur **Images / Vidéos / Les deux** apparaît sous le champ de saisie ; il est mémorisé et vaut « Images » par défaut. Une collection distincte `x/nom` est créée dans le dossier `x.nom`, quel que soit le sélecteur. Une sélection d'adresses seules (sans profil) ne parcourt pas le catalogue : seules ces vidéos et albums sont téléchargés, dans la collection stable `x/videos` (ou `x/albums` pour des albums seuls), et les adresses collées sont mémorisées pour la relance.
 

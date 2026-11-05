@@ -48,14 +48,21 @@ public enum FeedSource: Hashable, Sendable {
     case saved(String)
     case xFetish(XFetishAlbums.Target)
     case redgifsUser(String)
+    case redgifsTag(String)
+    case redgifsGif(String)
     case twitterUser(String)
+    /// Posts Reddit isolés, désignés par leur adresse et non par un flux.
+    /// Une sélection ne parcourt aucun catalogue : seuls ces posts sont lus.
+    case redditPosts(RedditPostRef.Target)
 
     /// Tri disponible pour les subreddits. `top` utilise `t=month` côté serveur.
     public static let subredditSorts = ["new", "hot", "top"]
 
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
-    /// `rg/pseudo` (ou `g/`), `tw/pseudo` (`@pseudo` ou `x.com/pseudo`),
-    /// URL `redgifs.com/users/pseudo` ou un pseudo nu
+    /// `rg/pseudo` (ou `g/`), `rg/#tag` et une adresse `redgifs.com/watch/<id>`,
+    /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`),
+    /// une ou plusieurs adresses `reddit.com/r/…/comments/<id>/…` (ou `redd.it/<id>`),
+    /// une URL `redgifs.com/users/pseudo` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,22 +70,26 @@ public enum FeedSource: Hashable, Sendable {
         // Formes X testées en premier : `x.com/pseudo` contient « / » et serait
         // sinon lu comme un subreddit `x` nommé `com/pseudo`.
         if lower.hasPrefix("tw/") || lower.hasPrefix("@") || lower.contains("x.com/") || lower.contains("twitter.com/") {
+            // Un post isolé n'est pas un compte : refuser explicitement plutôt
+            // que d'échouer sur « status », qui n'est pas un pseudo valide.
+            if XTwitterAPI.isStatusURL(trimmed) { throw XTwitterError.postUnsupported }
             return try .twitterUser(XTwitterAPI.username(trimmed))
         }
         if lower.hasPrefix("saved/") {
             return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
         }
-        if lower.hasPrefix("rg/") {
-            return try .redgifsUser(RedgifsAPI.username(String(trimmed.dropFirst(3))))
-        }
-        if lower.hasPrefix("g/") {
-            return try .redgifsUser(RedgifsAPI.username(String(trimmed.dropFirst(2))))
+        if lower.hasPrefix("rg/") || lower.hasPrefix("g/") {
+            return try parseRedgifs(String(trimmed.dropFirst(lower.hasPrefix("rg/") ? 3 : 2)))
         }
         if lower.contains("redgifs.com/users/") {
             let after = lower.components(separatedBy: "redgifs.com/users/").last ?? ""
             let name = after.split(separator: "/").first.map(String.init) ?? ""
             let clean = name.split(separator: "?").first.map(String.init) ?? ""
             return try .redgifsUser(RedgifsAPI.username(clean))
+        }
+        // Adresse RedGifs d'un GIF ou d'un tag, collée telle quelle.
+        if lower.contains("redgifs.com/") {
+            return try parseRedgifs(trimmed)
         }
         if lower.hasPrefix("r/") {
             return try .subreddit(subredditName(String(trimmed.dropFirst(2))))
@@ -95,7 +106,45 @@ public enum FeedSource: Hashable, Sendable {
                 return .xFetish(target)
             }
         }
+        // Adresse Reddit d'un post isolé, seule ou en sélection.
+        if lower.contains("reddit.com/") || lower.contains("redd.it/") {
+            if let target = try? RedditPostRef.parseTarget(trimmed) {
+                return .redditPosts(target)
+            }
+            // Une adresse de subreddit sans `/comments/` reste un subreddit :
+            // coller `https://www.reddit.com/r/pics/` doit faire le même effet
+            // que saisir `r/pics`.
+            if let name = subredditFromURL(trimmed) { return try .subreddit(subredditName(name)) }
+        }
         return try .user(MediaExtractor.username(trimmed))
+    }
+
+    /// Nom du subreddit lu dans une adresse Reddit (`/r/<nom>/…`), ou `nil`.
+    public static func subredditFromURL(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value.contains("://") ? value : "https://" + value),
+              url.scheme == "https", let host = url.host?.lowercased(),
+              host == "reddit.com" || host.hasSuffix(".reddit.com") else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        guard parts.count >= 2, parts[0].lowercased() == "r" else { return nil }
+        return parts[1]
+    }
+
+    /// Sous-forme `rg/…` : un tag (`#tag`, `niches/<tag>`) ou un GIF unique
+    /// (`/watch/<id>`), le pseudo restant la forme par défaut.
+    public static func parseRedgifs(_ text: String) throws -> FeedSource {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = value.lowercased()
+        if lower.hasPrefix("#") || lower.contains("/niches/") || lower.contains("/gifs/search") {
+            return try .redgifsTag(RedgifsAPI.tag(value))
+        }
+        if lower.contains("/watch/") || lower.contains("/ifr/") {
+            guard let id = RedgifsAPI.gifID(value) else { throw FeedError.invalidUsername }
+            return .redgifsGif(id)
+        }
+        // Un identifiant nu n'est pas distinguable d'un pseudo : la forme
+        // explicite reste `rg/<pseudo>`, comme avant.
+        return try .redgifsUser(RedgifsAPI.username(value))
     }
 
     public static func subredditName(_ text: String) throws -> String {
@@ -107,7 +156,8 @@ public enum FeedSource: Hashable, Sendable {
     }
 
     /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
-    /// `x/profil`, `rg/pseudo` ou `tw/pseudo`), utilisé comme clé de collection.
+    /// `x/profil`, `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo` ou
+    /// `reddit/posts`), utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
@@ -115,7 +165,12 @@ public enum FeedSource: Hashable, Sendable {
         case .saved(let name): return "saved/\(name)"
         case .xFetish(let target): return "x/\(target.collectionName)"
         case .redgifsUser(let name): return "rg/\(name)"
+        case .redgifsTag(let tag): return "rg/#\(tag)"
+        case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
+        // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
+        // subreddit nommé « posts » partageraient identifiant et dossier.
+        case .redditPosts: return "reddit/posts"
         }
     }
 
@@ -136,7 +191,10 @@ public enum FeedSource: Hashable, Sendable {
         case .saved(let name): return "saved.\(name)"
         case .xFetish(let target): return "x.\(target.collectionName)"
         case .redgifsUser(let name): return "redgifs.\(name)"
+        case .redgifsTag(let tag): return "redgifs.tag.\(tag)"
+        case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
+        case .redditPosts: return "reddit.posts"
         }
     }
 
@@ -184,11 +242,20 @@ public enum FeedSource: Hashable, Sendable {
             return components.url!
         case .redgifsUser(let name):
             return RedgifsAPI.userSearchURL(username: name, page: 1)
+        case .redgifsTag(let tag):
+            return RedgifsAPI.searchURL(text: tag, page: 1)
+        case .redgifsGif(let id):
+            // Un GIF unique n'a pas de flux : cette adresse ne sert qu'à
+            // l'affichage, le parcours le résout directement.
+            return RedgifsAPI.gifURL(id: id)
         case .twitterUser(let name):
             // Point d'entrée sans session : sert uniquement à résoudre le
             // compte. Le parcours réel passe par `XTwitterAPI.userMedia` avec
             // les cookies de session, jamais par cette URL.
             return XTwitterAPI.userByScreenName(username: name)
+        case .redditPosts(let target):
+            // Sélection de posts : l'URL de départ ne sert qu'à l'affichage.
+            return target.posts.first?.url ?? URL(string: "https://www.reddit.com/")!
         }
     }
 }

@@ -1,3 +1,14 @@
+Coller un lien, filtrer ce qu'on télécharge, et retrouver ce qu'on a.
+
+- **Liens acceptés partout.** Une adresse collée dans le champ prend la priorité sur le nom : post Reddit (`/r/<sub>/comments/<id>/` ou `redd.it/<id>`), subreddit, GIF RedGifs (`/watch/<id>`), tag RedGifs (`#tag` ou `/niches/<tag>`), album ou vidéo X-Fetish. Plusieurs adresses de posts Reddit peuvent être collées ensemble ; elles partagent la collection stable `reddit/posts` et sont mémorisées pour la relance. Une adresse de post X isolée est refusée avec un message explicite plutôt qu'avec une erreur de pseudo.
+- **Posts Reddit isolés.** Seuls les posts collés sont lus, via le JSON du post : son titre, sa date et ses médias (galerie, crosspost, `v.redd.it`). Aucun flux n'est parcouru.
+- **Tags RedGifs.** Même pagination qu'un compte, sous `redgifs.tag.<tag>`. Un GIF unique passe par le même chemin que le catalogue, sans parcours.
+- **Filtres de téléchargement**, par collection : types (images / vidéos / GIF), date de publication minimale, taille minimale, mots-clés exigés ou exclus dans le titre. Un média écarté reste « vu » et n'est pas réévalué au lancement suivant, pour ne pas relire tout le flux à chaque exécution.
+- **Plafond d'espace disque** (Réglages → Stockage, de 5 à 100 Go ou aucune limite). Vérifié avant chaque page : le parcours s'arrête proprement, les fichiers terminés restent en place.
+- **Recherche et tri dans la galerie** : nom de fichier, auteur ou lien du post ; tri par date, taille ou nom ; filtre rapide images / vidéos. Ces réglages ne changent que l'affichage.
+- **Compteur de nouveautés** sur chaque pastille : `+N` médias ajoutés au dernier parcours. `lastRun` existait déjà mais n'était affiché nulle part.
+- **Résolution des galeries bornée** au nombre de transferts simultanés. Une page de 100 posts galerie lançait auparavant 100 requêtes simultanées vers reddit.com, très au-delà du réglage affiché et du budget serveur.
+
 Choix X-Fetish : 8, 16, 24 ou 32 morceaux par vidéo.
 
 - Réglages → X-Fetish → Morceaux par vidéo propose quatre boutons, avec 24 morceaux et 6 téléchargements simultanés par défaut pour X-Fetish. Les autres sources gardent 3 téléchargements simultanés par défaut. Le choix reste mémorisé et s'applique au prochain parcours ; les anciennes valeurs de morceaux non proposées reviennent à 24. Les préférences valides déjà enregistrées restent inchangées.

@@ -46,10 +46,72 @@ public enum RedgifsAPI {
         ]
         return components.url!
     }
+
+    /// Recherche paginée par mot-clé ou tag (`order=new`). C'est la route que
+    /// le lecteur web appelle quand on ouvre un tag : même pagination que la
+    /// recherche de compte, donc le même parcours peut la consommer.
+    public static func searchURL(text: String, page: Int = 1, count: Int = 80) -> URL {
+        var components = URLComponents(string: "https://api.redgifs.com/v2/gifs/search")!
+        components.queryItems = [
+            URLQueryItem(name: "search_text", value: text),
+            URLQueryItem(name: "order", value: "new"),
+            URLQueryItem(name: "page", value: String(max(1, page))),
+            URLQueryItem(name: "count", value: String(min(100, max(1, count))))
+        ]
+        return components.url!
+    }
+
+    /// Tag ou mot-clé : minuscules, lettres/chiffres, tirets et underscores.
+    /// Les espaces sont convertis en tirets, comme dans les adresses du site.
+    public static func tag(_ text: String) throws -> String {
+        var name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.lowercased().hasPrefix("rg/") { name = String(name.dropFirst(3)) }
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Forme `#tag` et adresse `redgifs.com/niches/<tag>` ou
+        // `/gifs/search?search_text=<tag>` acceptées telles quelles.
+        if name.hasPrefix("#") { name = String(name.dropFirst()) }
+        if let range = name.range(of: "(?:^|//)(?:www\\.)?redgifs\\.com/(?:niches/|gifs/search/?)",
+                                  options: .regularExpression) {
+            name = String(name[range.upperBound...])
+            if let query = name.firstIndex(of: "?") { name = String(name[name.startIndex..<query]) }
+        }
+        if let query = name.firstIndex(of: "?") {
+            let tail = String(name[name.index(after: query)...])
+            if let value = tail.split(separator: "&")
+                .first(where: { $0.hasPrefix("search_text=") })?
+                .dropFirst("search_text=".count) {
+                name = String(value)
+            } else {
+                name = String(name[name.startIndex..<query])
+            }
+        }
+        name = name.replacingOccurrences(of: " ", with: "-").lowercased()
+        guard name.range(of: "^[a-z0-9_-]{2,40}$", options: .regularExpression) != nil else {
+            throw FeedError.invalidUsername
+        }
+        return name
+    }
+
+    /// Identifiant d'un GIF unique depuis une adresse `/watch/<id>` ou
+    /// `/ifr/<id>`, ou depuis l'identifiant nu.
+    public static func gifID(_ text: String) -> String? {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.lowercased().hasPrefix("rg/") { value = String(value.dropFirst(3)) }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = value.range(of: "(?:^|//)(?:www\\.)?redgifs\\.com/(?:watch|ifr)/",
+                                   options: .regularExpression) {
+            value = String(value[range.upperBound...])
+            value = String(value.prefix { $0.isLetter || $0.isNumber })
+        }
+        let lowered = value.lowercased()
+        guard lowered.range(of: "^[a-z0-9]{5,32}$", options: .regularExpression) != nil else { return nil }
+        return lowered
+    }
 }
 
-/// Réponse `GET /v2/users/<pseudo>/search` : seule la liste `gifs` et la
-/// pagination sont exploitées (`hd` = meilleure qualité, `sd` = repli).
+/// Réponse `GET /v2/users/<pseudo>/search` ou `GET /v2/gifs/search` : seule la
+/// liste `gifs` et la pagination sont exploitées (`hd` = meilleure qualité,
+/// `sd` = repli).
 public struct RedgifsUserSearchResponse: Decodable {
     public struct URLs: Decodable {
         public let hd: URL?

@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var followingPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
+    @State private var filtersPresented = false
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
@@ -54,6 +55,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $settingsPresented) {
                 DownloadSettings(model: model)
+            }
+            .sheet(isPresented: $filtersPresented) {
+                DownloadFilterSheet(model: model)
             }
             .sheet(isPresented: $savedPostsPresented) {
                 SavedPostsView(model: model) { _ in
@@ -120,8 +124,8 @@ struct ContentView: View {
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
-                TextField(model.sourceKind == "r" ? L("nom du sub", "subreddit name") :
-                          (model.sourceKind == "rg" ? L("pseudo RedGifs", "RedGifs username") :
+                TextField(model.sourceKind == "r" ? L("sub, ou lien de post", "sub, or post link") :
+                          (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
                             (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
                               (model.sourceKind == "tw" ? L("compte X", "X account") : L("pseudo", "username")))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -319,30 +323,93 @@ struct ContentView: View {
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
-            ScrollView {
-                LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(model.files, id: \.self) { url in
-                        Button { editing = false; selection = Selection(url: url, files: model.files) } label: {
-                            MediaThumbnail(url: url)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(Rectangle())
-                        .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l’image", "Open image"))
-                        .contextMenu {
-                            Button { info = MediaInfoSelection(url: url) } label: {
-                                Label(L("Informations du média", "Media information"), systemImage: "info.circle")
+            galleryToolbar
+            if model.displayedFiles.isEmpty {
+                Spacer()
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 34, weight: .ultraLight)).foregroundStyle(.tertiary)
+                Text(L("Aucun média ne correspond à la recherche.", "No media matches the search."))
+                    .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 3) {
+                        ForEach(model.displayedFiles, id: \.self) { url in
+                            Button { editing = false; selection = Selection(url: url, files: model.displayedFiles) } label: {
+                                MediaThumbnail(url: url)
+                                    .contentShape(Rectangle())
                             }
-                            Button(role: .destructive) { mediaPendingDeletion = url } label: {
-                                Label(L("Supprimer", "Delete"), systemImage: "trash")
+                            .buttonStyle(.plain)
+                            .contentShape(Rectangle())
+                            .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l’image", "Open image"))
+                            .contextMenu {
+                                Button { info = MediaInfoSelection(url: url) } label: {
+                                    Label(L("Informations du média", "Media information"), systemImage: "info.circle")
+                                }
+                                Button(role: .destructive) { mediaPendingDeletion = url } label: {
+                                    Label(L("Supprimer", "Delete"), systemImage: "trash")
+                                }
+                                .disabled(model.running)
                             }
-                            .disabled(model.running)
                         }
                     }
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
-            .scrollDismissesKeyboard(.interactively)
         }
+    }
+
+    /// Recherche, tri et filtre rapide de la galerie. Ces réglages ne changent
+    /// que l'ordre et la visibilité des fichiers déjà présents, jamais ce qui
+    /// est téléchargé — d'où leur place ici plutôt que dans les Réglages.
+    private var galleryToolbar: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                HStack(spacing: 5) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField(L("Rechercher", "Search"), text: $model.gallerySearch)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.search)
+                    if !model.gallerySearch.isEmpty {
+                        Button { model.gallerySearch = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(L("Effacer la recherche", "Clear search"))
+                    }
+                }
+                .font(.footnote)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+
+                Menu {
+                    Picker(L("Tri", "Sort"), selection: $model.gallerySort) {
+                        ForEach(Downloader.GallerySort.allCases, id: \.self) { sort in
+                            Text(sort.label).tag(sort)
+                        }
+                    }
+                    Divider()
+                    Picker(L("Type", "Type"), selection: $model.galleryKindFilter) {
+                        ForEach(Downloader.GalleryKindFilter.allCases, id: \.self) { kind in
+                            Text(kind.label).tag(kind)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                        .font(.footnote.weight(.semibold))
+                        .frame(width: 30, height: 30)
+                        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .accessibilityLabel(L("Tri et filtre", "Sort and filter"))
+            }
+            if model.displayedFiles.count != model.files.count {
+                Text(L("\(model.displayedFiles.count) sur \(model.files.count) médias", "\(model.displayedFiles.count) of \(model.files.count) media"))
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 12).padding(.bottom, 6)
     }
 
     private var toolbarContent: some ToolbarContent {
@@ -358,6 +425,15 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button { followingPresented = true } label: { Image(systemName: "person.2") }
                     .accessibilityLabel(L("Comptes suivis", "Followed accounts"))
+            }
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button { filtersPresented = true } label: {
+                    Image(systemName: model.downloadFilter.isActive
+                          ? "line.3.horizontal.decrease.circle.fill"
+                          : "line.3.horizontal.decrease.circle")
+                }
+                .disabled(model.running)
+                .accessibilityLabel(L("Filtres de téléchargement", "Download filters"))
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 LogsButton()
@@ -390,10 +466,19 @@ struct ContentView: View {
 
     private func userChip(_ collection: UserCollection) -> some View {
         let active = model.activeUser == collection.id
+        let fresh = model.lastRunCount(for: collection.id)
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
                 Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))))
                 Text(collection.displayName).lineLimit(1)
+                // Ce qui a été réellement ajouté au passage précédent : l'état
+                // existait déjà (`lastRun`) mais n'était affiché nulle part.
+                if let fresh, fresh > 0, !active {
+                    Text("+\(fresh)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .monospacedDigit()
+                }
                 if active { Image(systemName: "checkmark") }
             }
             .font(.caption.weight(.medium))
@@ -541,6 +626,23 @@ private struct DownloadSettings: View {
                          : L("Session distincte de Reddit, requise par la source tw. X ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit, required by the tw source. X publishes no media without it. Its rate limits still apply."))
                 }
                 KDriveSettingsSection()
+                Section {
+                    Picker(L("Espace disque maximal", "Maximum disk space"), selection: Binding(
+                        get: { StorageQuota.gigabytes(for: model.storageQuota.bytes) },
+                        set: { model.storageQuota = StorageQuota(bytes: Int64($0) * StorageQuota.bytesPerGB) }
+                    )) {
+                        ForEach(StorageQuota.optionsGB, id: \.self) { gb in
+                            Text(StorageQuota.label(gb: gb)).tag(gb)
+                        }
+                    }
+                    .disabled(model.running)
+                } header: {
+                    Text(L("Stockage", "Storage"))
+                } footer: {
+                    Text(model.running
+                         ? L("Appliqué au prochain lancement.", "Applies to the next run.")
+                         : L("Le parcours s'arrête proprement quand le plafond est atteint ; les médias déjà téléchargés restent en place. Le plafond porte sur la collection en cours.", "The scan stops cleanly once the limit is reached; media already downloaded stay in place. The limit applies to the current collection."))
+                }
                 Section {
                     Button(L("Supprimer tous les téléchargements", "Delete all downloads"), role: .destructive) { confirmDeleteAll = true }
                         .disabled(model.running)
