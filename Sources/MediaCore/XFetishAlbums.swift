@@ -121,26 +121,38 @@ public enum XFetishAlbums {
 
     /// Le champ accepte plusieurs adresses (une par ligne, ou séparées par des
     /// virgules) : profil, vidéos, albums, ou un mélange.
+    ///
+    /// Le découpage sur les espaces ne s'applique qu'à une vraie sélection,
+    /// c'est-à-dire quand au moins une adresse de vidéo ou d'album est
+    /// reconnue. Sinon l'entrée entière est un nom de profil : sans cette
+    /// règle, `not a slug` se découpait en trois noms valides et passait au
+    /// lieu d'être refusé.
     public static func parseTarget(_ input: String) throws -> Target {
-        var model: String?
+        let tokens = input.split { $0.isWhitespace || $0 == "," || $0 == ";" }.map(String.init)
         var videos: [XFetishVideos.Video] = []
         var albums: [Album] = []
         var seenVideos = Set<String>()
         var seenAlbums = Set<String>()
-        let tokens = input.split { $0.isWhitespace || $0 == "," || $0 == ";" }.map(String.init)
+        var hasReference = false
         for token in tokens {
             if let video = parseVideoRef(token) {
+                hasReference = true
                 if seenVideos.insert(video.id).inserted { videos.append(video) }
-                continue
-            }
-            if let album = parseAlbumRef(token) {
+            } else if let album = parseAlbumRef(token) {
+                hasReference = true
                 if seenAlbums.insert(album.id).inserted { albums.append(album) }
-                continue
             }
-            model = try modelName(token)
         }
-        guard model != nil || !videos.isEmpty || !albums.isEmpty else {
-            throw FeedError.invalidXFetishProfile
+        // Aucune adresse reconnue : c'est un nom de profil, espaces compris.
+        // Un nom contenant un espace est invalide et doit lever, pas être
+        // interprété comme trois profils successifs.
+        if !hasReference {
+            return Target(model: try modelName(input), videos: [], albums: [])
+        }
+        // Sélection : un nom de profil éventuel accompagne les adresses.
+        var model: String?
+        for token in tokens where parseVideoRef(token) == nil && parseAlbumRef(token) == nil {
+            model = try modelName(token)
         }
         return Target(model: model, videos: videos, albums: albums)
     }
