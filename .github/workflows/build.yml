@@ -49,9 +49,15 @@ jobs:
           python3 scripts/make_source.py --repo "$REPOSITORY" --version "0.2.${BUILD_NUMBER}" \
             --ipa dist/RedditMediaPocket.ipa --output dist/apps.json
           cp icon.png dist/icon.png
-      - uses: actions/upload-artifact@v4
+      - name: Keep the build for pull request runs only
+        # A push to main publishes the same files as a release, and release
+        # assets are not counted against artifact storage. Uploading both
+        # duplicated the IPA on every commit and filled the allowance.
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
         with:
           name: RedditMediaPocket
+          retention-days: 2
           path: |
             dist/RedditMediaPocket.ipa
             dist/apps.json
