@@ -5,16 +5,22 @@ import MediaCore
 ///
 /// L'API `api/post/item_list` exige une signature `X-Bogus`/`X-Gnarly` que seul
 /// le JavaScript embarqué de TikTok produit : une requête URLSession même
-/// enrichie du contexte web complet se voit refusée (HTTP 400). Ce paginateur
-/// charge la page profil dans une WebView cachée branchée sur la session
-/// TikTok (`TikTokSession.shared.store`), défile comme un lecteur, et capture
-/// les réponses `item_list` que la page signe et charge elle-même, via un
-/// crochet posé sur `fetch` et `XMLHttpRequest` avant l'exécution du site.
-/// Aucun identifiant n'est lu : seuls les corps JSON des réponses publiques
-/// de la liste des publications transitent vers le parcours. Pour le
-/// diagnostic, le crochet confirme son installation et signale chaque route
-/// appelée par la page (une fois par chemin) : si TikTok mobile-web pagine
-/// par une autre route, ou si la page reste sur un mur, le journal le montre.
+/// enrichie du contexte web complet se voit refusée (HTTP 400, ou 200 avec un
+/// corps vide). Ce paginateur charge la page profil dans une WebView cachée
+/// branchée sur la session TikTok (`TikTokSession.shared.store`), défile comme
+/// un lecteur, et capture les réponses `item_list` que la page signe et
+/// charge elle-même, via un crochet posé sur `fetch` et `XMLHttpRequest`
+/// avant l'exécution du site. Aucun identifiant n'est lu : seuls les corps
+/// JSON des réponses publiques de la liste des publications transitent vers
+/// le parcours.
+///
+/// La WebView fait la taille d'un iPhone : un viewport plus haut que le
+/// contenu empêche le déclenchement du défilement infini (la page tient
+/// entière à l'écran, TikTok ne charge donc jamais de seconde page).
+/// Pour le diagnostic, le crochet confirme son installation, signale chaque
+/// route appelée par la page (une fois par chemin), chaque hauteur atteinte
+/// en fin de défilement, et le statut et la taille de chaque réponse
+/// `item_list` — une réponse vide se voit ainsi, au lieu d'un silence.
 @MainActor final class TikTokWebPaginator: NSObject {
     /// Nom du gestionnaire de messages côté page.
     static let hookName = "tiktokItemListHook"
@@ -22,7 +28,11 @@ import MediaCore
     /// Crochet posé avant les scripts de TikTok : il confirme son injection,
     /// signale chaque route appelée par la page, et recopie chaque réponse
     /// `/item_list` vers le gestionnaire natif sans altérer la requête ni la
-    /// réponse originales.
+    /// réponse originales. Le statut HTTP et le corps (même vide) partent
+    /// toujours : une réponse 200 vide est le refus discret de TikTok, la
+    /// distinguer d'un échec de capture évite de chercher au mauvais endroit.
+    /// Pour XHR, `responseText` lève quand `responseType` vaut `json` : la
+    /// lecture retombe alors sur `response` sérialisé.
     static let hookScript = #"""
     (function() {
       var handler = function(payload) {
@@ -42,8 +52,8 @@ import MediaCore
         if (Object.keys(seenRoutes).length > 80) return;
         handler({ kind: 'route', url: path });
       };
-      var captureBody = function(url, text) {
-        handler({ kind: 'body', url: url, body: text });
+      var captureBody = function(url, status, text) {
+        handler({ kind: 'body', url: url, status: status, body: text || '' });
       };
       var isItemList = function(url) {
         return typeof url === 'string' && url.indexOf('/item_list') !== -1;
@@ -56,10 +66,11 @@ import MediaCore
         var promise = origFetch.apply(this, args);
         if (isItemList(url)) {
           promise.then(function(response) {
+            var code = response.status;
             try {
-              response.clone().text().then(function(text) { captureBody(url, text); });
-            } catch (e) {}
-          }).catch(function() {});
+              response.clone().text().then(function(text) { captureBody(url, code, text); });
+            } catch (e) { captureBody(url, code, ''); }
+          }).catch(function() { captureBody(url, 0, ''); });
         }
         return promise;
       };
@@ -74,7 +85,15 @@ import MediaCore
         var xhr = this;
         if (isItemList(xhr.__itemListURL)) {
           xhr.addEventListener('load', function() {
-            try { captureBody(xhr.__itemListURL, xhr.responseText); } catch (e) {}
+            var text = '';
+            try { text = xhr.responseText; } catch (e) {}
+            if (!text) {
+              try {
+                if (typeof xhr.response === 'string') text = xhr.response;
+                else if (xhr.response) text = JSON.stringify(xhr.response);
+              } catch (e) {}
+            }
+            captureBody(xhr.__itemListURL, xhr.status, text);
           });
         }
         return origSend.apply(this, arguments);
@@ -84,7 +103,9 @@ import MediaCore
 
     /// Défile la fenêtre et tout conteneur défilable en bas de page : TikTok
     /// charge alors la page suivante de son propre geste, avec sa signature.
-    /// La hauteur atteinte est signalée pour voir si le défilement agit.
+    /// La hauteur atteinte est signalée à chaque passage : des hauteurs qui
+    /// grandissent prouvent que le défilement charge du contenu, une hauteur
+    /// figée au viewport prouve le contraire.
     static let scrollScript = #"""
     (function() {
       window.scrollTo(0, document.documentElement.scrollHeight);
@@ -125,7 +146,9 @@ import MediaCore
                                                   in: .page))
         userController.add(self, contentWorld: .page, name: Self.hookName)
         configuration.userContentController = userController
-        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 2600),
+        // Viewport d'iPhone réel : le contenu déborde, le défilement infini
+        // a une raison de se déclencher.
+        let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844),
                              configuration: configuration)
         view.navigationDelegate = self
         webView = view
@@ -233,13 +256,21 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any] else { return }
         if payload["kind"] as? String == "route" {
-            if let route = payload["url"] as? String, !route.isEmpty,
-               loggedRoutes.insert(route).inserted {
+            guard let route = payload["url"] as? String, !route.isEmpty else { return }
+            // Les hauteurs de défilement ne sont pas dédupliquées : leur
+            // évolution d'un passage à l'autre est justement le diagnostic.
+            if route.hasPrefix("/__scroll") || loggedRoutes.insert(route).inserted {
                 LogCenter.info(L("TikTok web : route \(route).", "TikTok web: route \(route)."))
             }
             return
         }
-        guard let body = payload["body"] as? String, !body.isEmpty else { return }
+        guard let body = payload["body"] as? String else { return }
+        let status = payload["status"] as? Int ?? 0
+        // Chaque réponse item_list se voit, même vide : un 200 à 0 octet est
+        // le refus discret de TikTok, pas un échec de capture.
+        LogCenter.info(L("TikTok web : item_list HTTP \(status), \(body.utf8.count) octets.",
+                         "TikTok web: item_list HTTP \(status), \(body.utf8.count) bytes."))
+        guard !body.isEmpty else { return }
         if let waiting {
             waiting.resume(returning: body)
             self.waiting = nil
