@@ -11,33 +11,48 @@ import MediaCore
 /// les réponses `item_list` que la page signe et charge elle-même, via un
 /// crochet posé sur `fetch` et `XMLHttpRequest` avant l'exécution du site.
 /// Aucun identifiant n'est lu : seuls les corps JSON des réponses publiques
-/// de la liste des publications transitent vers le parcours.
+/// de la liste des publications transitent vers le parcours. Les routes `/api/`
+/// visitées par la page sont journalisées une fois chacune : si TikTok
+/// mobile-web pagine par une autre route, le journal le montre immédiatement.
 @MainActor final class TikTokWebPaginator: NSObject {
     /// Nom du gestionnaire de messages côté page.
     static let hookName = "tiktokItemListHook"
 
-    /// Crochet posé avant les scripts de TikTok : chaque réponse
-    /// `/item_list` est recopiée vers le gestionnaire natif, sans altérer
-    /// la requête ni la réponse originales.
+    /// Crochet posé avant les scripts de TikTok : chaque route `/api/` est
+    /// signalée une fois, et chaque réponse `/item_list` est recopiée vers le
+    /// gestionnaire natif, sans altérer la requête ni la réponse originales.
     static let hookScript = #"""
     (function() {
-      var post = function(url, body) {
+      var handler = function(payload) {
         try {
-          window.webkit.messageHandlers.tiktokItemListHook.postMessage({ url: url, body: body });
+          window.webkit.messageHandlers.tiktokItemListHook.postMessage(payload);
         } catch (e) {}
       };
-      var matches = function(url) {
+      var seenRoutes = {};
+      var logRoute = function(url) {
+        if (typeof url !== 'string') return;
+        var path = url.split('?')[0];
+        if (path.indexOf('/api/') === -1) return;
+        if (seenRoutes[path]) return;
+        seenRoutes[path] = true;
+        handler({ kind: 'route', url: path });
+      };
+      var captureBody = function(url, text) {
+        handler({ kind: 'body', url: url, body: text });
+      };
+      var isItemList = function(url) {
         return typeof url === 'string' && url.indexOf('/item_list') !== -1;
       };
       var origFetch = window.fetch;
       window.fetch = function() {
         var args = arguments;
         var url = (typeof args[0] === 'string') ? args[0] : ((args[0] && args[0].url) || '');
+        logRoute(url);
         var promise = origFetch.apply(this, args);
-        if (matches(url)) {
+        if (isItemList(url)) {
           promise.then(function(response) {
             try {
-              response.clone().text().then(function(text) { post(url, text); });
+              response.clone().text().then(function(text) { captureBody(url, text); });
             } catch (e) {}
           }).catch(function() {});
         }
@@ -47,17 +62,35 @@ import MediaCore
       var origSend = XMLHttpRequest.prototype.send;
       XMLHttpRequest.prototype.open = function(method, url) {
         this.__itemListURL = url;
+        logRoute(url);
         return origOpen.apply(this, arguments);
       };
       XMLHttpRequest.prototype.send = function() {
         var xhr = this;
-        if (matches(xhr.__itemListURL)) {
+        if (isItemList(xhr.__itemListURL)) {
           xhr.addEventListener('load', function() {
-            try { post(xhr.__itemListURL, xhr.responseText); } catch (e) {}
+            try { captureBody(xhr.__itemListURL, xhr.responseText); } catch (e) {}
           });
         }
         return origSend.apply(this, arguments);
       };
+    })();
+    """#
+
+    /// Défile la fenêtre et tout conteneur défilable en bas de page : TikTok
+    /// charge alors la page suivante de son propre geste, avec sa signature.
+    static let scrollScript = #"""
+    (function() {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      window.dispatchEvent(new Event('scroll'));
+      var containers = document.querySelectorAll('div, main, section');
+      for (var i = 0; i < containers.length; i++) {
+        var el = containers[i];
+        if (el.scrollHeight > el.clientHeight + 100) {
+          el.scrollTop = el.scrollHeight;
+          el.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+      }
     })();
     """#
 
@@ -67,6 +100,7 @@ import MediaCore
     private var timeoutTask: Task<Void, Never>?
     private var loadContinuation: CheckedContinuation<Bool, Never>?
     private var watchdog: Task<Void, Never>?
+    private var loggedRoutes = Set<String>()
 
     /// Charge la page profil dans la WebView cachée. Retourne false si la
     /// page n'a pas pu être chargée (réseau, garde de 30 s).
@@ -102,13 +136,22 @@ import MediaCore
 
     /// Corps JSON de la page `item_list` suivante, signée par le JavaScript de
     /// TikTok. `nil` quand la page ne charge plus rien : fin du fil atteinte.
+    /// Pendant l'attente, le défilement est relancé toutes les 4 s : un seul
+    /// appel à `scrollTo` ne déclenche pas toujours le chargement paresseux.
     func nextPage() async -> Data? {
         guard webView != nil else { return nil }
         if !pending.isEmpty { return Data(pending.removeFirst().utf8) }
         let body: String? = await withCheckedContinuation { continuation in
             waiting = continuation
             timeoutTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                var waited = 0
+                while waited < 20 {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    if Task.isCancelled { return }
+                    guard let self, self.waiting != nil else { return }
+                    self.scroll()
+                    waited += 4
+                }
                 guard let self, let waiting = self.waiting else { return }
                 self.waiting = nil
                 self.timeoutTask = nil
@@ -142,12 +185,8 @@ import MediaCore
         webView = nil
     }
 
-    /// Défile en bas de page : TikTok charge alors la page suivante de son
-    /// propre geste, avec sa signature.
     private func scroll() {
-        webView?.evaluateJavaScript(
-            "window.scrollTo(0, document.documentElement.scrollHeight); window.dispatchEvent(new Event('scroll'));",
-            completionHandler: nil)
+        webView?.evaluateJavaScript(Self.scrollScript, completionHandler: nil)
     }
 
     private func finishLoad(_ ok: Bool) {
@@ -175,8 +214,15 @@ extension TikTokWebPaginator: WKNavigationDelegate {
 
 extension TikTokWebPaginator: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let payload = message.body as? [String: Any],
-              let body = payload["body"] as? String, !body.isEmpty else { return }
+        guard let payload = message.body as? [String: Any] else { return }
+        if payload["kind"] as? String == "route" {
+            if let route = payload["url"] as? String, !route.isEmpty,
+               loggedRoutes.insert(route).inserted {
+                LogCenter.info(L("TikTok web : route API \(route).", "TikTok web: API route \(route)."))
+            }
+            return
+        }
+        guard let body = payload["body"] as? String, !body.isEmpty else { return }
         if let waiting {
             waiting.resume(returning: body)
             self.waiting = nil
