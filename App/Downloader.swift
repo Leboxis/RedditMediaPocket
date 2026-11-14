@@ -1693,6 +1693,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var desktopFailed = false
         var desktopCursor = 0
         var webUnavailable = false
+        var qualityTally: [String: Int] = [:]
         var paginator: TikTokWebPaginator?
         defer {
             paginator?.close()
@@ -1802,6 +1803,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         // `storageKey` est la forme canonique, écrite à côté de
                         // sa lecture.
                         let id = media.storageKey
+                        if let quality = media.quality { qualityTally[quality, default: 0] += 1 }
                         mediaOverrides[id] = [.direct(media.url)]
                         // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
                         // et l'UA navigateur lié aux cookies.
@@ -1822,6 +1824,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 beginTransferUnit(total: downloads.count)
                 try await executeDownloads(downloads, &preparedCount)
                 idle = 0
+                if !qualityTally.isEmpty {
+                    let summary = qualityTally.sorted { $0.key < $1.key }
+                        .map { "\($0.key) \u00d7\($0.value)" }.joined(separator: ", ")
+                    LogCenter.info(L("TikTok : variantes vidéo \(summary).", "TikTok: video variants \(summary)."))
+                    qualityTally.removeAll()
+                }
             }
             try Task.checkCancellation()
             // Deux pages sans nouveauté : le compte est rattrapé, même si

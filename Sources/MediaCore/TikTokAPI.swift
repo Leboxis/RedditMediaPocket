@@ -250,9 +250,13 @@ public struct TikTokMedia: Hashable, Sendable {
     public let id: String
     public let kind: Kind
     public let url: URL
+    /// Variante d'encodage choisie (`GearName` + débit), pour le diagnostic.
+    /// `nil` pour les images ; une vidéo sans variante annoncée est étiquetée
+    /// du champ de repli utilisé.
+    public let quality: String?
 
-    public init(id: String, kind: Kind, url: URL) {
-        self.id = id; self.kind = kind; self.url = url
+    public init(id: String, kind: Kind, url: URL, quality: String? = nil) {
+        self.id = id; self.kind = kind; self.url = url; self.quality = quality
     }
 }
 
@@ -390,24 +394,34 @@ public enum TikTokWeb {
         // Qualité maximale : TikTok encode chaque vidéo en plusieurs variantes
         // listées dans `bitrateInfo` (540p, 720p, 1080p…), et `playAddr` seul
         // ne sert que la variante standard. La variante au débit le plus
-        // élevé est la meilleure définition disponible.
+        // élevé est la meilleure définition disponible. La casse des clés
+        // varie selon la version du front : toutes les graphies sont essayées.
         var bestURL: URL?
+        var bestLabel: String?
         var bestBitrate = 0
-        for variant in objects(video, "bitrateInfo") ?? [] {
-            guard number(variant, "Bitrate") > bestBitrate,
-                  let url = firstURL(dictionary(variant, "PlayAddr"), "urlList"),
-                  isMediaHost(url) else { continue }
-            bestBitrate = number(variant, "Bitrate")
+        let variants = objects(video, "bitrateInfo") ?? objects(video, "BitrateInfo")
+            ?? objects(video, "bitrate_info") ?? []
+        for variant in variants {
+            let bitrate = max(number(variant, "Bitrate"), number(variant, "bitrate"))
+            guard bitrate > bestBitrate else { continue }
+            let playNode = dictionary(variant, "PlayAddr") ?? dictionary(variant, "playAddr")
+            let url = firstURL(playNode, "urlList") ?? firstURL(playNode, "UrlList")
+                ?? text(variant, "PlayAddr").flatMap(URL.init(string:))
+                ?? text(variant, "playAddr").flatMap(URL.init(string:))
+            guard let url, isMediaHost(url) else { continue }
+            bestBitrate = bitrate
             bestURL = url
+            let gear = text(variant, "GearName") ?? text(variant, "gearName") ?? ""
+            bestLabel = "\(gear) (\(bitrate / 1000) kbps)"
         }
         if let url = bestURL, seen.insert(url.absoluteString).inserted {
-            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url))
+            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, quality: bestLabel))
             return out
         }
         for key in ["playAddr", "downloadAddr"] {
             guard let raw = text(video, key), let url = URL(string: raw),
                   isMediaHost(url), seen.insert(url.absoluteString).inserted else { continue }
-            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url))
+            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, quality: "\(key) (standard)"))
             break
         }
         return out
