@@ -399,19 +399,28 @@ public enum TikTokWeb {
         var bestURL: URL?
         var bestLabel: String?
         var bestBitrate = 0
+        var bestHeight = 0
         let variants = objects(video, "bitrateInfo") ?? objects(video, "BitrateInfo")
             ?? objects(video, "bitrate_info") ?? []
         for variant in variants {
             let bitrate = max(number(variant, "Bitrate"), number(variant, "bitrate"))
-            guard bitrate > bestBitrate else { continue }
             let playNode = dictionary(variant, "PlayAddr") ?? dictionary(variant, "playAddr")
             let url = firstURL(playNode, "urlList") ?? firstURL(playNode, "UrlList")
                 ?? text(variant, "PlayAddr").flatMap(URL.init(string:))
                 ?? text(variant, "playAddr").flatMap(URL.init(string:))
             guard let url, isMediaHost(url) else { continue }
+            let gear = text(variant, "GearName") ?? text(variant, "gearName") ?? ""
+            // Le nom de variante porte la définition (`adapt_lowest_1080_1`,
+            // `adapt_lower_720_1`…) : la définition prime sur le débit — un
+            // 1080p à débit plus bas reste plus fin qu'un 720p — et le débit
+            // tranche à définition égale. (3 à 4 chiffres : les fps à 2
+            // chiffres et l'index final à 1 ne polluent pas la lecture.)
+            let height = gear.range(of: "\\d{3,4}", options: .regularExpression)
+                .flatMap { Int(gear[$0]) } ?? 0
+            guard height > bestHeight || (height == bestHeight && bitrate > bestBitrate) else { continue }
+            bestHeight = height
             bestBitrate = bitrate
             bestURL = url
-            let gear = text(variant, "GearName") ?? text(variant, "gearName") ?? ""
             bestLabel = "\(gear) (\(bitrate / 1000) kbps)"
         }
         if let url = bestURL, seen.insert(url.absoluteString).inserted {
