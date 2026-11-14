@@ -1656,6 +1656,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
 
+    /// Rapatriement d'un média par la page TikTok, branché par `runTikTok`
+    /// pendant le parcours : le CDN refuse le direct (403) mais accepte la
+    /// requête du vrai client navigateur. `nil` hors parcours TikTok.
+    private var tikTokWebFetch: ((URL) async -> Data?)?
+
     /// Parcours des publications d'un compte TikTok.
     ///
     /// Le curseur est conservé uniquement pendant un parcours incomplet.
@@ -1689,7 +1694,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var desktopCursor = 0
         var webUnavailable = false
         var paginator: TikTokWebPaginator?
-        defer { paginator?.close() }
+        defer {
+            paginator?.close()
+            tikTokWebFetch = nil
+        }
 
         // Première page gratuite : le HTML du profil embarque les publications
         // les plus récentes. Elles partent d'abord, même si la pagination web
@@ -1729,6 +1737,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     let web = TikTokWebPaginator()
                     if await web.start(username: username) {
                         paginator = web
+                        // Les médias des pages web se téléchargent depuis la
+                        // page si le direct est refusé.
+                        tikTokWebFetch = { url in await web.fetchMedia(url) }
                     } else {
                         webUnavailable = true
                     }
@@ -2533,7 +2544,21 @@ struct UserCollection: Codable, Identifiable, Equatable {
         switch media {
         case .direct(let url):
             LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
-            return try await network.download(url, headers: headers)
+            do {
+                return try await network.download(url, headers: headers)
+            } catch NetworkError.refused(let code) where code == 400 || code == 401 || code == 403 {
+                // Repli TikTok : le CDN refuse le client URLSession mais sert
+                // la même URL au vrai navigateur — la page la rapatrie.
+                guard let webFetch = tikTokWebFetch else { throw NetworkError.refused(code) }
+                LogCenter.net(L("TikTok : direct refusé (HTTP \(code)), essai depuis la page TikTok…",
+                               "TikTok: direct refused (HTTP \(code)), trying from the TikTok page…"))
+                guard let data = await webFetch(url), !data.isEmpty else {
+                    throw NetworkError.refused(code)
+                }
+                let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                try data.write(to: temporary)
+                return temporary
+            }
         case .redgifs(let id):
             do {
                 return try await downloadRedgifs(id: id)

@@ -73,6 +73,39 @@ import MediaCore
       var isItemList = function(url) {
         return typeof url === 'string' && url.indexOf('/item_list') !== -1;
       };
+      // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
+      // les requêtes hors navigateur (403), mais depuis la page le TLS, les
+      // cookies et les en-têtes sont ceux du vrai client. Le corps part par
+      // morceaux base64 vers le natif, sans altérer la page.
+      window.__tiktokDownload = function(url, id) {
+        var attempt = function(withCredentials) {
+          fetch(url, { method: 'GET', credentials: withCredentials ? 'include' : 'omit' }).then(function(r) {
+            if (!r.ok) {
+              if (withCredentials) return attempt(false);
+              handler({ kind: 'media', id: id, failed: true, status: r.status });
+              return;
+            }
+            return r.arrayBuffer().then(function(buf) {
+              var bytes = new Uint8Array(buf);
+              var CHUNK = 262144;
+              var total = Math.ceil(bytes.length / CHUNK) || 1;
+              for (var i = 0; i < total; i++) {
+                var slice = bytes.subarray(i * CHUNK, Math.min((i + 1) * CHUNK, bytes.length));
+                var str = '';
+                for (var j = 0; j < slice.length; j += 8192) {
+                  str += String.fromCharCode.apply(null, slice.subarray(j, Math.min(j + 8192, slice.length)));
+                }
+                handler({ kind: 'media', id: id, seq: i, total: total, data: btoa(str) });
+              }
+              handler({ kind: 'media', id: id, done: true });
+            });
+          }).catch(function() {
+            if (withCredentials) { attempt(false); return; }
+            handler({ kind: 'media', id: id, failed: true, status: 0 });
+          });
+        };
+        attempt(true);
+      };
       var origFetch = window.fetch;
       window.fetch = function() {
         var args = arguments;
@@ -161,6 +194,16 @@ import MediaCore
     private var itemListResponses = 0
     private var emptyItemListResponses = 0
 
+    /// Transfert d'un média en cours : morceaux base64 reçus par identifiant,
+    /// continuation du demandeur et garde de temps.
+    private struct MediaTransfer {
+        var chunks: [Int: String]
+        let continuation: CheckedContinuation<Data?, Never>
+        let timeout: Task<Void, Never>
+    }
+
+    private var mediaTransfers: [String: MediaTransfer] = [:]
+
     /// UA réel de la WebView, lu après le chargement de la page. Les URL de
     /// médias d'une réponse `item_list` sont liées au client qui l'a obtenue :
     /// les téléchargements doivent s'identifier avec cet UA exact, pas avec
@@ -248,6 +291,28 @@ import MediaCore
         return body.flatMap { Data($0.utf8) }
     }
 
+    /// Octets d'un média rapatriés depuis la page TikTok. `nil` en échec ou
+    /// après la garde de 120 s : le demandeur retombe alors sur son erreur
+    /// directe, le parcours continue sans ce média.
+    func fetchMedia(_ url: URL) async -> Data? {
+        guard webView != nil else { return nil }
+        let id = UUID().uuidString
+        return await withCheckedContinuation { continuation in
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                guard let self, let transfer = self.mediaTransfers[id] else { return }
+                self.mediaTransfers[id] = nil
+                transfer.continuation.resume(returning: nil)
+            }
+            mediaTransfers[id] = MediaTransfer(chunks: [:], continuation: continuation, timeout: timeout)
+            let literal = url.absoluteString
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "'", with: "\\'")
+            webView?.evaluateJavaScript("window.__tiktokDownload && window.__tiktokDownload('\(literal)', '\(id)')",
+                                       completionHandler: nil)
+        }
+    }
+
     func close() {
         timeoutTask?.cancel()
         timeoutTask = nil
@@ -261,6 +326,11 @@ import MediaCore
             loadContinuation.resume(returning: false)
             self.loadContinuation = nil
         }
+        for transfer in mediaTransfers.values {
+            transfer.timeout.cancel()
+            transfer.continuation.resume(returning: nil)
+        }
+        mediaTransfers = [:]
         guard let view = webView else { return }
         view.stopLoading()
         view.navigationDelegate = nil
@@ -317,6 +387,29 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
             // évolution d'un passage à l'autre est justement le diagnostic.
             if route.hasPrefix("/__scroll") || loggedRoutes.insert(route).inserted {
                 LogCenter.info(L("TikTok web : route \(route).", "TikTok web: route \(route)."))
+            }
+            return
+        }
+        if payload["kind"] as? String == "media" {
+            guard let id = payload["id"] as? String,
+                  var transfer = mediaTransfers[id] else { return }
+            if payload["failed"] as? Bool == true {
+                mediaTransfers[id] = nil
+                transfer.timeout.cancel()
+                transfer.continuation.resume(returning: nil)
+                return
+            }
+            if let data = payload["data"] as? String, let seq = payload["seq"] as? Int {
+                transfer.chunks[seq] = data
+                mediaTransfers[id] = transfer
+            }
+            if payload["done"] as? Bool == true {
+                mediaTransfers[id] = nil
+                transfer.timeout.cancel()
+                let assembled = transfer.chunks.sorted { $0.key < $1.key }
+                    .compactMap { Data(base64Encoded: $0.value) }
+                    .reduce(Data(), +)
+                transfer.continuation.resume(returning: assembled)
             }
             return
         }
