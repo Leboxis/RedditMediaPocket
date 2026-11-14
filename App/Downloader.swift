@@ -1714,6 +1714,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 if code == 401 { await TikTokSession.shared.recordAPIAcceptance(false) }
                 guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
                 throw TikTokError.deniedAccess
+            } catch NetworkError.refused(let code) where code == 400 {
+                // TikTok refuse une requête paginée qui ne ressemble pas à
+                // celle du navigateur : le dire explicitement plutôt qu'un
+                // générique « accès refusé ».
+                throw TikTokError.itemListRefused
             }
             let page = try TikTokWeb.parseItemList(data)
             LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))

@@ -82,6 +82,24 @@ final class TikTokTests: XCTestCase {
         XCTAssertTrue(second.absoluteString.contains("msToken=TOK"))
     }
 
+    /// TikTok refuse en HTTP 400 une requête paginée sans contexte web :
+    /// les paramètres que Safari iPhone envoie lui-même doivent être là.
+    func testItemListURLCarriesBrowserContext() {
+        let url = TikTokAPI.itemListURL(secUid: "SEC1", cursor: nil, msToken: nil).absoluteString
+        XCTAssertTrue(url.contains("device_platform=web_mobile"))
+        XCTAssertTrue(url.contains("channel=tiktok_web"))
+        XCTAssertTrue(url.contains("os=ios"))
+        XCTAssertTrue(url.contains("browser_platform=iPhone"))
+        XCTAssertTrue(url.contains("app_name=tiktok_web"))
+        XCTAssertTrue(url.contains("from_page=user"))
+    }
+
+    func testItemListRefusedMessageDiffersFromDeniedAccess() {
+        XCTAssertNotEqual(TikTokError.itemListRefused.errorDescription,
+                          TikTokError.deniedAccess.errorDescription)
+        XCTAssertNotNil(TikTokError.itemListRefused.errorDescription)
+    }
+
     func testHeadersCarryBrowserIdentity() {
         let headers = TikTokAPI.headers(referer: TikTokAPI.profileURL(username: "nasa"))
         XCTAssertEqual(headers["Referer"], "https://www.tiktok.com/@nasa")
