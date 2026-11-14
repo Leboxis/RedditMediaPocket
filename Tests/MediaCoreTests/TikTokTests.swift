@@ -103,7 +103,7 @@ final class TikTokTests: XCTestCase {
         let payload = #"{"__DEFAULT_SCOPE__":{"webapp.user-detail":{"userInfo":{"user":{"secUid":"SEC1","uniqueId":"nasa"}},"itemList":[]}}}"#
         let profile = try TikTokWeb.parseProfile(profileHTML(payload))
         XCTAssertEqual(profile.secUid, "SEC1")
-        XCTAssertTrue(profile.items.isEmpty)
+        XCTAssertTrue(profile.posts.isEmpty)
     }
 
     /// Un compte inexistant ou privé arrive sans `userInfo` : l'erreur doit
