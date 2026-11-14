@@ -79,7 +79,7 @@ import MediaCore
                                                   injectionTime: .atDocumentStart,
                                                   forMainFrameOnly: false,
                                                   in: .page))
-        userController.add(self, name: Self.hookName, contentWorld: .page)
+        userController.add(self, contentWorld: .page, name: Self.hookName)
         configuration.userContentController = userController
         let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 2600),
                              configuration: configuration)
@@ -134,11 +134,11 @@ import MediaCore
             loadContinuation.resume(returning: false)
             self.loadContinuation = nil
         }
-        guard let webView else { return }
-        webView.stopLoading()
-        webView.navigationDelegate = nil
-        webView.configuration.userContentController
-            .removeScriptMessageHandler(forContentWorld: .page, name: Self.hookName)
+        guard let view = webView else { return }
+        view.stopLoading()
+        view.navigationDelegate = nil
+        view.configuration.userContentController
+            .removeScriptMessageHandler(forContentWorld: .page, forName: Self.hookName)
         webView = nil
     }
 
@@ -153,9 +153,9 @@ import MediaCore
     private func finishLoad(_ ok: Bool) {
         watchdog?.cancel()
         watchdog = nil
-        guard let loadContinuation else { return }
+        guard let continuation = loadContinuation else { return }
         loadContinuation = nil
-        loadContinuation.resume(returning: ok)
+        continuation.resume(returning: ok)
     }
 }
 
