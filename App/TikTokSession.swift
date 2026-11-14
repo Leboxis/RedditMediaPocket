@@ -46,8 +46,7 @@ import MediaCore
     ///
     /// Seul `sessionid` est comparé. TikTok renouvelle `msToken` tout seul en
     /// cours de session : l'inclure ferait retomber l'indicateur « API
-    /// acceptée » au moindre renouvellement de jeton. Le `msToken` utilisé
-    /// part de `msToken()`, qui relit les cookies à chaque appel.
+    /// acceptée » au moindre renouvellement de jeton.
     func refresh() async {
         let cookies = await allCookies()
         let identity = cookies.filter { $0.name == "sessionid" }
@@ -82,14 +81,6 @@ import MediaCore
         }
         return L("Session TikTok détectée · accès API à vérifier",
                  "TikTok session detected · API access unverified")
-    }
-
-    /// Jeton `msToken`, exigé en paramètre des appels paginés. Il peut
-    /// apparaître après `sessionid` : son absence ne prouve pas une
-    /// déconnexion.
-    func msToken() async -> String? {
-        let cookies = await allCookies()
-        return TikTokCookiePolicy.msToken(cookies: cookies)
     }
 
     /// En-tête `Cookie` pour les requêtes API et les pages tiktok.com. Les CDN

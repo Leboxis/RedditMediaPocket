@@ -268,8 +268,8 @@ public enum FeedSource: Hashable, Sendable {
             return XTwitterAPI.userByScreenName(username: name)
         case .tiktokUser(let name):
             // Point d'entrée sans session : sert à résoudre le `secUid`. Le
-            // parcours réel passe par `TikTokAPI.itemListURL` avec les cookies
-            // de session, jamais par cette URL seule.
+            // parcours réel pagine par la WebView de `TikTokWebPaginator`
+            // avec les cookies de session, jamais par cette URL seule.
             return TikTokAPI.profileURL(username: name)
         case .redditPosts(let target):
             // Sélection de posts : l'URL de départ ne sert qu'à l'affichage.

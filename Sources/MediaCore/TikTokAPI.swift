@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TikTokError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, itemListRefused, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported
 
     public var errorDescription: String? {
         switch self {
@@ -13,8 +13,6 @@ public enum TikTokError: LocalizedError {
             return L("Compte TikTok introuvable ou privé : les médias publics de ce profil sont inaccessibles.", "TikTok account not found or private: this profile's public media is inaccessible.")
         case .deniedAccess:
             return L("TikTok refuse l'accès aux médias (HTTP 403 ou 401). Reconnecte-toi dans les Réglages, l'interface de TikTok a peut-être changé.", "TikTok denied media access (HTTP 403 or 401). Sign in again in Settings; TikTok's interface may have changed.")
-        case .itemListRefused:
-            return L("TikTok refuse la liste paginée des publications (HTTP 400). Reconnecte-toi dans les Réglages puis relance ; les publications les plus récentes de la première page restent disponibles sur la page du profil.", "TikTok refused the paginated post list (HTTP 400). Sign in again in Settings then relaunch; the latest posts of the first page remain available on the profile page.")
         case .invalidTimeline:
             return L("Fil des médias TikTok illisible ou tronqué. TikTok demande parfois une vérification : reconnecte-toi dans les Réglages puis relance.", "TikTok media timeline is unreadable or truncated. TikTok sometimes asks for verification: sign in again in Settings, then relaunch.")
         case .tooManyPages:
@@ -32,8 +30,9 @@ public enum TikTokError: LocalizedError {
 /// l'API interne exigent les cookies posés par WebKit (`sessionid` pour la
 /// session, `ttwid` pour l'appareil, `msToken` pour les appels paginés), voir
 /// `TikTokSession`. Les `queryId` de X n'ont pas d'équivalent stable ici :
-/// la route `api/post/item_list` est adressée sans signature, et son échec se
-/// manifeste par une réponse vide signalée `invalidTimeline`.
+/// la route `api/post/item_list` exige la signature `X-Bogus`/`X-Gnarly` que
+/// seul le JavaScript de TikTok produit, donc la pagination passe par la
+/// WebView cachée de `TikTokWebPaginator` plutôt que par URLSession.
 public enum TikTokAPI {
     /// Profil WebKit et page web attendent un navigateur : TikTok refuse l'UA
     /// applicatif comme le stockage X-Fetish refuse le sien.
@@ -77,47 +76,6 @@ public enum TikTokAPI {
     /// `ttwid` posés par WebKit).
     public static func profileURL(username: String) -> URL {
         URL(string: "https://www.tiktok.com/@\(username)")!
-    }
-
-    /// Une page du fil des publications du compte. `cursor` nil = première
-    /// page ; sinon le curseur renvoyé par la page précédente.
-    ///
-    /// TikTok refuse en HTTP 400 une requête qui ne ressemble pas à celle du
-    /// navigateur : les paramètres de contexte web reprennent ce que Safari
-    /// iPhone envoie lui-même autour de `secUid` (plateforme, canal, navigateur,
-    /// écran). Les retirer fait retomber la route sur un refus sec.
-    public static func itemListURL(secUid: String, cursor: String?, msToken: String?) -> URL {
-        var components = URLComponents(string: "https://www.tiktok.com/api/post/item_list/")!
-        var items = [
-            URLQueryItem(name: "aid", value: "1988"),
-            URLQueryItem(name: "app_language", value: "en"),
-            URLQueryItem(name: "app_name", value: "tiktok_web"),
-            URLQueryItem(name: "browser_language", value: "en-US"),
-            URLQueryItem(name: "browser_name", value: "Mozilla"),
-            URLQueryItem(name: "browser_online", value: "true"),
-            URLQueryItem(name: "browser_platform", value: "iPhone"),
-            URLQueryItem(name: "browser_version", value: userAgent),
-            URLQueryItem(name: "channel", value: "tiktok_web"),
-            URLQueryItem(name: "cookie_enabled", value: "true"),
-            URLQueryItem(name: "count", value: "20"),
-            URLQueryItem(name: "device_platform", value: "web_mobile"),
-            URLQueryItem(name: "focus_state", value: "true"),
-            URLQueryItem(name: "from_page", value: "user"),
-            URLQueryItem(name: "is_fullscreen", value: "false"),
-            URLQueryItem(name: "is_page_visible", value: "true"),
-            URLQueryItem(name: "language", value: "en"),
-            URLQueryItem(name: "os", value: "ios"),
-            URLQueryItem(name: "referer", value: ""),
-            URLQueryItem(name: "screen_height", value: "844"),
-            URLQueryItem(name: "screen_width", value: "390"),
-            URLQueryItem(name: "secUid", value: secUid),
-            URLQueryItem(name: "sourceType", value: "8"),
-            URLQueryItem(name: "webcast_language", value: "en")
-        ]
-        if let cursor, !cursor.isEmpty { items.append(URLQueryItem(name: "cursor", value: cursor)) }
-        if let msToken, !msToken.isEmpty { items.append(URLQueryItem(name: "msToken", value: msToken)) }
-        components.queryItems = items
-        return components.url!
     }
 
     /// En-têtes des requêtes TikTok (page profil et API). Le Referer de la

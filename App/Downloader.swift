@@ -1677,56 +1677,48 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
-        let resumeKey = "tikTokResume.\(canonical)"
-        let stored = UserDefaults.standard.dictionary(forKey: resumeKey) as? [String: String]
-        let resumeCursor = stored?["secUid"] == profile.secUid ? stored?["cursor"] : nil
+        // Le curseur paginé appartient désormais au JavaScript de TikTok dans
+        // la WebView cachée : la reprise par curseur stocké n'a plus de prise
+        // dessus, et le dédoublonnage par clé média évite tout retéléchargement.
+        UserDefaults.standard.removeObject(forKey: "tikTokResume.\(canonical)")
         var scanned = Set<String>()
         var scannedPages = 0
-        var requested = Set<String>()
-        if let resumeCursor { requested.insert(resumeCursor) }
         var idle = 0
-        var cursor = resumeCursor
         var caughtUp = false
         let mediaHeaders = TikTokAPI.mediaHeaders()
 
-        func persist(_ next: String?) {
-            if let next {
-                UserDefaults.standard.set(["secUid": profile.secUid, "cursor": next], forKey: resumeKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: resumeKey)
-            }
+        let paginator = TikTokWebPaginator()
+        defer { paginator.close() }
+        guard await paginator.start(username: username) else {
+            throw TikTokError.invalidTimeline
         }
+
+        // Première page gratuite : le HTML du profil embarque les publications
+        // les plus récentes. Elles partent d'abord, même si la pagination web
+        // refusait ensuite la suite.
+        var embedded = profile.posts
 
         for _ in 0..<100 {
             try Task.checkCancellation()
-            scannedPages += 1
-            status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
-            let msToken = await TikTokSession.shared.msToken()
-            let data: Data
-            do {
-                data = try await network.data(
-                    TikTokAPI.itemListURL(secUid: profile.secUid, cursor: cursor, msToken: msToken),
-                    headers: headers)
-            } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-                // Une session expirée se voit ici. L'utilisateur est invité à
-                // se reconnecter plutôt que de boucler sur un refus identique.
-                await TikTokSession.shared.refresh()
-                if code == 401 { await TikTokSession.shared.recordAPIAcceptance(false) }
-                guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
-                throw TikTokError.deniedAccess
-            } catch NetworkError.refused(let code) where code == 400 {
-                // TikTok refuse une requête paginée qui ne ressemble pas à
-                // celle du navigateur : le dire explicitement plutôt qu'un
-                // générique « accès refusé ».
-                throw TikTokError.itemListRefused
+            let page: TikTokMediaPage
+            if !embedded.isEmpty {
+                page = TikTokMediaPage(posts: embedded, nextCursor: nil, hasMore: true)
+                embedded = []
+            } else {
+                scannedPages += 1
+                status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
+                guard let data = await paginator.nextPage() else {
+                    // La page ne charge plus rien : fin du fil atteinte.
+                    if scannedPages == 1 {
+                        LogCenter.info(L("TikTok : pagination web indisponible, seule la première page du profil a été lue.",
+                                         "TikTok: web pagination unavailable, only the profile's first page was read."))
+                    }
+                    caughtUp = true
+                    break
+                }
+                page = try TikTokWeb.parseItemList(data)
+                LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))
             }
-            let page = try TikTokWeb.parseItemList(data)
-            LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))
-            let next = page.nextCursor.flatMap { $0.isEmpty ? nil : $0 }
-            // Un curseur répété signifierait une boucle sans fin : TikTok
-            // renvoie parfois la même page.
-            if let next, !requested.insert(next).inserted { throw TikTokError.invalidTimeline }
-
             var fresh: [TikTokPost] = []
             for post in page.posts where scanned.insert(post.id).inserted {
                 // Un média déjà enregistré ne vaut pas une seconde page à
@@ -1779,13 +1771,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
             // Deux pages sans nouveauté : le compte est rattrapé, même si
             // TikTok annonce encore des pages (doublons inter-pages).
             if idle >= 2 || !page.hasMore {
-                persist(nil)
                 caughtUp = true
                 break
             }
-            persist(next)
-            guard let next else { caughtUp = true; break }
-            cursor = next
         }
         guard caughtUp else { return false }
 
