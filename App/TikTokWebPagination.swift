@@ -1,4 +1,5 @@
 import WebKit
+import UIKit
 import MediaCore
 
 /// Pagination des publications TikTok par le JavaScript de TikTok lui-même.
@@ -35,6 +36,20 @@ import MediaCore
     /// lecture retombe alors sur `response` sérialisé.
     static let hookScript = #"""
     (function() {
+      // Une WebView jamais attachée à une fenêtre est vue `hidden` par la
+      // page, et requestAnimationFrame y est suspendu : TikTok s'en sert
+      // pour décider s'il vaut la peine de charger et pour piloter son
+      // défilement infini. La page voit donc un lecteur présent et actif.
+      try {
+        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; } });
+        Object.defineProperty(document, 'hidden', { get: function() { return false; } });
+        document.dispatchEvent(new Event('visibilitychange'));
+        document.hasFocus = function() { return true; };
+        var origRAF = window.requestAnimationFrame;
+        window.requestAnimationFrame = function(callback) {
+          return setTimeout(function() { callback(Date.now()); }, 16);
+        };
+      } catch (e) {}
       var handler = function(payload) {
         try {
           window.webkit.messageHandlers.tiktokItemListHook.postMessage(payload);
@@ -132,6 +147,16 @@ import MediaCore
     private var loadContinuation: CheckedContinuation<Bool, Never>?
     private var watchdog: Task<Void, Never>?
     private var loggedRoutes = Set<String>()
+    private var itemListResponses = 0
+    private var emptyItemListResponses = 0
+
+    /// La page a-t-elle répondu à chaque appel `item_list` par un corps vide ?
+    /// Un corps vide (HTTP 200, 0 octet) n'est pas une fin de fil — TikTok
+    /// annonce alors `hasMore: false` en JSON — mais un refus discret, typique
+    /// d'une vérification (captcha) exigée pour cette session.
+    var sawOnlyEmptyItemLists: Bool {
+        itemListResponses > 0 && emptyItemListResponses == itemListResponses
+    }
 
     /// Charge la page profil dans la WebView cachée. Retourne false si la
     /// page n'a pas pu être chargée (réseau, garde de 30 s).
@@ -152,6 +177,15 @@ import MediaCore
                              configuration: configuration)
         view.navigationDelegate = self
         webView = view
+        // Attachée hors écran à la fenêtre : une WebView hors hiérarchie est
+        // signalée `hidden` à la page et son rendu est suspendu. Hors champ
+        // visuel (`x: -390`) mais vivante : TikTok y voit un vrai onglet.
+        if let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.keyWindow })
+            .first {
+            view.frame.origin.x = -view.frame.width
+            window.addSubview(view)
+        }
         let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             loadContinuation = continuation
             watchdog = Task { [weak self] in
@@ -215,6 +249,7 @@ import MediaCore
         view.navigationDelegate = nil
         view.configuration.userContentController
             .removeScriptMessageHandler(forName: Self.hookName, contentWorld: .page)
+        view.removeFromSuperview()
         webView = nil
     }
 
@@ -268,6 +303,8 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
         let status = payload["status"] as? Int ?? 0
         // Chaque réponse item_list se voit, même vide : un 200 à 0 octet est
         // le refus discret de TikTok, pas un échec de capture.
+        itemListResponses += 1
+        if body.isEmpty { emptyItemListResponses += 1 }
         LogCenter.info(L("TikTok web : item_list HTTP \(status), \(body.utf8.count) octets.",
                          "TikTok web: item_list HTTP \(status), \(body.utf8.count) bytes."))
         guard !body.isEmpty else { return }

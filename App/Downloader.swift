@@ -1745,7 +1745,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 scannedPages += 1
                 status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
                 guard let data = await paginator.nextPage() else {
-                    // La page ne charge plus rien : fin du fil atteinte.
+                    // La page ne charge plus rien : fin du fil atteinte, sauf
+                    // si TikTok a refusé chaque liste paginée par un corps
+                    // vide — là, c'est une vérification qu'il exige.
+                    if paginator.sawOnlyEmptyItemLists {
+                        throw TikTokError.verificationRequired
+                    }
                     if scannedPages == 1 {
                         LogCenter.info(L("TikTok : pagination web indisponible, seule la première page du profil a été lue.",
                                          "TikTok: web pagination unavailable, only the profile's first page was read."))

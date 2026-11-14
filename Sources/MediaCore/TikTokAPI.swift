@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TikTokError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported, verificationRequired
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +21,8 @@ public enum TikTokError: LocalizedError {
             return L("Limite de pages invalide.", "Invalid page limit.")
         case .postUnsupported:
             return L("Les vidéos TikTok isolées ne sont pas prises en charge. Colle l'adresse du compte : les médias de ses publications seront parcourus.", "Single TikTok videos are not supported. Paste the account address instead: the media of its posts will be scanned.")
+        case .verificationRequired:
+            return L("TikTok exige une vérification avant de servir ce profil : ouvre la session TikTok dans les Réglages, visite tiktok.com dans la fenêtre affichée, complète la vérification (captcha) si elle apparaît, puis relance le parcours.", "TikTok requires a verification before serving this profile: open the TikTok session in Settings, browse tiktok.com in the shown window, complete the captcha if one appears, then run again.")
         }
     }
 }
