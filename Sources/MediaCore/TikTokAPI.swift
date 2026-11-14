@@ -387,6 +387,23 @@ public enum TikTokWeb {
         }
         guard out.isEmpty else { return out }
         let video = dictionary(item, "video")
+        // Qualité maximale : TikTok encode chaque vidéo en plusieurs variantes
+        // listées dans `bitrateInfo` (540p, 720p, 1080p…), et `playAddr` seul
+        // ne sert que la variante standard. La variante au débit le plus
+        // élevé est la meilleure définition disponible.
+        var bestURL: URL?
+        var bestBitrate = 0
+        for variant in objects(video, "bitrateInfo") ?? [] {
+            guard number(variant, "Bitrate") > bestBitrate,
+                  let url = firstURL(dictionary(variant, "PlayAddr"), "urlList"),
+                  isMediaHost(url) else { continue }
+            bestBitrate = number(variant, "Bitrate")
+            bestURL = url
+        }
+        if let url = bestURL, seen.insert(url.absoluteString).inserted {
+            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url))
+            return out
+        }
         for key in ["playAddr", "downloadAddr"] {
             guard let raw = text(video, key), let url = URL(string: raw),
                   isMediaHost(url), seen.insert(url.absoluteString).inserted else { continue }
