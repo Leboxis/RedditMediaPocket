@@ -1752,7 +1752,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         mediaOverrides[id] = [.direct(media.url)]
                         // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
                         // et l'UA navigateur lié aux cookies.
-                        mediaHeadersByMedia[media.key] = mediaHeaders
+                        mediaHeadersByMedia[id] = mediaHeaders
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
