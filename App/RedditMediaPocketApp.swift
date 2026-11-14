@@ -129,7 +129,7 @@ struct ContentView: View {
                           (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
                             (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
                               (model.sourceKind == "tw" ? L("compte X", "X account") :
-                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") : L("pseudo", "username")))), text: $model.username)
+                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") : L("pseudo", "username"))))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
