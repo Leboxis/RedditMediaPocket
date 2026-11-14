@@ -1826,7 +1826,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 idle = 0
                 if !qualityTally.isEmpty {
                     let summary = qualityTally.sorted { $0.key < $1.key }
-                        .map { "\($0.key) \u00d7\($0.value)" }.joined(separator: ", ")
+                        .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
                     LogCenter.info(L("TikTok : variantes vidéo \(summary).", "TikTok: video variants \(summary)."))
                     qualityTally.removeAll()
                 }
