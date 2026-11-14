@@ -57,7 +57,7 @@ final class XTwitterTests: XCTestCase {
 
     func testSourceKindCycleReachesTwitter() {
         XCTAssertEqual(SourceKind.xFetish.next, .twitter)
-        XCTAssertEqual(SourceKind.twitter.next, .user)
+        XCTAssertEqual(SourceKind.twitter.next, .tiktok)
         XCTAssertEqual(SourceKind.twitter.rawValue, "tw")
     }
 

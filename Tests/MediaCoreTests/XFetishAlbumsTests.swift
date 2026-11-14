@@ -19,7 +19,8 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(SourceKind.redGifs.next, .saved)
         XCTAssertEqual(SourceKind.saved.next, .xFetish)
         XCTAssertEqual(SourceKind.xFetish.next, .twitter)
-        XCTAssertEqual(SourceKind.twitter.next, .user)
+        XCTAssertEqual(SourceKind.twitter.next, .tiktok)
+        XCTAssertEqual(SourceKind.tiktok.next, .user)
     }
 
     func testExistingImageIDSurvivesAlbumRename() {
