@@ -111,6 +111,45 @@ public enum FilenamePolicy {
         return nil
     }
 
+    /// Recover the immutable media key of a TikTok file. Images of a slideshow
+    /// use `tkm-<post>-<position>`, videos use `tkv-<post>`. `TikTokMedia.
+    /// storageKey` writes this exact form; the two must stay in step.
+    public static func tikTokMediaID(inFileName filename: String) -> String? {
+        let file = URL(fileURLWithPath: filename)
+        guard ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()) else { return nil }
+        let stem = file.deletingPathExtension().lastPathComponent
+        if let bare = Self.tikTokBareKey(stem) { return bare }
+        // ` - tkv-` ne peut pas matcher ` - tkm-` : les deux marqueurs sont
+        // mutuellement exclusifs, il suffit de retenir la dernière occurrence
+        // de l'un ou l'autre.
+        guard let marker = [" - tkv-", " - tkm-"].compactMap({ stem.range(of: $0, options: .backwards) })
+                .max(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+        let prefix = stem[marker.lowerBound...].hasPrefix(" - tkv-") ? "tkv-" : "tkm-"
+        let parts = stem[marker.upperBound...].split(separator: "-", omittingEmptySubsequences: false)
+        // Une clé vidéo n'a qu'un segment (`tkv-<post>`) : un second segment
+        // (`tkv-<post>-2`) est un suffixe de collision, jamais une clé, et
+        // doit rester inconnu du dédoublonnage.
+        guard !parts.isEmpty, parts.count <= (prefix == "tkv-" ? 1 : 2),
+              parts.allSatisfy({ part in
+                  !part.isEmpty && part.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 })
+              }) else { return nil }
+        return prefix + parts.joined(separator: "-")
+    }
+
+    /// Clé d'un nom de fichier TikTok réduit à sa seule clé, sans titre.
+    private static func tikTokBareKey(_ stem: String) -> String? {
+        for prefix in ["tkv-", "tkm-"] where stem.hasPrefix(prefix) {
+            let key = String(stem.dropFirst(prefix.count))
+            let parts = key.split(separator: "-", omittingEmptySubsequences: false)
+            guard !parts.isEmpty, parts.count <= (prefix == "tkv-" ? 1 : 2),
+                  parts.allSatisfy({ part in
+                      !part.isEmpty && part.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 })
+                  }) else { continue }
+            return prefix + key
+        }
+        return nil
+    }
+
     /// L'identifiant de média X est numérique : un suffixe de collision `-2` ou
     /// un fragment de titre ne doit jamais être accepté comme clé.
     private static func isMediaKey(_ value: String) -> Bool {
@@ -222,6 +261,9 @@ public enum FilenamePolicy {
             // `tw` doit rester distinct de `t` : un compte X ne doit jamais
             // hériter du dossier d'un profil Reddit au même pseudo.
             else if first == "tw" { typeSuffix = " - X" }
+            // `tt` reste distinct de `tw` : un compte TikTok ne doit jamais
+            // hériter du dossier d'un compte X au même pseudo.
+            else if first == "tt" { typeSuffix = " - TikTok" }
             // Sélection de posts Reddit : `reddit/posts` ne doit pas produire
             // le dossier `Rposts` d'un subreddit nommé « posts ».
             else if first == "reddit" { typePrefix = "Posts " }

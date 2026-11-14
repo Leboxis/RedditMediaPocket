@@ -51,6 +51,7 @@ public enum FeedSource: Hashable, Sendable {
     case redgifsTag(String)
     case redgifsGif(String)
     case twitterUser(String)
+    case tiktokUser(String)
     /// Posts Reddit isolés, désignés par leur adresse et non par un flux.
     /// Une sélection ne parcourt aucun catalogue : seuls ces posts sont lus.
     case redditPosts(RedditPostRef.Target)
@@ -60,7 +61,8 @@ public enum FeedSource: Hashable, Sendable {
 
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
     /// `rg/pseudo` (ou `g/`), `rg/#tag` et une adresse `redgifs.com/watch/<id>`,
-    /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`),
+    /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`), `tt/pseudo`
+    /// (`@pseudo` ou `tiktok.com/@pseudo`),
     /// une ou plusieurs adresses `reddit.com/r/…/comments/<id>/…` (ou `redd.it/<id>`),
     /// une URL `redgifs.com/users/pseudo` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
@@ -74,6 +76,15 @@ public enum FeedSource: Hashable, Sendable {
             // que d'échouer sur « status », qui n'est pas un pseudo valide.
             if XTwitterAPI.isStatusURL(trimmed) { throw XTwitterError.postUnsupported }
             return try .twitterUser(XTwitterAPI.username(trimmed))
+        }
+        if lower.hasPrefix("tt/") {
+            return try .tiktokUser(TikTokAPI.username(trimmed))
+        }
+        if lower.contains("tiktok.com/") {
+            // Une vidéo isolée n'est pas un compte : refuser explicitement
+            // plutôt que d'échouer sur « video », qui n'est pas un pseudo.
+            if TikTokAPI.isVideoURL(trimmed) { throw TikTokError.postUnsupported }
+            return try .tiktokUser(TikTokAPI.username(trimmed))
         }
         if lower.hasPrefix("saved/") {
             return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
@@ -156,8 +167,8 @@ public enum FeedSource: Hashable, Sendable {
     }
 
     /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
-    /// `x/profil`, `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo` ou
-    /// `reddit/posts`), utilisé comme clé de collection.
+    /// `x/profil`, `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`,
+    /// `tt/pseudo` ou `reddit/posts`), utilisé comme clé de collection.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
@@ -168,6 +179,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsTag(let tag): return "rg/#\(tag)"
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
+        case .tiktokUser(let name): return "tt/\(name)"
         // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
         // subreddit nommé « posts » partageraient identifiant et dossier.
         case .redditPosts: return "reddit/posts"
@@ -181,9 +193,9 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.`, `redgifs.` et
-    /// `tw.` (point interdit dans les pseudos) évitent les collisions
-    /// entre sources. `x.` et `tw.` se distinguent sans ambiguïté.
+    /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.`, `redgifs.`,
+    /// `tw.` et `tk.` (point interdit dans les pseudos) évitent les collisions
+    /// entre sources. `tw.` et `tk.` se distinguent sans ambiguïté.
     public var folderName: String {
         switch self {
         case .user(let name): return name
@@ -194,6 +206,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsTag(let tag): return "redgifs.tag.\(tag)"
         case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
+        case .tiktokUser(let name): return "tk.\(name)"
         case .redditPosts: return "reddit.posts"
         }
     }
@@ -253,6 +266,11 @@ public enum FeedSource: Hashable, Sendable {
             // compte. Le parcours réel passe par `XTwitterAPI.userMedia` avec
             // les cookies de session, jamais par cette URL.
             return XTwitterAPI.userByScreenName(username: name)
+        case .tiktokUser(let name):
+            // Point d'entrée sans session : sert à résoudre le `secUid`. Le
+            // parcours réel passe par `TikTokAPI.itemListURL` avec les cookies
+            // de session, jamais par cette URL seule.
+            return TikTokAPI.profileURL(username: name)
         case .redditPosts(let target):
             // Sélection de posts : l'URL de départ ne sert qu'à l'affichage.
             return target.posts.first?.url ?? URL(string: "https://www.reddit.com/")!

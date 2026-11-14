@@ -74,6 +74,11 @@ import MediaCore
         // politiques sont filtrées par hôte, aucune ne peut envoyer les
         // identifiants de l'autre service ni les transmettre au CDN média.
         if let cookie = await XSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
+        // La session TikTok est elle aussi distincte : `TikTokCookiePolicy`
+        // refuse reddit.com et x.com, il faut donc demander son en-tête à
+        // `TikTokSession`. Aucune politique ne peut envoyer les identifiants
+        // d'un autre service ni les transmettre au CDN de médias.
+        if let cookie = await TikTokSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         try Task.checkCancellation()
         if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
         if let headers {

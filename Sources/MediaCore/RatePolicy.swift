@@ -13,6 +13,11 @@ public enum RatePolicy {
         if host == "x.com" || host.hasSuffix(".x.com")
             || host == "twitter.com" || host.hasSuffix(".twitter.com")
             || host == "twimg.com" || host.hasSuffix(".twimg.com") { return "X" }
+        // TikTok et ses CDN de médias partagent une limite : changer de
+        // sous-domaine ne doit pas la contourner.
+        if host == "tiktok.com" || host.hasSuffix(".tiktok.com")
+            || host.hasSuffix(".tiktokcdn.com") || host.hasSuffix(".tiktokcdn-us.com")
+            || host.hasSuffix(".tiktokv.com") || host.hasSuffix(".byteoversea.com") { return "TikTok" }
         return host
     }
 

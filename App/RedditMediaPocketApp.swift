@@ -18,6 +18,7 @@ struct ContentView: View {
     @StateObject private var model = Downloader()
     @ObservedObject private var redditSession = RedditSession.shared
     @ObservedObject private var xSession = XSession.shared
+    @ObservedObject private var tikTokSession = TikTokSession.shared
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var info: MediaInfoSelection?
@@ -127,7 +128,8 @@ struct ContentView: View {
                 TextField(model.sourceKind == "r" ? L("sub, ou lien de post", "sub, or post link") :
                           (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
                             (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
-                              (model.sourceKind == "tw" ? L("compte X", "X account") : L("pseudo", "username")))), text: $model.username)
+                              (model.sourceKind == "tw" ? L("compte X", "X account") :
+                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") : L("pseudo", "username")))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -163,9 +165,10 @@ struct ContentView: View {
         guard !model.running else { return false }
         if model.sourceKind == "saved" { return !redditSession.hasSession || redditSession.clearing }
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
-        // Les deux sessions sont distinctes : X ne se connecte pas avec le
-        // compte Reddit.
+        // Les trois sessions sont distinctes : X et TikTok ne se connectent
+        // pas avec le compte Reddit.
         if isTwitterInput { return !xSession.hasSession || xSession.clearing }
+        if isTikTokInput { return !tikTokSession.hasSession || tikTokSession.clearing }
         return model.needsSession && (!redditSession.hasSession || redditSession.clearing)
     }
 
@@ -213,6 +216,12 @@ struct ContentView: View {
         return model.resolvedSource == nil && model.sourceKind == "tw"
     }
 
+    private var isTikTokInput: Bool {
+        if let source = model.resolvedSource, case .tiktokUser = source { return true }
+        // Le sélecteur reste pertinent tant que le champ TikTok est vide/invalide.
+        return model.resolvedSource == nil && model.sourceKind == "tt"
+    }
+
     @ViewBuilder private var savedHintRow: some View {
         if isTwitterInput && !xSession.hasSession {
             Label(L("Compte X : connecte-toi à X dans les Réglages. Sans session, X ne publie aucun média.", "X account: sign in to X in Settings. Without a session, X publishes no media."),
@@ -220,7 +229,13 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)
-        } else if !isTwitterInput && model.needsSession && !redditSession.hasSession {
+        } else if isTikTokInput && !tikTokSession.hasSession {
+            Label(L("Compte TikTok : connecte-toi à TikTok dans les Réglages. Sans session, TikTok ne publie aucun média.", "TikTok account: sign in to TikTok in Settings. Without a session, TikTok publishes no media."),
+                  systemImage: "person.crop.circle.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 18).padding(.bottom, 10)
+        } else if !isTwitterInput && !isTikTokInput && model.needsSession && !redditSession.hasSession {
             Label(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."), systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -263,13 +278,14 @@ struct ContentView: View {
     /// de curseur ni de total annoncé, la barre porte donc sur l'unité en cours
     /// (un album, une page de vidéos), dont le nombre de médias est connu.
     @ViewBuilder private var transferBarRow: some View {
-        if let unit = model.transferUnit, (isXFetishInput || isTwitterInput), model.running, unit.total > 0 {
+        if let unit = model.transferUnit, (isXFetishInput || isTwitterInput || isTikTokInput), model.running, unit.total > 0 {
             ProgressView(value: unit.fraction)
                 .progressViewStyle(.linear)
                 .tint(.orange)
                 .padding(.horizontal, 16).padding(.bottom, 6)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(isTwitterInput ? L("Téléchargement X", "X download") : L("Téléchargement X-Fetish", "X-Fetish download"))
+                .accessibilityLabel(isTikTokInput ? L("Téléchargement TikTok", "TikTok download")
+                                    : (isTwitterInput ? L("Téléchargement X", "X download") : L("Téléchargement X-Fetish", "X-Fetish download")))
                 .accessibilityValue("\(unit.done)/\(unit.total)")
         }
     }
@@ -319,7 +335,7 @@ struct ContentView: View {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.tertiary)
                 .accessibilityLabel(L("Galerie vide", "Empty gallery"))
-            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, RG, ♥, x/ ou tw/)", "Choose a source (u/, r/, RG, ♥, x/ or tw/)"))
+            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source (u/, r/, RG, ♥, x/, tw/ ou tt/)", "Choose a source (u/, r/, RG, ♥, x/, tw/ or tt/)"))
                 .font(.footnote).foregroundStyle(.tertiary).padding(.top, 6)
             Spacer()
         } else {
@@ -395,7 +411,7 @@ struct ContentView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter) ? $0.id : $0.name } ?? "Pocket"
+                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok) ? $0.id : $0.name } ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -423,7 +439,7 @@ struct ContentView: View {
         let fresh = model.lastRunCount(for: collection.id)
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isTikTok ? "music.note" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))))))
                 Text(collection.displayName).lineLimit(1)
                 // Ce qui a été réellement ajouté au passage précédent : l'état
                 // existait déjà (`lastRun`) mais n'était affiché nulle part.
@@ -461,7 +477,7 @@ struct ContentView: View {
 
 /// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
 /// la face suivante apparaît, la pastille se referme.
-/// Cycle u/ → r/ → RG → ♥ → x/ → tw.
+/// Cycle u/ → r/ → RG → ♥ → x/ → tw → tt.
 private struct SourceKindToggle: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Binding var kind: String
@@ -476,6 +492,7 @@ private struct SourceKindToggle: View {
         if current == "saved" { return "♥" }
         if current == "x" { return "x/" }
         if current == "tw" { return "tw" }
+        if current == "tt" { return "tt" }
         return "u/"
     }
     private func spoken(_ current: String) -> String {
@@ -484,6 +501,7 @@ private struct SourceKindToggle: View {
         if current == "saved" { return L("sauvegardés", "saved") }
         if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
         if current == "tw" { return L("compte X", "X account") }
+        if current == "tt" { return L("compte TikTok", "TikTok account") }
         return L("profil", "profile")
     }
 
@@ -513,8 +531,10 @@ private struct DownloadSettings: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @ObservedObject private var reddit = RedditSession.shared
     @ObservedObject private var xSession = XSession.shared
+    @ObservedObject private var tikTokSession = TikTokSession.shared
     @State private var loginPresented = false
     @State private var xLoginPresented = false
+    @State private var tikTokLoginPresented = false
     @State private var confirmDeleteAll = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
@@ -579,6 +599,18 @@ private struct DownloadSettings: View {
                     Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
                          : L("Session distincte de Reddit, requise par la source tw. X ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit, required by the tw source. X publishes no media without it. Its rate limits still apply."))
                 }
+                Section {
+                    TikTokSessionIndicator()
+                    Button(tikTokSession.hasSession ? L("Ouvrir TikTok", "Open TikTok") : L("Se connecter à TikTok", "Sign in to TikTok")) { tikTokLoginPresented = true }
+                        .disabled(model.running || tikTokSession.clearing)
+                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await tikTokSession.logout() } }
+                        .disabled(model.running || tikTokSession.clearing)
+                } header: {
+                    Text("TikTok")
+                } footer: {
+                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
+                         : L("Session distincte de Reddit et de X, requise par la source tt. TikTok ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit and X, required by the tt source. TikTok publishes no media without it. Its rate limits still apply."))
+                }
                 KDriveSettingsSection()
                 Section {
                     Picker(L("Espace disque maximal", "Maximum disk space"), selection: Binding(
@@ -607,6 +639,7 @@ private struct DownloadSettings: View {
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
+            .fullScreenCover(isPresented: $tikTokLoginPresented) { TikTokLogin() }
             .confirmationDialog(L("Supprimer tous les téléchargements ?", "Delete all downloads?"), isPresented: $confirmDeleteAll, titleVisibility: .visible) {
                 Button(L("Tout supprimer", "Delete all"), role: .destructive) { model.deleteAllDownloads() }
                 Button(L("Annuler", "Cancel"), role: .cancel) { }

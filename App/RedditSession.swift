@@ -176,6 +176,12 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
             if let cookie = await XSession.shared.cookieHeader(for: url) {
                 redirected.setValue(cookie, forHTTPHeaderField: "Cookie")
             }
+            // TikTok suit la même règle après une redirection : reconstruit
+            // pour la destination, retiré dès que l'hôte change, et jamais
+            // transmis au CDN de médias (exclu par `TikTokCookiePolicy`).
+            if let cookie = await TikTokSession.shared.cookieHeader(for: url) {
+                redirected.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
             completionHandler(redirected)
         }
     }

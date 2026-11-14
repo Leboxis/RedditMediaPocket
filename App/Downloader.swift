@@ -12,6 +12,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var isXFetish = false
     var isRedGifs = false
     var isTwitter = false
+    /// Compte TikTok (`tt/pseudo`) : session WebKit distincte, parcours paginé
+    /// de l'API interne `api/post/item_list`.
+    var isTikTok = false
     /// Tag RedGifs (`rg/#tag`) : même parcours paginé qu'un compte, mais la
     /// liste vient de `/v2/gifs/search` au lieu de `/v2/users/…/search`.
     var isRedGifsTag = false
@@ -22,8 +25,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var archived = false
     var lastRun: Date?
     /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
-    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo` ou `r/posts`.
+    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo` ou
+    /// `r/posts`.
     var id: String {
+        if isTikTok { return "tt/\(name)" }
         if isTwitter { return "tw/\(name)" }
         if isRedGifsTag { return "rg/#\(name)" }
         if isRedGifsGif { return "rg/gif/\(name)" }
@@ -35,9 +40,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     var displayName: String { isSaved ? "Saved" : id }
     /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…`,
-    /// `redgifs.…` et `tw.…` sont interdits dans les pseudos : aucune
+    /// `redgifs.…`, `tw.…` et `tk.…` sont interdits dans les pseudos : aucune
     /// collection existante ne peut entrer en collision.
     var folderName: String {
+        if isTikTok { return "tk.\(name)" }
         if isTwitter { return "tw.\(name)" }
         if isRedGifsTag { return "redgifs.tag.\(name)" }
         if isRedGifsGif { return "redgifs.gif.\(name)" }
@@ -49,15 +55,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
         self.isXFetish = isXFetish
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
+        self.isTikTok = isTikTok
         self.isRedGifsTag = isRedGifsTag
         self.isRedGifsGif = isRedGifsGif
         self.isRedditPosts = isRedditPosts
@@ -72,6 +79,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
+        isTikTok = try container.decodeIfPresent(Bool.self, forKey: .isTikTok) ?? false
         isRedGifsTag = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsTag) ?? false
         isRedGifsGif = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsGif) ?? false
         isRedditPosts = try container.decodeIfPresent(Bool.self, forKey: .isRedditPosts) ?? false
@@ -93,6 +101,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsTag(let tag): self.init(name: tag, isRedGifsTag: true)
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
+        case .tiktokUser(let name): self.init(name: name, isTikTok: true)
         case .redditPosts: self.init(name: "posts", isRedditPosts: true)
         }
     }
@@ -351,7 +360,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
-    /// `tw` médias publics d'un compte X.
+    /// `tw` médias publics d'un compte X,
+    /// `tt` médias publics d'un compte TikTok.
     /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
     /// déjà `/` ou une URL RedGifs garde la priorité.
     @Published var sourceKind: String = {
@@ -371,6 +381,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // quelle ; le préfixe ne doit pas être ajouté dans ces cas.
         if sourceKind == "tw" {
             let text = username.contains("/") || username.hasPrefix("@") ? username : "tw/\(username)"
+            return try? FeedSource.parse(text)
+        }
+        // `tt` accepte `@pseudo` et une adresse `tiktok.com/@pseudo` collée
+        // telle quelle ; le préfixe ne doit pas être ajouté dans ces cas.
+        if sourceKind == "tt" {
+            let text = username.contains("/") || username.hasPrefix("@")
+                || username.lowercased().contains("tiktok.com") ? username : "tt/\(username)"
             return try? FeedSource.parse(text)
         }
         if sourceKind == "rg" {
@@ -393,12 +410,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if sourceKind == "saved" { return true }
         if let source = resolvedSource {
             switch source {
-            case .saved, .twitterUser: return true
+            case .saved, .twitterUser, .tiktokUser: return true
             default: return false
             }
         }
         // Champ vide/invalide : le sélecteur X conserve son aide de connexion.
-        return sourceKind == "tw"
+        return sourceKind == "tw" || sourceKind == "tt"
     }
     @Published var subSort: String = {
         let saved = UserDefaults.standard.string(forKey: "subSort") ?? "new"
@@ -499,6 +516,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
+        else if collection.isTikTok { sourceKind = "tt" }
         else if collection.isXFetish { sourceKind = "x" }
         else if collection.isRedGifs || collection.isRedGifsTag || collection.isRedGifsGif { sourceKind = "rg" }
         else if collection.isSubreddit || collection.isRedditPosts { sourceKind = "r" }
@@ -543,6 +561,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
                 case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
+                case .tiktokUser(let name): sourceKind = "tt"; username = name
                 case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
                 }
             } else {
@@ -587,6 +606,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 collections.append(UserCollection(name: model, isXFetish: true))
             } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTwitter: true))
+            } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
+                collections.append(UserCollection(name: handle, isTikTok: true))
             } else {
                 collections.append(UserCollection(name: folder))
             }
@@ -628,6 +649,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
             case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
+            case .tiktokUser(let name): sourceKind = "tt"; username = name
             case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
             }
         } else {
@@ -666,6 +688,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
         Self.clearSavedMediaCount(for: id)
         UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
+        UserDefaults.standard.removeObject(forKey: "tikTokResume.\(id)")
         UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(id))
         UserDefaults.standard.removeObject(forKey: Self.xFetishSelectionKey(id))
         collections.removeAll { $0.id == id }
@@ -709,6 +732,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for collection in collections {
             Self.clearSavedMediaCount(for: collection.id)
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(collection.id)")
+            UserDefaults.standard.removeObject(forKey: "tikTokResume.\(collection.id)")
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(collection.id))
         }
         collections = []
@@ -1005,6 +1029,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
         if !fm.fileExists(atPath: folder.path) {
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(canonical)")
+            UserDefaults.standard.removeObject(forKey: "tikTokResume.\(canonical)")
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(canonical))
         }
         // Durcissement : dossier absent ou vide (suppression hors app) → l'historique
@@ -1044,6 +1069,23 @@ struct UserCollection: Codable, Identifiable, Equatable {
             if !completed {
                 scanIncomplete = true
                 status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
+            }
+            return
+        }
+        // Comptes TikTok : publications authentifiées, reprise au dernier lot
+        // terminé, dédoublonnage par noms de fichiers. Le chemin est séparé
+        // avant la reprise RSS, dont la migration v2 est sans objet ici.
+        if case .tiktokUser(let handle) = source {
+            var seenMedia = Set<Media>()
+            var usedFilenames = Set<String>()
+            var preparedCount = 0
+            let completed = try await runTikTok(username: handle, canonical: canonical,
+                                                folder: folder, seenMedia: &seenMedia,
+                                                usedFilenames: &usedFilenames,
+                                                preparedCount: &preparedCount)
+            if !completed {
+                scanIncomplete = true
+                status = L("Parcours TikTok incomplet : relance pour reprendre après la dernière page terminée.", "TikTok scan incomplete: relaunch to resume after the last completed page.")
             }
             return
         }
@@ -1614,6 +1656,151 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
 
+    /// Parcours des publications d'un compte TikTok.
+    ///
+    /// Le curseur est conservé uniquement pendant un parcours incomplet.
+    /// Après la fin, le parcours suivant revient aux publications récentes.
+    /// Les clés `tkm-…` / `tkv-…` évitent de retélécharger les fichiers présents.
+    private func runTikTok(username: String, canonical: String, folder: URL,
+                           seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                           preparedCount: inout Int) async throws -> Bool {
+        guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
+        status = L("Résolution du compte TikTok…", "Resolving TikTok account…")
+        let profileURL = TikTokAPI.profileURL(username: username)
+        let headers = TikTokAPI.headers(referer: profileURL)
+        let profile = try TikTokWeb.parseProfile(try await network.data(profileURL, headers: headers))
+        await TikTokSession.shared.recordAPIAcceptance(true)
+        LogCenter.info(L("TikTok : compte \(username) résolu.", "TikTok: account \(username) resolved."))
+
+        // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
+        // ni du post qui l'a publié.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
+        })
+        let resumeKey = "tikTokResume.\(canonical)"
+        let stored = UserDefaults.standard.dictionary(forKey: resumeKey) as? [String: String]
+        let resumeCursor = stored?["secUid"] == profile.secUid ? stored?["cursor"] : nil
+        var scanned = Set<String>()
+        var scannedPages = 0
+        var requested = Set<String>()
+        if let resumeCursor { requested.insert(resumeCursor) }
+        var idle = 0
+        var cursor = resumeCursor
+        var caughtUp = false
+        let mediaHeaders = TikTokAPI.mediaHeaders()
+
+        func persist(_ next: String?) {
+            if let next {
+                UserDefaults.standard.set(["secUid": profile.secUid, "cursor": next], forKey: resumeKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: resumeKey)
+            }
+        }
+
+        for _ in 0..<100 {
+            try Task.checkCancellation()
+            scannedPages += 1
+            status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
+            let msToken = await TikTokSession.shared.msToken()
+            let data: Data
+            do {
+                data = try await network.data(
+                    TikTokAPI.itemListURL(secUid: profile.secUid, cursor: cursor, msToken: msToken),
+                    headers: headers)
+            } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+                // Une session expirée se voit ici. L'utilisateur est invité à
+                // se reconnecter plutôt que de boucler sur un refus identique.
+                await TikTokSession.shared.refresh()
+                if code == 401 { await TikTokSession.shared.recordAPIAcceptance(false) }
+                guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
+                throw TikTokError.deniedAccess
+            }
+            let page = try TikTokWeb.parseItemList(data)
+            LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))
+            let next = page.nextCursor.flatMap { $0.isEmpty ? nil : $0 }
+            // Un curseur répété signifierait une boucle sans fin : TikTok
+            // renvoie parfois la même page.
+            if let next, !requested.insert(next).inserted { throw TikTokError.invalidTimeline }
+
+            var fresh: [TikTokPost] = []
+            for post in page.posts where scanned.insert(post.id).inserted {
+                // Un média déjà enregistré ne vaut pas une seconde page à
+                // relire pour lui : le post entier est écarté si tous ses
+                // médias sont là.
+                let missing = post.media.filter { !savedIDs.contains($0.storageKey) }
+                guard !missing.isEmpty else { continue }
+                fresh.append(TikTokPost(id: post.id, text: post.text, publishedAt: post.publishedAt, media: missing))
+            }
+            // Rien de nouveau sur cette page : elle compte comme « rattrapée ».
+            // Un média en échec reste `missing`, donc sa page est toujours
+            // considérée comme nouvelle et se voit retenter.
+            if fresh.isEmpty {
+                idle += 1
+            } else {
+                var mediaOverrides: [String: [Media]] = [:]
+                var mediaHeadersByMedia: [String: [String: String]] = [:]
+                var mediaExtensions: [String: String] = [:]
+                var posts: [Post] = []
+                for post in fresh {
+                    for media in post.media {
+                        // L'identifiant du média entre dans le nom de fichier :
+                        // c'est lui que `FilenamePolicy.tikTokMediaID` relit au
+                        // lancement suivant pour ne pas retélécharger.
+                        // `storageKey` est la forme canonique, écrite à côté de
+                        // sa lecture.
+                        let id = media.storageKey
+                        mediaOverrides[id] = [.direct(media.url)]
+                        // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
+                        // et l'UA navigateur lié aux cookies.
+                        mediaHeadersByMedia[media.key] = mediaHeaders
+                        if media.kind == .video { mediaExtensions[id] = "mp4" }
+                        posts.append(Post(id: id, title: post.text, html: "",
+                                          publishedAt: post.publishedAt,
+                                          link: "https://www.tiktok.com/@\(username)/video/\(post.id)"))
+                    }
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides,
+                    mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
+                // La barre suit la page : TikTok n'annonce aucun total global
+                // et le parcours en découvre en continu, donc une unité de
+                // nombre connu est la seule progression exacte possible.
+                beginTransferUnit(total: downloads.count)
+                try await executeDownloads(downloads, &preparedCount)
+                idle = 0
+            }
+            try Task.checkCancellation()
+            // Deux pages sans nouveauté : le compte est rattrapé, même si
+            // TikTok annonce encore des pages (doublons inter-pages).
+            if idle >= 2 || !page.hasMore {
+                persist(nil)
+                caughtUp = true
+                break
+            }
+            persist(next)
+            guard let next else { caughtUp = true; break }
+            cursor = next
+        }
+        guard caughtUp else { return false }
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("TikTok : \(scannedPages) pages, \(preparedCount) médias préparés.", "TikTok: \(scannedPages) pages, \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) médias TikTok inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                             "\(failed) TikTok media unavailable or unsaved.\n\(kept) media files kept.")
+            return true
+        }
+        status = count == 0 ? L("Aucun nouveau média TikTok accessible", "No new accessible TikTok media")
+                            : L("\(count) médias TikTok téléchargés", "\(count) TikTok media downloaded")
+        return true
+    }
+
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
     private static func xFetishVideoResumeKey(_ canonical: String) -> String { "xFetishVideoResume.\(canonical)" }
     private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
@@ -1920,6 +2107,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                    author: String = "",
                                    mediaOverrides: [String: [Media]] = [:],
                                    mediaHeaders: [String: [String: String]] = [:],
+                                   mediaExtensions: [String: String] = [:],
                                    xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
         let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
@@ -1983,6 +2171,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 // `webp` : le chemin reste donc la seule source fiable ici, et
                 // une extension vide se replie sur `jpg`.
                 if xFetishVideos[post.id] != nil { ext = "mp4" }
+                // Une URL vidéo TikTok ne porte pas son format dans le chemin :
+                // la nature du média décide, sinon l'extension retomberait sur
+                // `jpg` pour une vidéo.
+                else if let forced = mediaExtensions[post.id] { ext = forced }
                 else if case .direct(let url) = item {
                     let path = url.pathExtension.lowercased()
                     ext = path.isEmpty ? "jpg" : path
