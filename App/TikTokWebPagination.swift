@@ -118,24 +118,35 @@ import MediaCore
 
     /// Défile la fenêtre et tout conteneur défilable en bas de page : TikTok
     /// charge alors la page suivante de son propre geste, avec sa signature.
-    /// La hauteur atteinte est signalée à chaque passage : des hauteurs qui
-    /// grandissent prouvent que le défilement charge du contenu, une hauteur
-    /// figée au viewport prouve le contraire.
+    /// Des événements `wheel` accompagnent le `scroll` : certains front-ends
+    /// n'écoutent pas l'événement scroll seul. Chaque passage signale un état
+    /// du DOM — nombre de publications rendues (`data-e2e="user-post-item"`),
+    /// plus grande hauteur de conteneur, hauteur du document, présence du
+    /// signataire `bytedAcrawler` — pour voir si la page vit et ce qui bloque.
     static let scrollScript = #"""
     (function() {
-      window.scrollTo(0, document.documentElement.scrollHeight);
+      var doc = document.scrollingElement || document.documentElement;
+      var wheel = null;
+      try { wheel = new WheelEvent('wheel', { deltaY: 600, bubbles: true, cancelable: true }); } catch (e) {}
+      window.scrollTo(0, doc.scrollHeight);
       window.dispatchEvent(new Event('scroll'));
+      if (wheel) window.dispatchEvent(wheel);
+      var maxH = doc.scrollHeight;
       var containers = document.querySelectorAll('div, main, section');
       for (var i = 0; i < containers.length; i++) {
         var el = containers[i];
+        if (el.scrollHeight > maxH) maxH = el.scrollHeight;
         if (el.scrollHeight > el.clientHeight + 100) {
           el.scrollTop = el.scrollHeight;
           el.dispatchEvent(new Event('scroll', { bubbles: true }));
+          if (wheel) el.dispatchEvent(wheel);
         }
       }
+      var posts = document.querySelectorAll('[data-e2e="user-post-item"]').length;
+      var signer = (window.bytedAcrawler && window.bytedAcrawler.sign) ? 1 : 0;
       try {
         window.webkit.messageHandlers.tiktokItemListHook.postMessage(
-          { kind: 'route', url: '/__scroll_' + document.documentElement.scrollHeight + '__' });
+          { kind: 'route', url: '/__dom_' + posts + '_' + maxH + '_' + doc.scrollHeight + '_s' + signer + '__' });
       } catch (e) {}
     })();
     """#
@@ -149,6 +160,12 @@ import MediaCore
     private var loggedRoutes = Set<String>()
     private var itemListResponses = 0
     private var emptyItemListResponses = 0
+
+    /// UA réel de la WebView, lu après le chargement de la page. Les URL de
+    /// médias d'une réponse `item_list` sont liées au client qui l'a obtenue :
+    /// les téléchargements doivent s'identifier avec cet UA exact, pas avec
+    /// le spoof iPhone de `TikTokAPI.userAgent`.
+    private(set) var pageUserAgent: String?
 
     /// La page a-t-elle répondu à chaque appel `item_list` par un corps vide ?
     /// Un corps vide (HTTP 200, 0 octet) n'est pas une fin de fil — TikTok
@@ -275,6 +292,10 @@ extension TikTokWebPaginator: WKNavigationDelegate {
             if let text = result as? String {
                 LogCenter.info(L("TikTok web : page chargée \(text).", "TikTok web: page loaded \(text)."))
             }
+        })
+        webView.evaluateJavaScript("navigator.userAgent",
+                                   completionHandler: { [weak self] result, _ in
+            self?.pageUserAgent = result as? String
         })
     }
 

@@ -1759,7 +1759,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     break
                 }
                 page = try TikTokWeb.parseItemList(data)
-                pageMediaHeaders = TikTokAPI.mediaHeaders()
+                // Les URL de cette page ont été servies à la WebView : le CDN
+                // n'accepte que l'UA exact du client qui les a obtenues.
+                pageMediaHeaders = TikTokAPI.mediaHeaders(browserAgent: paginator.pageUserAgent)
                 LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))
             }
             var fresh: [TikTokPost] = []
