@@ -1070,6 +1070,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 scanIncomplete = true
                 status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
             }
+            recordLastRunCount(canonical)
             return
         }
         // Comptes TikTok : publications authentifiées, reprise au dernier lot
@@ -1087,6 +1088,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 scanIncomplete = true
                 status = L("Parcours TikTok incomplet : relance pour reprendre après la dernière page terminée.", "TikTok scan incomplete: relaunch to resume after the last completed page.")
             }
+            recordLastRunCount(canonical)
             return
         }
         // Older versions swallowed media 429s and marked incomplete pages as
@@ -1278,6 +1280,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 collections[index].lastRun = Date()
                 saveCollections()
             }
+            recordLastRunCount(canonical)
             return
         }
         guard let model = target.model else { throw FeedError.invalidXFetishProfile }
@@ -1930,6 +1933,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
         var orderedVisited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         var seenPages = Set<[String]>()
+        // Une page vide ou répétée est une fin de listing, pas une limite de
+        // pages atteinte : le parcours est alors complet, sinon un compte ou
+        // un tag vide serait affiché « incomplet » à chaque relance.
+        var reachedEnd = false
         for page in 1...100 {
             try Task.checkCancellation()
             status = L("Recherche RedGifs… page \(page)", "Searching RedGifs… page \(page)")
@@ -1937,8 +1944,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let response = try await fetch(page)
             let ids = response.gifs.map(\.id)
             LogCenter.net(L("RedGifs \(label) : page \(page) reçue, \(ids.count) médias.", "RedGifs \(label): page \(page) received, \(ids.count) media."))
-            if ids.isEmpty { break }
-            guard seenPages.insert(ids).inserted else { break }
+            if ids.isEmpty { reachedEnd = true; break }
+            guard seenPages.insert(ids).inserted else { reachedEnd = true; break }
             let fresh = ids.filter { !visited.contains($0) }
             if !fresh.isEmpty {
                 let downloads = prepareRedgifsDownloads(fresh, folder: folder,
@@ -1950,7 +1957,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             Self.persistResumeState(canonical: canonical, cursor: nil, visited: orderedVisited)
             if page >= max(1, response.pages) { return true }
         }
-        return false
+        return reachedEnd
     }
 
     private func fetchRedgifsUserPage(username: String, page: Int) async throws -> RedgifsUserSearchResponse {
@@ -2521,8 +2528,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             tokenTask = nil
             return result
         } catch {
-            if request.isCancelled { tokenTask = nil }
-            else { tokenTask = nil }
+            tokenTask = nil
             throw error
         }
     }
