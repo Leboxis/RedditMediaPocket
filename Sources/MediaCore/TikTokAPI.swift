@@ -174,9 +174,32 @@ public enum TikTokWebNavigation {
     /// cookies de session sont posés quel que soit le chemin suivi.
     public static let loginURL = URL(string: "https://www.tiktok.com/")!
 
-    /// Les fenêtres contextuelles TikTok restent sur les hôtes TikTok autorisés.
+    /// Hôtes des fournisseurs de connexion sociale de TikTok : Google,
+    /// Facebook et Apple. La fenêtre de connexion quitte tiktok.com quand un
+    /// bouton « Continuer avec… » est suivi. Ces hôtes ne reçoivent jamais les
+    /// cookies de session : `TikTokCookiePolicy` reste limitée à tiktok.com.
+    static let oauthHosts: Set<String> = [
+        "accounts.google.com", "accounts.youtube.com",
+        "facebook.com", "www.facebook.com", "m.facebook.com", "web.facebook.com",
+        "appleid.apple.com", "appleid.cdn-apple.com"
+    ]
+
+    /// Navigation principale de la fenêtre de connexion : tiktok.com et les
+    /// fournisseurs de connexion sociale. Une adresse hostile
+    /// (`tiktok.com.attacker.example`) reste refusée.
+    public static func allowsLogin(_ url: URL) -> Bool {
+        TikTokCookiePolicy.allows(url) || isOAuthHost(url)
+    }
+
+    /// Les fenêtres contextuelles TikTok suivent les mêmes règles : un
+    /// fournisseur peut ouvrir son formulaire dans une popup.
     public static func allowsPopup(_ url: URL) -> Bool {
-        TikTokCookiePolicy.allows(url)
+        allowsLogin(url)
+    }
+
+    static func isOAuthHost(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        return oauthHosts.contains(host)
     }
 }
 

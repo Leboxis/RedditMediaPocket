@@ -209,11 +209,13 @@ private struct TikTokWebContent: UIViewControllerRepresentable {
             return nil
         }
 
-        /// Les redirections TikTok sont permises mais pas les domaines tiers,
-        /// qui pourraient recevoir accidentellement des cookies de session.
+        /// Les redirections TikTok sont permises, ainsi que les fournisseurs
+        /// de connexion sociale (Google, Facebook, Apple) ; pas les autres
+        /// domaines tiers, qui pourraient recevoir accidentellement des
+        /// cookies de session.
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             guard navigationAction.targetFrame?.isMainFrame != false else { decisionHandler(.allow); return }
-            guard let url = navigationAction.request.url, TikTokCookiePolicy.allows(url) else {
+            guard let url = navigationAction.request.url, TikTokWebNavigation.allowsLogin(url) else {
                 blockedNavigation()
                 decisionHandler(.cancel); return
             }
@@ -222,7 +224,7 @@ private struct TikTokWebContent: UIViewControllerRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             if navigationResponse.isForMainFrame {
-                guard let url = navigationResponse.response.url, TikTokCookiePolicy.allows(url) else {
+                guard let url = navigationResponse.response.url, TikTokWebNavigation.allowsLogin(url) else {
                     blockedNavigation()
                     decisionHandler(.cancel); return
                 }
@@ -251,8 +253,8 @@ private struct TikTokWebContent: UIViewControllerRepresentable {
         private func blockedNavigation() {
             LogCenter.err(L("Connexion TikTok : navigation vers un domaine externe refusée.",
                             "TikTok sign-in: external-domain navigation blocked."))
-            errorMessage = L("Cette connexion autorise uniquement les pages TikTok. Utilise tes identifiants TikTok dans le formulaire de connexion.",
-                             "This sign-in only allows TikTok pages. Use your TikTok credentials in the sign-in form.")
+            errorMessage = L("Cette connexion autorise uniquement les pages TikTok et celles de ses fournisseurs de connexion (Google, Facebook, Apple). Utilise tes identifiants TikTok dans le formulaire de connexion.",
+                             "This sign-in only allows TikTok pages and its sign-in providers (Google, Facebook, Apple). Use your TikTok credentials in the sign-in form.")
         }
 
         private func reportNavigationError(_ error: Error) {
