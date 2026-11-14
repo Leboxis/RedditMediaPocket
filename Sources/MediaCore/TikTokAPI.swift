@@ -38,6 +38,11 @@ public enum TikTokAPI {
     /// applicatif comme le stockage X-Fetish refuse le sien.
     public static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
 
+    /// UA desktop (Chrome Windows) pour la tentative URLSession de la route
+    /// paginée : TikTok sert parfois `item_list` sans signature à un client
+    /// desktop cohérent, alors que le contexte mobile web exige `X-Bogus`.
+    public static let desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+
     /// Un pseudo TikTok fait 1 à 24 caractères : lettres, chiffres, points ou
     /// underscores, et ne finit pas par un point. Les noms d'affichage
     /// (espaces, accents) sont refusés, ils ne sont pas utilisables dans une
@@ -78,11 +83,44 @@ public enum TikTokAPI {
         URL(string: "https://www.tiktok.com/@\(username)")!
     }
 
+    /// Route paginée « desktop » de la liste des publications : contexte
+    /// Chrome Windows minimal, sans `msToken` en paramètre (les scrapeurs
+    /// actifs s'en passent, et un msToken périmé est une cause plausible du
+    /// 400 initial). Tentée avant la WebView ; au premier refus, la pagination
+    /// bascule vers `TikTokWebPaginator` qui laisse TikTok signer lui-même.
+    public static func desktopItemListURL(secUid: String, cursor: Int) -> URL {
+        var components = URLComponents(string: "https://www.tiktok.com/api/post/item_list/")!
+        components.queryItems = [
+            URLQueryItem(name: "aid", value: "1988"),
+            URLQueryItem(name: "count", value: "35"),
+            URLQueryItem(name: "secUid", value: secUid),
+            URLQueryItem(name: "cursor", value: String(cursor)),
+            URLQueryItem(name: "device_platform", value: "web_pc"),
+            URLQueryItem(name: "channel", value: "tiktok_web"),
+            URLQueryItem(name: "os", value: "windows"),
+            URLQueryItem(name: "browser_platform", value: "Win32"),
+            URLQueryItem(name: "from_page", value: "user"),
+            URLQueryItem(name: "sourceType", value: "8"),
+            URLQueryItem(name: "app_language", value: "fr-FR"),
+            URLQueryItem(name: "browser_language", value: "fr-FR"),
+            URLQueryItem(name: "browser_name", value: "Chrome"),
+            URLQueryItem(name: "browser_version", value: "126.0.0.0"),
+            URLQueryItem(name: "region", value: "FR"),
+            URLQueryItem(name: "priority_region", value: ""),
+            URLQueryItem(name: "verifyFp", value: ""),
+            URLQueryItem(name: "validFlag", value: "1")
+        ]
+        return components.url!
+    }
+
     /// En-têtes des requêtes TikTok (page profil et API). Le Referer de la
     /// page profil est exigé par l'API web, et l'UA navigateur par les deux.
-    public static func headers(referer: URL) -> [String: String] {
+    /// `browserAgent` remplace l'UA iPhone par l'UA desktop pour la tentative
+    /// URLSession paginée : les URL de médias servies à un client desktop
+    /// n'acceptent que l'UA qui les a obtenues.
+    public static func headers(referer: URL, browserAgent: String? = nil) -> [String: String] {
         [
-            "User-Agent": userAgent,
+            "User-Agent": browserAgent ?? userAgent,
             "Referer": referer.absoluteString,
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9"
@@ -91,9 +129,9 @@ public enum TikTokAPI {
 
     /// En-têtes des transferts de médias. Les URL vidéo exigent le Referer de
     /// tiktok.com (anti-hotlink) et l'UA navigateur lié aux cookies.
-    public static func mediaHeaders() -> [String: String] {
+    public static func mediaHeaders(browserAgent: String? = nil) -> [String: String] {
         [
-            "User-Agent": userAgent,
+            "User-Agent": browserAgent ?? userAgent,
             "Referer": "https://www.tiktok.com/"
         ]
     }

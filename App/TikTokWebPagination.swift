@@ -11,16 +11,18 @@ import MediaCore
 /// les réponses `item_list` que la page signe et charge elle-même, via un
 /// crochet posé sur `fetch` et `XMLHttpRequest` avant l'exécution du site.
 /// Aucun identifiant n'est lu : seuls les corps JSON des réponses publiques
-/// de la liste des publications transitent vers le parcours. Les routes `/api/`
-/// visitées par la page sont journalisées une fois chacune : si TikTok
-/// mobile-web pagine par une autre route, le journal le montre immédiatement.
+/// de la liste des publications transitent vers le parcours. Pour le
+/// diagnostic, le crochet confirme son installation et signale chaque route
+/// appelée par la page (une fois par chemin) : si TikTok mobile-web pagine
+/// par une autre route, ou si la page reste sur un mur, le journal le montre.
 @MainActor final class TikTokWebPaginator: NSObject {
     /// Nom du gestionnaire de messages côté page.
     static let hookName = "tiktokItemListHook"
 
-    /// Crochet posé avant les scripts de TikTok : chaque route `/api/` est
-    /// signalée une fois, et chaque réponse `/item_list` est recopiée vers le
-    /// gestionnaire natif, sans altérer la requête ni la réponse originales.
+    /// Crochet posé avant les scripts de TikTok : il confirme son injection,
+    /// signale chaque route appelée par la page, et recopie chaque réponse
+    /// `/item_list` vers le gestionnaire natif sans altérer la requête ni la
+    /// réponse originales.
     static let hookScript = #"""
     (function() {
       var handler = function(payload) {
@@ -28,13 +30,16 @@ import MediaCore
           window.webkit.messageHandlers.tiktokItemListHook.postMessage(payload);
         } catch (e) {}
       };
+      handler({ kind: 'route', url: '/__hook_installed__' });
       var seenRoutes = {};
+      var staticExt = /\.(js|css|png|jpe?g|webp|gif|svg|woff2?|ttf|mp4|ico|avif)(\?|$)/;
       var logRoute = function(url) {
-        if (typeof url !== 'string') return;
-        var path = url.split('?')[0];
-        if (path.indexOf('/api/') === -1) return;
+        if (typeof url !== 'string' || url.length === 0) return;
+        var path = url.replace(/^https?:\/\/[^\/]+/, '').split('?')[0];
+        if (path === '/' || staticExt.test(path)) return;
         if (seenRoutes[path]) return;
         seenRoutes[path] = true;
+        if (Object.keys(seenRoutes).length > 80) return;
         handler({ kind: 'route', url: path });
       };
       var captureBody = function(url, text) {
@@ -79,6 +84,7 @@ import MediaCore
 
     /// Défile la fenêtre et tout conteneur défilable en bas de page : TikTok
     /// charge alors la page suivante de son propre geste, avec sa signature.
+    /// La hauteur atteinte est signalée pour voir si le défilement agit.
     static let scrollScript = #"""
     (function() {
       window.scrollTo(0, document.documentElement.scrollHeight);
@@ -91,6 +97,10 @@ import MediaCore
           el.dispatchEvent(new Event('scroll', { bubbles: true }));
         }
       }
+      try {
+        window.webkit.messageHandlers.tiktokItemListHook.postMessage(
+          { kind: 'route', url: '/__scroll_' + document.documentElement.scrollHeight + '__' });
+      } catch (e) {}
     })();
     """#
 
@@ -201,6 +211,13 @@ import MediaCore
 extension TikTokWebPaginator: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         finishLoad(true)
+        // Diagnostic : la page réellement servie à la WebView cachée.
+        webView.evaluateJavaScript("document.title + ' | ' + location.href",
+                                   completionHandler: { result, _ in
+            if let text = result as? String {
+                LogCenter.info(L("TikTok web : page chargée \(text).", "TikTok web: page loaded \(text)."))
+            }
+        })
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -218,7 +235,7 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
         if payload["kind"] as? String == "route" {
             if let route = payload["url"] as? String, !route.isEmpty,
                loggedRoutes.insert(route).inserted {
-                LogCenter.info(L("TikTok web : route API \(route).", "TikTok web: API route \(route)."))
+                LogCenter.info(L("TikTok web : route \(route).", "TikTok web: route \(route)."))
             }
             return
         }

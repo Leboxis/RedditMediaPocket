@@ -1685,13 +1685,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var scannedPages = 0
         var idle = 0
         var caughtUp = false
-        let mediaHeaders = TikTokAPI.mediaHeaders()
-
-        let paginator = TikTokWebPaginator()
-        defer { paginator.close() }
-        guard await paginator.start(username: username) else {
-            throw TikTokError.invalidTimeline
-        }
+        var desktopFailed = false
+        var desktopCursor = 0
+        var webUnavailable = false
+        var paginator: TikTokWebPaginator?
+        defer { paginator?.close() }
 
         // Première page gratuite : le HTML du profil embarque les publications
         // les plus récentes. Elles partent d'abord, même si la pagination web
@@ -1701,10 +1699,49 @@ struct UserCollection: Codable, Identifiable, Equatable {
         for _ in 0..<100 {
             try Task.checkCancellation()
             let page: TikTokMediaPage
+            let pageMediaHeaders: [String: String]
             if !embedded.isEmpty {
                 page = TikTokMediaPage(posts: embedded, nextCursor: nil, hasMore: true)
                 embedded = []
+                pageMediaHeaders = TikTokAPI.mediaHeaders()
+            } else if !desktopFailed {
+                // Tentative desktop : URLSession avec un contexte Chrome
+                // Windows minimal, sans msToken périmé. Si TikTok refuse
+                // (signature X-Bogus exigée), bascule définitive vers la
+                // WebView qui laisse le JavaScript de TikTok signer.
+                scannedPages += 1
+                status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
+                do {
+                    let desktopURL = TikTokAPI.desktopItemListURL(secUid: profile.secUid, cursor: desktopCursor)
+                    let desktopHeaders = TikTokAPI.headers(referer: TikTokAPI.profileURL(username: username),
+                                                           browserAgent: TikTokAPI.desktopUserAgent)
+                    page = try TikTokWeb.parseItemList(try await network.data(desktopURL, headers: desktopHeaders))
+                    desktopCursor = Int(page.nextCursor ?? "") ?? (desktopCursor + page.posts.count)
+                    pageMediaHeaders = TikTokAPI.mediaHeaders(browserAgent: TikTokAPI.desktopUserAgent)
+                } catch {
+                    desktopFailed = true
+                    LogCenter.info(L("TikTok : pagination desktop refusée (\(error.localizedDescription)), bascule vers la WebView.",
+                                     "TikTok: desktop pagination refused (\(error.localizedDescription)), falling back to the web view."))
+                    continue
+                }
             } else {
+                if paginator == nil, !webUnavailable {
+                    let web = TikTokWebPaginator()
+                    if await web.start(username: username) {
+                        paginator = web
+                    } else {
+                        webUnavailable = true
+                    }
+                }
+                guard let paginator else {
+                    // Ni desktop ni WebView : seule la première page est lue.
+                    if scannedPages == 1 {
+                        LogCenter.info(L("TikTok : pagination web indisponible, seule la première page du profil a été lue.",
+                                         "TikTok: web pagination unavailable, only the profile's first page was read."))
+                    }
+                    caughtUp = true
+                    break
+                }
                 scannedPages += 1
                 status = L("Recherche des médias TikTok… page \(scannedPages)", "Searching TikTok media… page \(scannedPages)")
                 guard let data = await paginator.nextPage() else {
@@ -1717,6 +1754,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                     break
                 }
                 page = try TikTokWeb.parseItemList(data)
+                pageMediaHeaders = TikTokAPI.mediaHeaders()
                 LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) posts avec média.", "TikTok: page \(scannedPages), \(page.posts.count) posts with media."))
             }
             var fresh: [TikTokPost] = []
@@ -1749,7 +1787,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         mediaOverrides[id] = [.direct(media.url)]
                         // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
                         // et l'UA navigateur lié aux cookies.
-                        mediaHeadersByMedia[id] = mediaHeaders
+                        mediaHeadersByMedia[id] = pageMediaHeaders
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
