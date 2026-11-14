@@ -138,7 +138,7 @@ import MediaCore
         view.stopLoading()
         view.navigationDelegate = nil
         view.configuration.userContentController
-            .removeScriptMessageHandler(forContentWorld: .page, forName: Self.hookName)
+            .removeScriptMessageHandler(forName: Self.hookName, contentWorld: .page)
         webView = nil
     }
 
