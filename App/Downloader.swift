@@ -15,6 +15,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Compte TikTok (`tt/pseudo`) : session WebKit distincte, parcours paginé
     /// de l'API interne `api/post/item_list`.
     var isTikTok = false
+    /// Compte Instagram (`ig/pseudo`) : profil public anonyme via l'API web
+    /// `api/v1`, parcours paginé par `feed/user/<id>`.
+    var isInstagram = false
     /// Tag RedGifs (`rg/#tag`) : même parcours paginé qu'un compte, mais la
     /// liste vient de `/v2/gifs/search` au lieu de `/v2/users/…/search`.
     var isRedGifsTag = false
@@ -29,6 +32,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// `r/posts`.
     var id: String {
         if isTikTok { return "tt/\(name)" }
+        if isInstagram { return "ig/\(name)" }
         if isTwitter { return "tw/\(name)" }
         if isRedGifsTag { return "rg/#\(name)" }
         if isRedGifsGif { return "rg/gif/\(name)" }
@@ -44,6 +48,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// collection existante ne peut entrer en collision.
     var folderName: String {
         if isTikTok { return "tk.\(name)" }
+        if isInstagram { return "ig.\(name)" }
         if isTwitter { return "tw.\(name)" }
         if isRedGifsTag { return "redgifs.tag.\(name)" }
         if isRedGifsGif { return "redgifs.gif.\(name)" }
@@ -55,9 +60,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
@@ -65,6 +70,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
         self.isTikTok = isTikTok
+        self.isInstagram = isInstagram
         self.isRedGifsTag = isRedGifsTag
         self.isRedGifsGif = isRedGifsGif
         self.isRedditPosts = isRedditPosts
@@ -80,6 +86,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
         isTikTok = try container.decodeIfPresent(Bool.self, forKey: .isTikTok) ?? false
+        isInstagram = try container.decodeIfPresent(Bool.self, forKey: .isInstagram) ?? false
         isRedGifsTag = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsTag) ?? false
         isRedGifsGif = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsGif) ?? false
         isRedditPosts = try container.decodeIfPresent(Bool.self, forKey: .isRedditPosts) ?? false
@@ -102,6 +109,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
         case .tiktokUser(let name): self.init(name: name, isTikTok: true)
+        case .instagramUser(let name): self.init(name: name, isInstagram: true)
         case .redditPosts: self.init(name: "posts", isRedditPosts: true)
         }
     }
@@ -361,7 +369,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
     /// `tw` médias publics d'un compte X,
-    /// `tt` médias publics d'un compte TikTok.
+    /// `tt` médias publics d'un compte TikTok,
+    /// `ig` médias publics d'un compte Instagram.
     /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
     /// déjà `/` ou une URL RedGifs garde la priorité.
     @Published var sourceKind: String = {
@@ -394,6 +403,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let text = username.contains("/") || username.lowercased().contains("redgifs.com")
                 || username.hasPrefix("#")
                 ? username : "rg/\(username)"
+            return try? FeedSource.parse(text)
+        }
+        // `ig` accepte une adresse `instagram.com/pseudo` collée telle quelle ;
+        // le préfixe ne doit pas être ajouté dans ce cas.
+        if sourceKind == "ig" {
+            let text = username.contains("/") || username.lowercased().contains("instagram.com")
+                ? username : "ig/\(username)"
             return try? FeedSource.parse(text)
         }
         // En mode `r`, une adresse de post collée est une sélection, pas un
@@ -444,6 +460,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     @Published var active = 0
     @Published private(set) var transfers = 0
     private var failed = 0
+    /// Contexte du parcours en cours, pour le journal des échecs : collection
+    /// et dossier des médias dont le transfert échoue.
+    private var currentCanonical: String?
+    private var currentFolder: URL?
     private let network = Network()
     private let previewCache: NSCache<NSURL, NSData> = {
         let cache = NSCache<NSURL, NSData>()
@@ -517,6 +537,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
         else if collection.isTikTok { sourceKind = "tt" }
+        else if collection.isInstagram { sourceKind = "ig" }
         else if collection.isXFetish { sourceKind = "x" }
         else if collection.isRedGifs || collection.isRedGifsTag || collection.isRedGifsGif { sourceKind = "rg" }
         else if collection.isSubreddit || collection.isRedditPosts { sourceKind = "r" }
@@ -562,6 +583,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
                 case .tiktokUser(let name): sourceKind = "tt"; username = name
+                case .instagramUser(let name): sourceKind = "ig"; username = name
                 case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
                 }
             } else {
@@ -608,6 +630,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 collections.append(UserCollection(name: handle, isTwitter: true))
             } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTikTok: true))
+            } else if folder.hasPrefix("ig."), let handle = try? InstagramAPI.username(String(folder.dropFirst(3))) {
+                collections.append(UserCollection(name: handle, isInstagram: true))
             } else {
                 collections.append(UserCollection(name: folder))
             }
@@ -650,6 +674,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
             case .tiktokUser(let name): sourceKind = "tt"; username = name
+            case .instagramUser(let name): sourceKind = "ig"; username = name
             case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
             }
         } else {
@@ -1027,6 +1052,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
         upsertCollection(source)
         reload()
         let folder = root.appendingPathComponent(source.folderName, isDirectory: true)
+        currentCanonical = canonical
+        currentFolder = folder
+        defer { currentCanonical = nil; currentFolder = nil }
         if !fm.fileExists(atPath: folder.path) {
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(canonical)")
             UserDefaults.standard.removeObject(forKey: "tikTokResume.\(canonical)")
@@ -1086,6 +1114,22 @@ struct UserCollection: Codable, Identifiable, Equatable {
             if !completed {
                 scanIncomplete = true
                 status = L("Parcours TikTok incomplet : relance pour reprendre après la dernière page terminée.", "TikTok scan incomplete: relaunch to resume after the last completed page.")
+            }
+            return
+        }
+        // Comptes Instagram : publications publiques anonymes, dédoublonnage
+        // par clés de médias. Chemin séparé, comme X et TikTok.
+        if case .instagramUser(let handle) = source {
+            var seenMedia = Set<Media>()
+            var usedFilenames = Set<String>()
+            var preparedCount = 0
+            let completed = try await runInstagram(username: handle, canonical: canonical,
+                                                   folder: folder, seenMedia: &seenMedia,
+                                                   usedFilenames: &usedFilenames,
+                                                   preparedCount: &preparedCount)
+            if !completed {
+                scanIncomplete = true
+                status = L("Parcours Instagram incomplet : relance pour reprendre après la dernière page terminée.", "Instagram scan incomplete: relaunch to resume after the last completed page.")
             }
             return
         }
@@ -1858,6 +1902,129 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return true
     }
 
+    /// Parcours des publications publiques d'un compte Instagram. Le fil est
+    /// anonyme : la page de profil résout l'identifiant du compte et embarque
+    /// les publications récentes, puis `feed/user/<id>` page par page. Les clés
+    /// `igm-…` / `igv-…` des noms de fichiers évitent tout retéléchargement au
+    /// lancement suivant, même si les URL du CDN changent entre les formats.
+    private func runInstagram(username: String, canonical: String, folder: URL,
+                              seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                              preparedCount: inout Int) async throws -> Bool {
+        status = L("Résolution du compte Instagram…", "Resolving Instagram account…")
+        let profileURL = InstagramAPI.profileInfoURL(username: username)
+        let headers = InstagramAPI.headers(referer: URL(string: "https://www.instagram.com/\(username)/")!)
+        let profile: InstagramWeb.Profile
+        do {
+            profile = try InstagramWeb.parseProfile(try await network.data(profileURL, headers: headers))
+        } catch NetworkError.refused(let code) where code == 404 || code == 401 {
+            throw InstagramError.unknownAccount
+        } catch NetworkError.refused(let code) where code == 403 || code == 429 {
+            throw InstagramError.loginRequired
+        }
+        LogCenter.info(L("Instagram : compte \(username) résolu.", "Instagram: account \(username) resolved."))
+
+        // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
+        // ni du post qui l'a publiée.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.instagramMediaID(inFileName: $0.lastPathComponent)
+        })
+        var scanned = Set<String>()
+        var seenKeys = Set<String>()
+        var scannedPages = 0
+        var idle = 0
+        var caughtUp = false
+        var cursor: String?
+        // Première page gratuite : le profil embarque les publications les plus
+        // récentes, dans un format différent du fil paginé.
+        var embedded = profile.posts
+
+        for _ in 0..<100 {
+            try Task.checkCancellation()
+            let page: InstagramPage
+            if !embedded.isEmpty {
+                page = InstagramPage(posts: embedded, nextCursor: nil, hasMore: true)
+                embedded = []
+            } else {
+                scannedPages += 1
+                status = L("Recherche des médias Instagram… page \(scannedPages)", "Searching Instagram media… page \(scannedPages)")
+                let feedURL = InstagramAPI.userFeedURL(userID: profile.userID, cursor: cursor)
+                do {
+                    page = try InstagramWeb.parseFeed(try await network.data(feedURL, headers: headers))
+                } catch NetworkError.refused(let code) where code == 401 || code == 403 || code == 429 {
+                    // Mur de connexion en cours de parcours : ce qui est déjà
+                    // téléchargé reste en place, le parcours est incomplet.
+                    LogCenter.err(L("Instagram : fil interrompu par un refus HTTP \(code) à la page \(scannedPages).", "Instagram: feed interrupted by HTTP \(code) refusal at page \(scannedPages)."))
+                    return false
+                }
+                cursor = page.nextCursor
+            }
+            var fresh: [InstagramPost] = []
+            for post in page.posts where scanned.insert(post.id).inserted {
+                // Le profil et le fil paginé exposent le même média sous des
+                // formats et parfois des URL différentes : la clé numérique
+                // seule est fiable entre les deux.
+                let missing = post.media.filter { seenKeys.insert($0.storageKey).inserted && !savedIDs.contains($0.storageKey) }
+                guard !missing.isEmpty else { continue }
+                fresh.append(InstagramPost(id: post.id, code: post.code, text: post.text, publishedAt: post.publishedAt, media: missing))
+            }
+            // Rien de nouveau sur cette page : elle compte comme « rattrapée ».
+            // Un média en échec reste `missing`, donc sa page est toujours
+            // considérée comme nouvelle et se voit retenter.
+            if fresh.isEmpty {
+                idle += 1
+            } else {
+                var mediaOverrides: [String: [Media]] = [:]
+                var mediaHeadersByMedia: [String: [String: String]] = [:]
+                var mediaExtensions: [String: String] = [:]
+                var posts: [Post] = []
+                for post in fresh {
+                    for media in post.media {
+                        let id = media.storageKey
+                        mediaOverrides[id] = [.direct(media.url)]
+                        // Anti-hotlink : le CDN exige le Referer du profil et
+                        // l'UA navigateur.
+                        mediaHeadersByMedia[id] = InstagramAPI.mediaHeaders(referer: profileURL)
+                        if media.isVideo { mediaExtensions[id] = "mp4" }
+                        posts.append(Post(id: id, title: post.text, html: "",
+                                          publishedAt: post.publishedAt,
+                                          link: post.code.map { "https://www.instagram.com/p/\($0)/" }))
+                    }
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides,
+                    mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
+                beginTransferUnit(total: downloads.count)
+                try await executeDownloads(downloads, &preparedCount)
+                idle = 0
+            }
+            try Task.checkCancellation()
+            // Deux pages sans nouveautés : le compte est rattrapé, même si
+            // Instagram annonce encore des pages (doublons inter-pages).
+            if idle >= 2 || !page.hasMore {
+                caughtUp = true
+                break
+            }
+        }
+        guard caughtUp else { return false }
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("Instagram : \(scannedPages) pages, \(preparedCount) médias préparés.", "Instagram: \(scannedPages) pages, \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) médias Instagram inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                             "\(failed) Instagram media unavailable or unsaved.\n\(kept) media files kept.")
+            return true
+        }
+        status = count == 0 ? L("Aucun nouveau média Instagram accessible", "No new accessible Instagram media")
+                            : L("\(count) médias Instagram téléchargés", "\(count) Instagram media downloaded")
+        return true
+    }
+
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
     private static func xFetishVideoResumeKey(_ canonical: String) -> String { "xFetishVideoResume.\(canonical)" }
     private static func visitedKey(_ canonical: String) -> String { "visitedPosts.\(canonical)" }
@@ -2328,12 +2495,89 @@ struct UserCollection: Codable, Identifiable, Equatable {
             if !saved {
                 failed += 1
                 LogCenter.info(L("Média inaccessible, ignoré : \(item.destination.lastPathComponent).", "Inaccessible media, skipped: \(item.destination.lastPathComponent)."))
+                recordFailure(item)
             }
         } catch {
             if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) {
                 LogCenter.err("\(item.destination.lastPathComponent) : \(error.localizedDescription)")
             }
             throw error
+        }
+    }
+
+    /// Ajoute un média en échec au journal persistant. L'échec était muet :
+    /// compté « ignoré » puis oublié, et le média marqué vu n'était jamais
+    /// réévalué. Le journal le garde visible et retentable en un geste.
+    private func recordFailure(_ item: Download) {
+        guard let canonical = currentCanonical, let folder = currentFolder else { return }
+        let sourceURL: String?
+        switch item.media {
+        case .direct(let url), .redditVideo(let url): sourceURL = url.absoluteString
+        case .redgifs: sourceURL = nil
+        }
+        FailureJournal.shared.record(FailureEntry(
+            collectionID: canonical,
+            folderName: folder.lastPathComponent,
+            filename: item.destination.lastPathComponent,
+            sourceURL: sourceURL,
+            headers: item.headers,
+            author: item.author,
+            error: L("Média inaccessible ou non enregistré", "Media unavailable or unsaved")))
+    }
+
+    /// Nouvel essai manuel depuis le journal : l'adresse directe est
+    /// redemandée telle quelle, avec les en-têtes d'origine, vers le même
+    /// dossier et le même nom de fichier. Une réussite retire l'entrée du
+    /// journal ; un nouvel échec rafraîchit sa date.
+    func retryFailures(_ entries: [FailureEntry]) {
+        guard !running, !entries.isEmpty else { return }
+        let retryable = entries.filter { $0.sourceURL != nil }
+        let others = entries.filter { $0.sourceURL == nil }
+        if !others.isEmpty {
+            LogCenter.info(L("\(others.count) échecs sans adresse directe : relance leur collection pour les retenter.",
+                             "\(others.count) failures without a direct address: rescan their collection to retry them."))
+        }
+        guard !retryable.isEmpty else { return }
+        running = true
+        status = L("Nouvel essai : \(retryable.count) médias…", "Retrying: \(retryable.count) media…")
+        Task {
+            defer { running = false; task = nil }
+            var resolved: [UUID] = []
+            var fresh = 0
+            for entry in retryable {
+                guard let raw = entry.sourceURL, let url = URL(string: raw), url.scheme == "https" else { continue }
+                let folder = root.appendingPathComponent(entry.folderName, isDirectory: true)
+                try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                let destination = folder.appendingPathComponent(entry.filename)
+                guard !fm.fileExists(atPath: destination.path) else {
+                    resolved.append(entry.id)
+                    continue
+                }
+                do {
+                    let data = try await network.data(url, headers: entry.headers)
+                    try data.write(to: destination, options: .atomic)
+                    MediaMetadata(downloadedAt: Date(), postDate: nil, author: entry.author.isEmpty ? nil : entry.author, postLink: nil).save(for: destination)
+                    resolved.append(entry.id)
+                    fresh += 1
+                    LogCenter.info(L("Nouvel essai réussi : \(entry.filename).", "Retry succeeded: \(entry.filename)."))
+                } catch {
+                    LogCenter.err(L("Nouvel essai échoué : \(entry.filename) : \(error.localizedDescription).", "Retry failed: \(entry.filename): \(error.localizedDescription)."))
+                    FailureJournal.shared.record(FailureEntry(
+                        collectionID: entry.collectionID,
+                        folderName: entry.folderName,
+                        filename: entry.filename,
+                        sourceURL: entry.sourceURL,
+                        headers: entry.headers,
+                        author: entry.author,
+                        error: error.localizedDescription))
+                }
+            }
+            FailureJournal.shared.remove(ids: resolved)
+            count += fresh
+            status = fresh == 0
+                ? L("Aucun échec réparé", "No failure repaired")
+                : L("\(fresh) médias récupérés", "\(fresh) media recovered")
+            if fresh > 0 { reload() }
         }
     }
 

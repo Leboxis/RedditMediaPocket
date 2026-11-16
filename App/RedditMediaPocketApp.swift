@@ -129,7 +129,8 @@ struct ContentView: View {
                           (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
                             (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
                               (model.sourceKind == "tw" ? L("compte X", "X account") :
-                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") : L("pseudo", "username"))))), text: $model.username)
+                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") :
+                                  (model.sourceKind == "ig" ? L("compte Instagram", "Instagram account") : L("pseudo", "username")))))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -409,9 +410,12 @@ struct ContentView: View {
                 LogsButton()
             }
             ToolbarItem(placement: .navigationBarTrailing) {
+                FailureJournalButton(model: model)
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
                 KDriveCollectionUploadButton(
                     files: model.files,
-                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok) ? $0.id : $0.name } ?? "Pocket"
+                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
                 )
             }
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -439,7 +443,7 @@ struct ContentView: View {
         let fresh = model.lastRunCount(for: collection.id)
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isTikTok ? "music.note" : (collection.isSubreddit ? "person.3" : "person.crop.circle"))))))
+                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isTikTok ? "music.note" : (collection.isInstagram ? "camera" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))))))
                 Text(collection.displayName).lineLimit(1)
                 // Ce qui a été réellement ajouté au passage précédent : l'état
                 // existait déjà (`lastRun`) mais n'était affiché nulle part.
@@ -493,6 +497,7 @@ private struct SourceKindToggle: View {
         if current == "x" { return "x/" }
         if current == "tw" { return "tw" }
         if current == "tt" { return "tt" }
+        if current == "ig" { return "ig" }
         return "u/"
     }
     private func spoken(_ current: String) -> String {
@@ -502,6 +507,7 @@ private struct SourceKindToggle: View {
         if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
         if current == "tw" { return L("compte X", "X account") }
         if current == "tt" { return L("compte TikTok", "TikTok account") }
+        if current == "ig" { return L("compte Instagram", "Instagram account") }
         return L("profil", "profile")
     }
 
@@ -536,6 +542,7 @@ private struct DownloadSettings: View {
     @State private var xLoginPresented = false
     @State private var tikTokLoginPresented = false
     @State private var confirmDeleteAll = false
+    @State private var diagnosticsPresented = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -613,6 +620,13 @@ private struct DownloadSettings: View {
                 }
                 KDriveSettingsSection()
                 Section {
+                    Button(L("Test de santé des sources", "Source health check")) { diagnosticsPresented = true }
+                } header: {
+                    Text(L("Diagnostic", "Diagnostics"))
+                } footer: {
+                    Text(L("Interroge chaque source configurée et dit ce qui marche : flux public Reddit, jeton RedGifs, sessions X et TikTok, API Instagram, site X-Fetish.", "Queries each configured source and reports what works: Reddit public feed, RedGifs token, X and TikTok sessions, Instagram API, X-Fetish site."))
+                }
+                Section {
                     Picker(L("Espace disque maximal", "Maximum disk space"), selection: Binding(
                         get: { StorageQuota.gigabytes(for: model.storageQuota.bytes) },
                         set: { model.storageQuota = StorageQuota(bytes: Int64($0) * StorageQuota.bytesPerGB) }
@@ -640,6 +654,7 @@ private struct DownloadSettings: View {
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
             .fullScreenCover(isPresented: $tikTokLoginPresented) { TikTokLogin() }
+            .sheet(isPresented: $diagnosticsPresented) { SourceDiagnosticsView() }
             .confirmationDialog(L("Supprimer tous les téléchargements ?", "Delete all downloads?"), isPresented: $confirmDeleteAll, titleVisibility: .visible) {
                 Button(L("Tout supprimer", "Delete all"), role: .destructive) { model.deleteAllDownloads() }
                 Button(L("Annuler", "Cancel"), role: .cancel) { }

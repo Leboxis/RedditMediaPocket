@@ -136,6 +136,36 @@ public enum FilenamePolicy {
         return prefix + parts.joined(separator: "-")
     }
 
+    /// Clé Instagram d'un fichier existant : `igm-<média>` pour une image,
+    /// `igv-<média>` pour une vidéo, l'identifiant étant toujours numérique
+    /// (chiffres seuls, jamais de suffixe de collision). Les titres peuvent
+    /// changer : le parcours compare cette clé plutôt que le nom complet pour
+    /// décider si un média est déjà enregistré.
+    public static func instagramMediaID(inFileName filename: String) -> String? {
+        let file = URL(fileURLWithPath: filename)
+        guard ["jpg", "jpeg", "png", "webp", "gif", "mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()) else { return nil }
+        let stem = file.deletingPathExtension().lastPathComponent
+        if let bare = instagramBareKey(stem) { return bare }
+        guard let marker = [" - igv-", " - igm-"].compactMap({ stem.range(of: $0, options: .backwards) })
+                .max(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+        let prefix = stem[marker.lowerBound...].hasPrefix(" - igv-") ? "igv-" : "igm-"
+        let key = String(stem[marker.upperBound...])
+        // Une clé n'a qu'un segment numérique : un suffixe de collision `-2`
+        // ou un fragment de titre n'est jamais accepté comme clé.
+        guard !key.isEmpty, key.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 }) else { return nil }
+        return prefix + key
+    }
+
+    /// Clé d'un nom de fichier Instagram réduit à sa seule clé, sans titre.
+    private static func instagramBareKey(_ stem: String) -> String? {
+        for prefix in ["igv-", "igm-"] where stem.hasPrefix(prefix) {
+            let key = String(stem.dropFirst(prefix.count))
+            guard !key.isEmpty, key.utf8.allSatisfy({ byte in byte >= 48 && byte <= 57 }) else { continue }
+            return prefix + key
+        }
+        return nil
+    }
+
     /// Clé d'un nom de fichier TikTok réduit à sa seule clé, sans titre.
     private static func tikTokBareKey(_ stem: String) -> String? {
         for prefix in ["tkv-", "tkm-"] where stem.hasPrefix(prefix) {
@@ -264,6 +294,10 @@ public enum FilenamePolicy {
             // `tt` reste distinct de `tw` : un compte TikTok ne doit jamais
             // hériter du dossier d'un compte X au même pseudo.
             else if first == "tt" { typeSuffix = " - TikTok" }
+            // `ig` reste distinct de toutes les autres sources : un compte
+            // Instagram ne doit jamais hériter du dossier d'un profil au
+            // même pseudo.
+            else if first == "ig" { typeSuffix = " - Instagram" }
             // Sélection de posts Reddit : `reddit/posts` ne doit pas produire
             // le dossier `Rposts` d'un subreddit nommé « posts ».
             else if first == "reddit" { typePrefix = "Posts " }

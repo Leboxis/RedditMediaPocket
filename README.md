@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish) et `tw` (médias publics d'un compte X). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish), `tw` (médias publics d'un compte X), `tt` (médias publics d'un compte TikTok) et `ig` (médias publics d'un compte Instagram). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## Liens et sélections
 
@@ -14,8 +14,9 @@ Dans tous les modes sauf `♥`, une **adresse collée** est reconnue et prend la
 | `rg/#<tag>`, `https://www.redgifs.com/niches/<tag>` | un tag RedGifs, parcouru page par page |
 | `https://x-fetish.tube/video/<id>/…` ou `/albums/<id>/…` | seuls ces médias X-Fetish sont téléchargés |
 | `https://x.com/<compte>` | même effet que `tw/<compte>` |
+| `https://www.instagram.com/<compte>` | même effet que `ig/<compte>` |
 
-Plusieurs adresses de posts Reddit peuvent être collées ensemble (retours à la ligne, virgules ou espaces) : elles partagent la collection stable `reddit/posts`, et les adresses sont mémorisées pour la relance. Une adresse de post X isolée (`x.com/<compte>/status/<id>`) est refusée avec un message explicite : X n'expose pas cette lecture sans parcourir le compte.
+Plusieurs adresses de posts Reddit peuvent être collées ensemble (retours à la ligne, virgules ou espaces) : elles partagent la collection stable `reddit/posts`, et les adresses sont mémorisées pour la relance. Une adresse de post X isolée (`x.com/<compte>/status/<id>`) est refusée avec un message explicite : X n'expose pas cette lecture sans parcourir le compte. Une publication Instagram isolée (`instagram.com/p/<code>`, `/reel/` ou `/tv/`) est refusée avec un message explicite : colle l'adresse du profil.
 
 ## Filtres de téléchargement
 
@@ -80,6 +81,24 @@ Vidéos : l'application parcourt les pages `/models/<nom>/videos/` puis ouvre ch
 Jusqu'à combien de posts ? Plafond théorique : 100 pages × ~25 posts par page RSS ≈ 2500 posts parcourus. En pratique, le RSS anonyme tronque bien avant : page qui se répète, curseur refusé ou HTTP 429 arrêtent le parcours, souvent après quelques centaines de posts. Le compteur « repérés » (nouveaux fichiers reçus / repérés pendant le parcours) progresse à chaque page mais ne constitue pas un total exhaustif de l'historique.
 
 Sauvegardés (`♥`) : le compte connecté est sélectionné automatiquement, sans saisie de pseudo. La saisie précédente de profil ou de subreddit est ignorée dans ce mode. Exige une session active (Réglages → Se connecter à Reddit) et les flux RSS privés activés dans Reddit. Le bouton « Flux privés » de la fenêtre de connexion ouvre ces préférences. À chaque lancement, l’app lit le lien privé des sauvegardés dans `https://old.reddit.com/prefs/feeds/` avec les cookies du compte connecté, en déduit le pseudo pour choisir le dossier du compte, puis conserve les paramètres d’authentification `feed` et `user` sur chaque page. Le lien reste en mémoire pour ce parcours, sans cache RSS ni stockage du jeton. Les redirections HTTPS du flux privé entre `old.reddit.com`, `www.reddit.com` et `reddit.com` sont suivies uniquement vers un chemin de sauvegardés du même compte, avec conservation du jeton et de la pagination. Les autres destinations sont refusées. Un lien absent ou un refus HTTP produit un message explicite, sans nouvelle tentative automatique. Même plafond de 100 pages, sans exhaustivité garantie ; les commentaires sauvegardés n’interrompent plus la pagination. Les dossiers sont préfixés `saved.` (ex. `saved.leboxis`).
+
+## Médias d'un compte Instagram (`ig`)
+
+Saisir le pseudo seul (`nasa`), avec `@`, avec le préfixe `ig/`, ou coller l'adresse du profil (`instagram.com/nasa`). Une publication isolée (`instagram.com/p/<code>`, `/reel/` ou `/tv/`) est refusée avec un message explicite. La collection `ig/pseudo` est créée dans le dossier `ig.pseudo`, distinct de `tk.pseudo` (TikTok), `tw.pseudo` (X) et d'un profil Reddit au même pseudo.
+
+Cette source est anonyme : aucune session Instagram n'est exigée ni demandée. Le parcours résout le compte par l'API web `users/web_profile_info` (qui embarque les publications récentes), puis pagine par `feed/user/<id>`, 33 publications par page, 100 pages au plus par exécution. Les carrousels sont pris en entier : chaque image et vidéo de la publication est téléchargée. Les clés `igm-<média>` et `igv-<média>` inscrites dans les noms de fichiers évitient de retélécharger les médias présents, même si les URL du CDN changent entre les formats de réponse.
+
+Instagram peut opposer son mur de connexion à tout moment (compte privé, fermeture du profil, vérification exigée) : le parcours s'arrête alors proprement, les médias déjà téléchargés restent en place, et le message explique la cause. Un compte introuvable produit un message explicite plutôt qu'un « aucun média » silencieux. Deux pages sans nouveauté suffisent à considérer le compte rattrapé.
+
+## Journal des échecs et nouvel essai
+
+Un média inaccessible pendant un parcours était compté « ignoré » puis oublié : marqué vu, il n'était jamais réévalué. Le bouton **triangle d'avertissement** (barre d'outils) ouvre désormais le journal des échecs : chaque média en échec y reste inscrit, avec sa collection, le nom de fichier prévu et la cause, jusqu'à réparation ou effacement. Le badge du bouton montre le nombre d'échecs en attente.
+
+Le bouton **Réessayer** redemande l'adresse directe du média avec ses en-têtes d'origine (Referer, UA navigateur), vers le même dossier et le même nom de fichier ; **Tout réessayer** traite la liste entière. Une réussite retire l'entrée, un nouvel échec rafraîchit sa date et son message. Un média sans adresse directe (GIF RedGifs, vidéo DASH Reddit) reste dans le journal avec la consigne de relancer sa collection. Le journal est borné à 500 entrées et survit aux relances de l'app.
+
+## Test de santé des sources
+
+Réglages → Diagnostic → Test de santé des sources interroge chaque source configurée avec une requête légère et dit ce qui marche : flux public Reddit, jeton temporaire RedGifs, sessions Reddit / X / TikTok, API web Instagram, site X-Fetish. Un refus affiche le message exact du serveur au lieu d'un « aucun média » silencieux ; une session absente est signalée comme telle, sans erreur. Les sondes sont anonymes : aucun identifiant n'est envoyé.
 
 ## Optimisations de la galerie et des aperçus
 

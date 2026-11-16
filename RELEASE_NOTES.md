@@ -1,3 +1,9 @@
+Source Instagram, journal des échecs et test de santé des sources.
+
+- **Comptes Instagram (`ig/`).** Nouvelle source anonyme : saisir le pseudo (`ig/nasa` ou coller `instagram.com/nasa`) parcourt les publications publiques du profil via l'API web d'Instagram, sans session. Les carrousels sont pris en entier, les clés `igm-`/`igv-` des noms de fichiers évitent tout retéléchargement, et le mur de connexion éventuel arrête proprement le parcours avec un message explicite. Une publication isolée est refusée avec la consigne de coller l'adresse du profil.
+- **Journal des échecs.** Un média inaccessible n'est plus muet : il reste inscrit dans le journal (bouton triangle dans la barre), avec sa collection et la cause. « Réessayer » redemande son adresse directe en un geste ; une réussite répare, un échec rafraîchit. Le journal survit aux relances de l'app et est borné à 500 entrées.
+- **Test de santé des sources.** Réglages → Diagnostic : chaque source configurée reçoit une sonde légère (flux Reddit, jeton RedGifs, sessions Reddit/X/TikTok, API Instagram, site X-Fetish) et l'écran dit ce qui marche et ce qui est cassé, avec le message exact du serveur.
+
 Coller un lien, filtrer ce qu'on télécharge, et retrouver ce qu'on a.
 
 - **Liens acceptés partout.** Une adresse collée dans le champ prend la priorité sur le nom : post Reddit (`/r/<sub>/comments/<id>/` ou `redd.it/<id>`), subreddit, GIF RedGifs (`/watch/<id>`), tag RedGifs (`#tag` ou `/niches/<tag>`), album ou vidéo X-Fetish. Plusieurs adresses de posts Reddit peuvent être collées ensemble ; elles partagent la collection stable `reddit/posts` et sont mémorisées pour la relance. Une adresse de post X isolée est refusée avec un message explicite plutôt qu'avec une erreur de pseudo.

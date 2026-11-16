@@ -7,6 +7,7 @@ public enum SourceKind: String, CaseIterable, Sendable {
     case xFetish = "x"
     case twitter = "tw"
     case tiktok = "tt"
+    case instagram = "ig"
 
     public var next: SourceKind {
         switch self {
@@ -16,7 +17,8 @@ public enum SourceKind: String, CaseIterable, Sendable {
         case .saved: return .xFetish
         case .xFetish: return .twitter
         case .twitter: return .tiktok
-        case .tiktok: return .user
+        case .tiktok: return .instagram
+        case .instagram: return .user
         }
     }
 }

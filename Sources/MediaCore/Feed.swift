@@ -52,6 +52,7 @@ public enum FeedSource: Hashable, Sendable {
     case redgifsGif(String)
     case twitterUser(String)
     case tiktokUser(String)
+    case instagramUser(String)
     /// Posts Reddit isolés, désignés par leur adresse et non par un flux.
     /// Une sélection ne parcourt aucun catalogue : seuls ces posts sont lus.
     case redditPosts(RedditPostRef.Target)
@@ -62,7 +63,8 @@ public enum FeedSource: Hashable, Sendable {
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
     /// `rg/pseudo` (ou `g/`), `rg/#tag` et une adresse `redgifs.com/watch/<id>`,
     /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`), `tt/pseudo`
-    /// (`@pseudo` ou `tiktok.com/@pseudo`),
+    /// (`@pseudo` ou `tiktok.com/@pseudo`), `ig/pseudo`
+    /// (`instagram.com/pseudo`),
     /// une ou plusieurs adresses `reddit.com/r/…/comments/<id>/…` (ou `redd.it/<id>`),
     /// une URL `redgifs.com/users/pseudo` ou un pseudo nu
     /// (compatibilité : profil utilisateur).
@@ -85,6 +87,15 @@ public enum FeedSource: Hashable, Sendable {
             // plutôt que d'échouer sur « video », qui n'est pas un pseudo.
             if TikTokAPI.isVideoURL(trimmed) { throw TikTokError.postUnsupported }
             return try .tiktokUser(TikTokAPI.username(trimmed))
+        }
+        if lower.hasPrefix("ig/") {
+            return try .instagramUser(InstagramAPI.username(trimmed))
+        }
+        if lower.contains("instagram.com/") {
+            // Une publication isolée n'est pas un compte : refuser
+            // explicitement plutôt que d'échouer sur « p » ou « reel ».
+            if InstagramAPI.isPostURL(trimmed) { throw InstagramError.postUnsupported }
+            return try .instagramUser(InstagramAPI.username(trimmed))
         }
         if lower.hasPrefix("saved/") {
             return try .saved(MediaExtractor.username(String(trimmed.dropFirst(6))))
@@ -180,6 +191,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
         case .tiktokUser(let name): return "tt/\(name)"
+        case .instagramUser(let name): return "ig/\(name)"
         // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
         // subreddit nommé « posts » partageraient identifiant et dossier.
         case .redditPosts: return "reddit/posts"
@@ -207,6 +219,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
         case .tiktokUser(let name): return "tk.\(name)"
+        case .instagramUser(let name): return "ig.\(name)"
         case .redditPosts: return "reddit.posts"
         }
     }
@@ -271,6 +284,10 @@ public enum FeedSource: Hashable, Sendable {
             // parcours réel pagine par la WebView de `TikTokWebPaginator`
             // avec les cookies de session, jamais par cette URL seule.
             return TikTokAPI.profileURL(username: name)
+        case .instagramUser(let name):
+            // Point d'entrée anonyme : profil public via l'API web, sans
+            // session. Le parcours pagine ensuite par `feed/user/<id>`.
+            return InstagramAPI.profileInfoURL(username: name)
         case .redditPosts(let target):
             // Sélection de posts : l'URL de départ ne sert qu'à l'affichage.
             return target.posts.first?.url ?? URL(string: "https://www.reddit.com/")!
