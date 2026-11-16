@@ -17,7 +17,7 @@ final class InstagramSessionTests: XCTestCase {
         XCTAssertFalse(InstagramCookiePolicy.hasLoginCookie(cookies: []))
         XCTAssertTrue(InstagramCookiePolicy.hasLoginCookie(cookies: [try cookie("sessionid")]))
         // Un cookie homonyme d'un autre domaine ne vaut pas session Instagram.
-        XCTAssertFalse(InstagramCookiePolicy.hasLoginCookie(cookies: [try cookie("sessionid", ".reddit.com")]))
+        XCTAssertFalse(InstagramCookiePolicy.hasLoginCookie(cookies: [try cookie("sessionid", "v", domain: ".reddit.com")]))
         XCTAssertFalse(InstagramCookiePolicy.hasLoginCookie(cookies: [try cookie("csrftoken")]))
         let expired = try cookie("sessionid", expires: Date(timeIntervalSince1970: 1))
         XCTAssertFalse(InstagramCookiePolicy.hasLoginCookie(cookies: [expired]))
