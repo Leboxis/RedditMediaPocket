@@ -77,7 +77,7 @@ final class InstagramTests: XCTestCase {
         XCTAssertEqual(tokens.lsd, "LsdToken123")
         XCTAssertEqual(tokens.csrf, "Csrf456")
         // Page réelle sans `csrf_token` : les jetons restent utilisables.
-        let withoutCSRF = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data("["LSD",[],{"token":"LsdToken123"}]".utf8)))
+        let withoutCSRF = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data(#"["LSD",[],{"token":"LsdToken123"}]"#.utf8)))
         XCTAssertEqual(withoutCSRF.lsd, "LsdToken123")
         XCTAssertEqual(withoutCSRF.csrf, "")
         // Page sans jeton (interface modifiée) : pas de faux jetons inventés.
