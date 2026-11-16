@@ -19,6 +19,7 @@ struct ContentView: View {
     @ObservedObject private var redditSession = RedditSession.shared
     @ObservedObject private var xSession = XSession.shared
     @ObservedObject private var tikTokSession = TikTokSession.shared
+    @ObservedObject private var instagramSession = InstagramSession.shared
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var info: MediaInfoSelection?
@@ -538,9 +539,11 @@ private struct DownloadSettings: View {
     @ObservedObject private var reddit = RedditSession.shared
     @ObservedObject private var xSession = XSession.shared
     @ObservedObject private var tikTokSession = TikTokSession.shared
+    @ObservedObject private var instagramSession = InstagramSession.shared
     @State private var loginPresented = false
     @State private var xLoginPresented = false
     @State private var tikTokLoginPresented = false
+    @State private var instagramLoginPresented = false
     @State private var confirmDeleteAll = false
     @State private var diagnosticsPresented = false
     @Environment(\.dismiss) private var dismiss
@@ -618,6 +621,18 @@ private struct DownloadSettings: View {
                     Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
                          : L("Session distincte de Reddit et de X, requise par la source tt. TikTok ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit and X, required by the tt source. TikTok publishes no media without it. Its rate limits still apply."))
                 }
+                Section {
+                    InstagramSessionIndicator()
+                    Button(instagramSession.hasSession ? L("Ouvrir Instagram", "Open Instagram") : L("Se connecter à Instagram", "Sign in to Instagram")) { instagramLoginPresented = true }
+                        .disabled(model.running || instagramSession.clearing)
+                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await instagramSession.logout() } }
+                        .disabled(model.running || instagramSession.clearing)
+                } header: {
+                    Text("Instagram")
+                } footer: {
+                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
+                         : L("Session distincte de Reddit, de X et de TikTok. Sans elle, Instagram limite les requêtes anonymes et ne livre que les images des douze dernières publications ; avec elle, les vidéos et l'historique complet sont accessibles. Ses limites serveur restent applicables.", "A session separate from Reddit, X and TikTok. Without it, Instagram rate-limits anonymous requests and only serves the images of the twelve latest posts; with it, videos and the full history are available. Its server limits still apply."))
+                }
                 KDriveSettingsSection()
                 Section {
                     Button(L("Test de santé des sources", "Source health check")) { diagnosticsPresented = true }
@@ -654,6 +669,7 @@ private struct DownloadSettings: View {
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
             .fullScreenCover(isPresented: $tikTokLoginPresented) { TikTokLogin() }
+            .fullScreenCover(isPresented: $instagramLoginPresented) { InstagramLogin() }
             .sheet(isPresented: $diagnosticsPresented) { SourceDiagnosticsView() }
             .confirmationDialog(L("Supprimer tous les téléchargements ?", "Delete all downloads?"), isPresented: $confirmDeleteAll, titleVisibility: .visible) {
                 Button(L("Tout supprimer", "Delete all"), role: .destructive) { model.deleteAllDownloads() }

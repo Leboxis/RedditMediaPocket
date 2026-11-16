@@ -1913,9 +1913,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
                               preparedCount: inout Int) async throws -> Bool {
         status = L("Résolution du compte Instagram…", "Resolving Instagram account…")
         let pageURL = InstagramAPI.profilePageURL(username: username)
+        // Session Instagram facultative : sans elle, l'API GraphQL ne rend
+        // qu'un quota anonyme et aucune URL de vidéo.
+        let sessionCookies = await InstagramSession.shared.cookieHeader(for: pageURL)
         let pageHTML: (data: Data, headers: [String: String])
         do {
-            pageHTML = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
+            pageHTML = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL, sessionCookies: sessionCookies))
         } catch NetworkError.refused(let code) where code == 404 || code == 401 {
             throw InstagramError.unknownAccount
         } catch NetworkError.refused(let code) where code == 403 || code == 429 {
@@ -1941,12 +1944,19 @@ struct UserCollection: Codable, Identifiable, Equatable {
 
         var page: InstagramPage
         do {
-            page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL, cursor: nil)
+            page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL,
+                                                cursor: nil, sessionCookies: sessionCookies)
+            if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(true) }
         } catch InstagramError.rateLimited, InstagramError.invalidResponse {
+            if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(false) }
             LogCenter.err(L("Instagram : API GraphQL indisponible, repli sur le rendu SEO (douze dernières publications, images seules).",
                             "Instagram: anonymous quota reached, falling back to the SEO render (twelve latest posts, images only)."))
             page = try InstagramWeb.parseCrawlerPage(try await network.data(pageURL,
                                                                            headers: InstagramAPI.crawlerHeaders()))
+            if sessionCookies == nil {
+                LogCenter.info(L("Instagram : connecte une session dans les Réglages pour obtenir les vidéos.",
+                                 "Instagram: sign in from Settings to get videos."))
+            }
             degraded = true
         }
 
@@ -2004,7 +2014,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             cursor = page.nextCursor
             status = L("Recherche des médias Instagram… page \(scannedPages + 1)", "Searching Instagram media… page \(scannedPages + 1)")
             do {
-                page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL, cursor: cursor)
+                page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL,
+                                                    cursor: cursor, sessionCookies: sessionCookies)
             } catch InstagramError.rateLimited {
                 // Quota atteint en cours de parcours : ce qui est déjà
                 // téléchargé reste en place, le parcours est incomplet.
@@ -2040,10 +2051,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// corps porte les jetons de la page et le curseur, la réponse est lue par
     /// `InstagramWeb.parseTimeline`.
     private func instagramPostsPage(tokens: InstagramAPI.Tokens, username: String,
-                                    referer: URL, cursor: String?) async throws -> InstagramPage {
+                                    referer: URL, cursor: String?, sessionCookies: String?) async throws -> InstagramPage {
         let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor)
         let data = try await network.data(InstagramAPI.graphqlURL,
-                                          headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer),
+                                          headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer,
+                                                                               sessionCookies: sessionCookies),
                                           body: body)
         do {
             return try InstagramWeb.parseTimeline(data)

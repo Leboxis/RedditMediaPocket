@@ -125,13 +125,17 @@ public enum InstagramAPI {
     }
 
     /// En-têtes de la page du profil, lue avec l'agent du site.
-    public static func pageHeaders(referer: URL) -> [String: String] {
-        [
+    public static func pageHeaders(referer: URL, sessionCookies: String? = nil) -> [String: String] {
+        var fields = [
             "User-Agent": userAgent,
             "Accept": "text/html,application/xhtml+xml",
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": referer.absoluteString
         ]
+        // Session connectée : la page est lue avec ses cookies, sans mur de
+        // connexion, et livre ses propres jetons.
+        if let cookies = sessionCookies, !cookies.isEmpty { fields["Cookie"] = cookies }
+        return fields
     }
 
     /// En-têtes du rendu SEO (repli), lu avec l'agent d'indexation.
@@ -145,7 +149,8 @@ public enum InstagramAPI {
 
     /// En-têtes de l'appel `api/graphql` : identifiant d'application, jetons de
     /// la page et marqueurs d'origine que le site envoie lui-même.
-    public static func graphqlHeaders(tokens: Tokens, referer: URL) -> [String: String] {
+    public static func graphqlHeaders(tokens: Tokens, referer: URL,
+                                      sessionCookies: String? = nil) -> [String: String] {
         var fields = [
             "User-Agent": userAgent,
             "Accept": "*/*",
@@ -161,7 +166,14 @@ public enum InstagramAPI {
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-origin"
         ]
-        if !tokens.csrf.isEmpty {
+        if let cookies = sessionCookies, !cookies.isEmpty {
+            // Session connectée : ses cookies portent `sessionid` et son propre
+            // `csrftoken`, et remplacent les jetons anonymes.
+            fields["Cookie"] = cookies
+            if let csrf = firstGroup(#"csrftoken=([A-Za-z0-9_-]+)"#, in: cookies) {
+                fields["X-CSRF-Token"] = csrf
+            }
+        } else if !tokens.csrf.isEmpty {
             fields["X-CSRF-Token"] = tokens.csrf
             fields["Cookie"] = "csrftoken=\(tokens.csrf)"
         }
@@ -214,6 +226,75 @@ public enum InstagramAPI {
               match.numberOfRanges > 1,
               let range = Range(match.range(at: 1), in: text) else { return nil }
         return String(text[range])
+    }
+}
+
+/// Quels hôtes reçoivent les cookies de session Instagram. Le CDN
+/// (`*.cdninstagram.com`, `*.fbcdn.net`) en reste exclu : ses URL sont signées
+/// et publiques, et le jeton de session n'a aucune raison de les accompagner.
+public enum InstagramCookiePolicy {
+    public static func allows(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        return host == "instagram.com" || host.hasSuffix(".instagram.com")
+    }
+
+    /// Session détectée dès qu'un `sessionid` non expiré existe.
+    public static func hasLoginCookie(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
+        matchingCookies(cookies, for: InstagramAPI.profilePageURL(username: "instagram"), now: now)
+            .contains { $0.name == "sessionid" && !$0.value.isEmpty }
+    }
+
+    /// `csrftoken` accompagne obligatoirement `sessionid` sur `api/graphql` :
+    /// sans lui, la requête connectée est refusée.
+    public static func hasCredentials(cookies: [HTTPCookie], now: Date = Date()) -> Bool {
+        let matching = matchingCookies(cookies, for: InstagramAPI.profilePageURL(username: "instagram"), now: now)
+        return ["sessionid", "csrftoken"].allSatisfy { name in
+            matching.contains { $0.name == name && !$0.value.isEmpty }
+        }
+    }
+
+    public static func header(cookies: [HTTPCookie], for url: URL, now: Date = Date()) -> String? {
+        let matching = matchingCookies(cookies, for: url, now: now)
+        guard !matching.isEmpty else { return nil }
+        return HTTPCookie.requestHeaderFields(with: matching)["Cookie"]
+    }
+
+    private static func matchingCookies(_ cookies: [HTTPCookie], for url: URL, now: Date) -> [HTTPCookie] {
+        guard allows(url), let host = url.host?.lowercased() else { return [] }
+        let path = url.path.isEmpty ? "/" : url.path
+        return cookies.filter { cookie in
+            let domain = cookie.domain.lowercased()
+            let bare = domain.hasPrefix(".") ? String(domain.dropFirst()) : domain
+            guard bare == "instagram.com" || bare.hasSuffix(".instagram.com") else { return false }
+            let hostMatches = host == bare || host.hasSuffix("." + bare)
+            let cookiePath = cookie.path.isEmpty ? "/" : cookie.path
+            let pathMatches = path == cookiePath || (path.hasPrefix(cookiePath) && (cookiePath.hasSuffix("/") || path.dropFirst(cookiePath.count).hasPrefix("/")))
+            return hostMatches && pathMatches && (cookie.expiresDate == nil || cookie.expiresDate! > now)
+        }
+    }
+}
+
+/// Connexion WebKit à Instagram, sur le modèle de `TikTokWebNavigation`.
+public enum InstagramWebNavigation {
+    public static let loginURL = URL(string: "https://www.instagram.com/accounts/login/")!
+
+    /// Fournisseurs de connexion sociale proposés par Instagram. Ils ne
+    /// reçoivent jamais les cookies de session : `InstagramCookiePolicy` reste
+    /// limitée à instagram.com.
+    static let oauthHosts: Set<String> = [
+        "accounts.google.com", "facebook.com", "www.facebook.com",
+        "m.facebook.com", "web.facebook.com", "appleid.apple.com"
+    ]
+
+    public static func allowsLogin(_ url: URL) -> Bool {
+        InstagramCookiePolicy.allows(url) || isOAuthHost(url)
+    }
+
+    public static func allowsPopup(_ url: URL) -> Bool { allowsLogin(url) }
+
+    static func isOAuthHost(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
+        return oauthHosts.contains(host)
     }
 }
 
