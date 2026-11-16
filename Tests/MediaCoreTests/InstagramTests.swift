@@ -67,7 +67,8 @@ final class InstagramTests: XCTestCase {
 
     // MARK: - Jetons et corps de requête
 
-    /// La page de profil livre les deux jetons exigés par `api/graphql`.
+    /// La page de profil livre le jeton `lsd` exigé par `api/graphql` ; le
+    /// `csrf_token` est facultatif (absent de certaines variantes de page).
     func testTokensFromProfilePage() throws {
         let html = """
         <html><script>["LSD",[],{"token":"LsdToken123"}]</script>
@@ -86,23 +87,25 @@ final class InstagramTests: XCTestCase {
 
     func testPostsRequestBody() throws {
         let tokens = InstagramAPI.Tokens(lsd: "LsdToken123", csrf: "Csrf456")
-        let body = InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: "CURSOR1")
-        let form = String(decoding: body, as: UTF8.self)
-        let fields = Dictionary(uniqueKeysWithValues: form.split(separator: "&").map { pair -> (String, String) in
-            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return (String(parts[0]), (String(parts[1]).removingPercentEncoding ?? ""))
-        })
-        XCTAssertEqual(fields["lsd"], "LsdToken123")
-        XCTAssertEqual(fields["doc_id"], InstagramAPI.postsQueryID)
-        XCTAssertEqual(fields["server_timestamps"], "true")
-        let variables = try XCTUnwrap(fields["variables"])
+        func fields(of body: Data) -> [String: String] {
+            let form = String(decoding: body, as: UTF8.self)
+            return Dictionary(uniqueKeysWithValues: form.split(separator: "&").map { pair -> (String, String) in
+                let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                return (String(parts[0]), (String(parts[1]).removingPercentEncoding ?? ""))
+            })
+        }
+        let first = fields(of: InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: "CURSOR1"))
+        XCTAssertEqual(first["lsd"], "LsdToken123")
+        XCTAssertEqual(first["doc_id"], InstagramAPI.postsQueryID)
+        XCTAssertEqual(first["server_timestamps"], "true")
+        let variables = try XCTUnwrap(first["variables"])
         XCTAssertTrue(variables.contains("\"username\":\"nasa\""))
         XCTAssertTrue(variables.contains("\"after\":\"CURSOR1\""))
         XCTAssertTrue(variables.contains("\"first\":12"))
         XCTAssertTrue(variables.contains("__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider"))
         // Première page : `after` est nul, pas une chaîne vide.
-        let first = InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: nil)
-        XCTAssertTrue(String(decoding: first, as: UTF8.self).contains("\"after\":null"))
+        let noCursor = fields(of: InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: nil))
+        XCTAssertTrue(try XCTUnwrap(noCursor["variables"]).contains("\"after\":null"))
     }
 
     /// Les en-têtes portent l'identifiant d'application et les jetons : sans
@@ -230,21 +233,28 @@ final class InstagramTests: XCTestCase {
     /// Une vidéo n'y a pas d'URL vidéo : son affiche est prise comme image,
     /// jamais comme un faux fichier vidéo.
     func testParseCrawlerPage() throws {
-        let payload = """
-        {"require":[["RelayPrefetchedStreamCache","next",[],["adp_preloader",{"__bbox":{"result":{"data":{
-            "xig_user_by_igid_v2":{"id":"1784140","polaris_timeline_connection":{
-                "edges":[
-                    {"node":{"__typename":"XIGPolarisVideoMedia","pk":"4031845282429052247","media_type":1,
-                              "caption":{"text":"SEO"},
-                              "image_versions2":{"candidates":[{"url":"https://cdn/seo.jpg"}]}}},
-                    {"node":{"__typename":"XIGPolarisVideoMedia","pk":"4031845282429052248","media_type":2,
-                              "caption":{"text":"Vidéo sans URL"},
-                              "image_versions2":{"candidates":[{"url":"https://cdn/poster.jpg"}]}}}
-                ],
-                "page_info":{"end_cursor":"NEXT","has_next_page":true}}}
-        }}}]]]}
-        """
-        let html = "<html><body><script type=\"application/json\" data-sjs>\(payload)</script></body></html>"
+        let image: [String: Any] = [
+            "__typename": "XIGPolarisVideoMedia", "pk": "4031845282429052247", "media_type": 1,
+            "caption": ["text": "SEO"],
+            "image_versions2": ["candidates": [["url": "https://cdn/seo.jpg"]]]
+        ]
+        let video: [String: Any] = [
+            "__typename": "XIGPolarisVideoMedia", "pk": "4031845282429052248", "media_type": 2,
+            "caption": ["text": "Vidéo sans URL"],
+            "image_versions2": ["candidates": [["url": "https://cdn/poster.jpg"]]]
+        ]
+        let connection: [String: Any] = [
+            "edges": [["node": image], ["node": video]],
+            "page_info": ["end_cursor": "NEXT", "has_next_page": true]
+        ]
+        let user: [String: Any] = ["id": "1784140", "polaris_timeline_connection": connection]
+        let feedData: [String: Any] = ["xig_user_by_igid_v2": user]
+        let result: [String: Any] = ["data": feedData]
+        let bbox: [String: Any] = ["result": result]
+        let streamCache: [Any] = ["RelayPrefetchedStreamCache", "next", [Any](), ["adp_preloader", ["__bbox": bbox], 0]]
+        let payload: [String: Any] = ["require": [streamCache]]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        let html = "<html><body><script type=\"application/json\" data-sjs>\(json)</script></body></html>"
         let page = try InstagramWeb.parseCrawlerPage(Data(html.utf8))
         XCTAssertEqual(page.posts.count, 2)
         XCTAssertEqual(page.posts[0].id, "4031845282429052247")
