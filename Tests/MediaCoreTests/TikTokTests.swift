@@ -65,7 +65,7 @@ final class TikTokTests: XCTestCase {
 
     func testSourceKindCycleReachesTikTok() {
         XCTAssertEqual(SourceKind.twitter.next, .tiktok)
-        XCTAssertEqual(SourceKind.tiktok.next, .user)
+        XCTAssertEqual(SourceKind.tiktok.next, .instagram)
         XCTAssertEqual(SourceKind.tiktok.rawValue, "tt")
     }
 
