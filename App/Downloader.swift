@@ -465,6 +465,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private var currentCanonical: String?
     private var currentFolder: URL?
     private let network = Network()
+    /// Requête Relay d'Instagram lue dans les paquets de la page, gardée le
+    /// temps d'une session : la relire à chaque profil coûterait plusieurs
+    /// mégaoctets pour une valeur qui ne change pas d'un compte à l'autre.
+    private static var instagramRelayCache: (operation: InstagramRelayOperation, date: Date)?
+    private static let instagramRelayCacheLifetime: TimeInterval = 3600
     private let previewCache: NSCache<NSURL, NSData> = {
         let cache = NSCache<NSURL, NSData>()
         cache.totalCostLimit = 32 * 1024 * 1024
@@ -2103,6 +2108,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// s'arrête dès que les deux informations sont trouvées ; un échec laisse
     /// la requête sur ses valeurs par défaut plutôt que d'arrêter le parcours.
     private func instagramRelayOperation(pageHTML: Data, referer: URL) async -> InstagramRelayOperation? {
+        // La lecture coûte plusieurs paquets : elle est réutilisée le temps
+        // d'une session, ces valeurs ne changeant pas d'un profil à l'autre.
+        if let cached = Self.instagramRelayCache,
+           Date().timeIntervalSince(cached.date) < Self.instagramRelayCacheLifetime {
+            return cached.operation
+        }
         let urls = InstagramRelay.scriptURLs(inHTML: pageHTML)
         guard !urls.isEmpty else {
             LogCenter.info(L("Instagram : aucun paquet de page à lire, requête d'API par défaut.",
@@ -2128,7 +2139,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
         LogCenter.info(L("Instagram : requête \(InstagramRelay.operationName) lue (\(docID)), \(params.count) variables Relay.",
                          "Instagram: \(InstagramRelay.operationName) read (\(docID)), \(params.count) Relay variables."))
-        return InstagramRelayOperation(docID: docID, relayParams: params)
+        let operation = InstagramRelayOperation(docID: docID, relayParams: params)
+        Self.instagramRelayCache = (operation, Date())
+        return operation
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
