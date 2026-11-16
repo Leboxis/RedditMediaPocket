@@ -11,6 +11,8 @@ import MediaCore
     private var limits: ServiceLimits
     private var rssCache: [URL: (date: Date, data: Data)] = [:]
     private let defaults = UserDefaults.standard
+    /// Relances maximales d'une page après attente d'un 429 à reprise courte.
+    private static let maximumShortLimitAttempts = 2
 
     private func checkLimit(_ service: String) throws {
         // Older versions did not record the source. Honor that existing deadline once.
@@ -131,31 +133,57 @@ import MediaCore
         guard generation == requestGeneration else { throw CancellationError() }
         let started = Date()
         LogCenter.net("GET \(LogDiagnostics.requestSummary(url))…")
-        let result: (Data, URLResponse)
-        do {
-            if isXFetishSignedPage {
-                // Fetching them over IPv4 keeps their source address consistent
-                // with the signed route and the IPv4-only storage host.
-                LogCenter.net("X-Fetish : page en IPv4…")
-                let (body, response) = try await XFetishIPv4Pages.data(for: url,
-                    headers: req.allHTTPHeaderFields ?? [:])
-                result = (body, response)
-            } else {
-                result = try await session.data(for: req)
+        var shortLimitAttempts = 0
+        var data = Data()
+        while true {
+            let result: (Data, URLResponse)
+            do {
+                if isXFetishSignedPage {
+                    // Fetching them over IPv4 keeps their source address consistent
+                    // with the signed route and the IPv4-only storage host.
+                    LogCenter.net("X-Fetish : page en IPv4…")
+                    let (body, response) = try await XFetishIPv4Pages.data(for: url,
+                        headers: req.allHTTPHeaderFields ?? [:])
+                    result = (body, response)
+                } else {
+                    result = try await session.data(for: req)
+                }
+            } catch {
+                if !Task.isCancelled {
+                    let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
+                    LogCenter.err(L("GET \(LogDiagnostics.requestSummary(url)) : \(code) après \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "GET \(LogDiagnostics.requestSummary(url)): \(code) after \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
+                }
+                throw error
             }
-        } catch {
-            if !Task.isCancelled {
-                let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
-                LogCenter.err(L("GET \(LogDiagnostics.requestSummary(url)) : \(code) après \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "GET \(LogDiagnostics.requestSummary(url)): \(code) after \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
+            data = result.0
+            let response = result.1
+            try Task.checkCancellation()
+            guard generation == requestGeneration else { throw CancellationError() }
+            let http = response as? HTTPURLResponse
+            LogCenter.net(L("Réponse \(http?.statusCode ?? 0) de \(LogDiagnostics.requestSummary(response.url ?? url)) : \(data.count) octets, \(response.mimeType ?? "type inconnu"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Response \(http?.statusCode ?? 0) from \(LogDiagnostics.requestSummary(response.url ?? url)): \(data.count) bytes, \(response.mimeType ?? "unknown type"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
+            do {
+                try check(response, requestedURL: url)
+            } catch NetworkError.limited(let service, let until) {
+                // Reddit répond 429 avec `x-ratelimit-reset` à quelques secondes
+                // seulement : attendre la reprise annoncée puis relire la page
+                // garde la session vivante au lieu d'abandonner le parcours.
+                // Sans délai annoncé, ou au-delà du seuil court, la limite
+                // reste fatale (comportement antérieur).
+                shortLimitAttempts += 1
+                let wait = until.map { max(0, $0.timeIntervalSinceNow) } ?? .infinity
+                guard shortLimitAttempts <= Self.maximumShortLimitAttempts,
+                      wait.isFinite, wait <= RatePolicy.shortWaitLimit,
+                      generation == requestGeneration else {
+                    throw NetworkError.limited(service: service, until: until)
+                }
+                LogCenter.net(L("\(service) : HTTP 429, attente de \(Int(wait.rounded(.up))) s puis relecture de la page…", "\(service): HTTP 429, waiting \(Int(wait.rounded(.up))) s then re-reading the page…"))
+                try await Task.sleep(for: .seconds(wait + 1))
+                try Task.checkCancellation()
+                guard generation == requestGeneration else { throw CancellationError() }
+                continue
             }
-            throw error
+            break
         }
-        let (data, response) = result
-        try Task.checkCancellation()
-        guard generation == requestGeneration else { throw CancellationError() }
-        let http = response as? HTTPURLResponse
-        LogCenter.net(L("Réponse \(http?.statusCode ?? 0) de \(LogDiagnostics.requestSummary(response.url ?? url)) : \(data.count) octets, \(response.mimeType ?? "type inconnu"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Response \(http?.statusCode ?? 0) from \(LogDiagnostics.requestSummary(response.url ?? url)): \(data.count) bytes, \(response.mimeType ?? "unknown type"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
-        try check(response, requestedURL: url)
         if isRSS, data.count <= 2_000_000 {
             // Reuse successful pages within a run; manual restart clears them.
             if rssCache.count >= 16, let oldest = rssCache.min(by: { $0.value.date < $1.value.date })?.key { rssCache.removeValue(forKey: oldest) }

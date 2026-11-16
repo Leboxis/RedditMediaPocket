@@ -138,4 +138,41 @@ final class FeedTraversalTests: XCTestCase {
         XCTAssertEqual(downloaded, ["t3_one"])
         XCTAssertTrue(events.contains { $0.contains("repeated") || $0.contains("répétée") })
     }
+
+    /// hot/top : l'ordre dépend des votes et se réordonne entre deux
+    /// lancements. Une page entièrement connue n'y prouve rien sur les
+    /// suivantes : le balayage continue jusqu'à une vraie fin de flux, sans
+    /// conclure à la complétude ni remettre la frontière à nil.
+    @MainActor func testNonChronologicalSortSweepsPastKnownPages() async throws {
+        var saved = FeedCheckpoint(visited: ["t3_head"])
+        var requests: [String?] = []
+        var downloaded: [String] = []
+        let completed = try await FeedTraversal.run(checkpoint: saved, chronological: false,
+            fetch: { after in
+                requests.append(after)
+                switch after {
+                case nil: return [self.post("t3_head")]
+                case "t3_head": return [self.post("t3_moved"), self.post("t3_new")]
+                default: return []
+                }
+            }, process: { downloaded += $0.map(\.id) }, persist: { saved = $0 })
+        XCTAssertTrue(completed)
+        XCTAssertEqual(requests, [nil, "t3_head", "t3_new"])
+        XCTAssertEqual(downloaded, ["t3_moved", "t3_new"])
+        XCTAssertNil(saved.frontier)
+        XCTAssertNil(saved.cursor)
+    }
+
+    /// Contrôle du test précédent : en tri chronologique, la première page
+    /// entièrement connue met fin à la phase nouveautés (comportement établi).
+    @MainActor func testChronologicalSortStopsAtKnownPage() async throws {
+        var saved = FeedCheckpoint(visited: ["t3_head"])
+        var requests: [String?] = []
+        let completed = try await FeedTraversal.run(checkpoint: saved, fetch: { after in
+            requests.append(after)
+            return after == nil ? [self.post("t3_head")] : [self.post("t3_reorder")]
+        }, process: { _ in XCTFail("Known history must not be processed") }, persist: { saved = $0 })
+        XCTAssertTrue(completed)
+        XCTAssertEqual(requests, [nil, "t3_head"])
+    }
 }

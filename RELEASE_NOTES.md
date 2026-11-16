@@ -1,3 +1,9 @@
+Fiabilité du parcours : tris Chauds/Top complets, 429 courts attendus, budget de pages réglable.
+
+- **Tri Chauds / Top.** L'ordre de ces flux se réordonne entre deux lancements : la lecture ne conclut plus à la complétude à la première page déjà connue, elle balaye le flux jusqu'à une vraie fin (page vide, page répétée ou curseur refusé), sans retélécharger ce qui est déjà vu. Auparavant, un média nouveau placé au-delà de la première page connue restait invisible jusqu'à ce qu'il remonte en tête.
+- **429 à reprise courte.** Quand le serveur annonce une reprise à moins de 46 s, la page est attendue puis relue (deux fois au plus) au lieu d'arrêter la session entière. Sans délai annoncé ou au-delà de ce seuil, le comportement est inchangé.
+- **Pages par lancement** (Réglages → Parcours) : budget de pages des flux Reddit — profil, subreddit, sauvegardés — fixé à 25, 50, 100 ou illimité, 100 par défaut, mémorisé et figé au début du parcours.
+
 Coller un lien, filtrer ce qu'on télécharge, et retrouver ce qu'on a.
 
 - **Liens acceptés partout.** Une adresse collée dans le champ prend la priorité sur le nom : post Reddit (`/r/<sub>/comments/<id>/` ou `redd.it/<id>`), subreddit, GIF RedGifs (`/watch/<id>`), tag RedGifs (`#tag` ou `/niches/<tag>`), album ou vidéo X-Fetish. Plusieurs adresses de posts Reddit peuvent être collées ensemble ; elles partagent la collection stable `reddit/posts` et sont mémorisées pour la relance. Une adresse de post X isolée est refusée avec un message explicite plutôt qu'avec une erreur de pseudo.

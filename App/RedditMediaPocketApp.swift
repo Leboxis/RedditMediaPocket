@@ -561,6 +561,18 @@ private struct DownloadSettings: View {
                     Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 6. Par défaut : 6 pour X-Fetish, 3 pour les autres sources. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 6. Defaults: 6 for X-Fetish, 3 for other sources. Higher values may increase server rate limiting."))
                 }
                 Section {
+                    Picker(L("Pages par lancement", "Pages per run"), selection: $model.pageLimit) {
+                        Text("25").tag(25)
+                        Text("50").tag(50)
+                        Text("100").tag(100)
+                        Text(L("Illimité", "Unlimited")).tag(0)
+                    }
+                } header: {
+                    Text(L("Parcours", "Feed scan"))
+                } footer: {
+                    Text(L("Budget de pages des flux Reddit — profil, subreddit, sauvegardés — environ 25 posts par page. Au-delà du budget, le parcours s'arrête et reprend au prochain lancement. Appliqué au prochain lancement si un parcours est en cours.", "Page budget for Reddit feeds — profile, subreddit, saved — about 25 posts per page. Past the budget, the scan stops and resumes on the next run. Applies to the next run while a scan is under way."))
+                }
+                Section {
                     Picker(L("Morceaux par vidéo", "Parts per video"), selection: $model.xFetishSegments) {
                         ForEach(XFetishRangeDownload.segmentOptions, id: \.self) { count in
                             Text("\(count)").tag(count)

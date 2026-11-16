@@ -348,6 +348,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
         }
     }
     @Published private(set) var sessionLimit = 3
+    @Published private(set) var sessionPageLimit = 100
+    @Published private var storedPageLimit = UserDefaults.standard.object(forKey: "pageLimit") as? Int
+    /// Budget de pages du parcours des flux Reddit (profil, subreddit,
+    /// sauvegardés) : 25, 50, 100, ou 0 pour illimité — la boucle s'arrête
+    /// alors sur une vraie fin de flux. Figé au démarrage dans
+    /// `sessionPageLimit`, comme `sessionLimit`.
+    var pageLimit: Int {
+        get { Self.validatedPageLimit(storedPageLimit) }
+        set { storedPageLimit = Self.validatedPageLimit(newValue) }
+    }
+    static func validatedPageLimit(_ raw: Int?) -> Int {
+        guard let raw, [25, 50, 100, 0].contains(raw) else { return 100 }
+        return raw
+    }
     @Published var xFetishSegments = XFetishRangeDownload.segmentCount(
         UserDefaults.standard.object(forKey: XFetishRangeDownload.defaultsKey) as? Int) {
         didSet {
@@ -686,6 +700,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         UserDefaults.standard.removeObject(forKey: Self.visitedKey(id))
         UserDefaults.standard.removeObject(forKey: Self.cursorKey(id))
         UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
+        UserDefaults.standard.removeObject(forKey: Self.frontierSortKey(id))
         Self.clearSavedMediaCount(for: id)
         UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
         UserDefaults.standard.removeObject(forKey: "tikTokResume.\(id)")
@@ -817,6 +832,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     func start() {
         guard !running else { return }
         sessionLimit = max(1, min(6, concurrentLimit))
+        sessionPageLimit = pageLimit
         sessionSegments = XFetishRangeDownload.segmentCount(xFetishSegments)
         errorMessage = nil
         let target = sourceKind == "saved" ? "saved/" : "\(sourceKind)/\(username)"
@@ -1039,6 +1055,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierSortKey(canonical))
         }
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         // Plafond d'espace : vérifié avant tout parcours, puis à chaque page par
@@ -1097,6 +1114,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierSortKey(canonical))
             UserDefaults.standard.set(2, forKey: migrationKey)
         }
         var seenMedia = Set<Media>()
@@ -1195,16 +1213,32 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.removeObject(forKey: Self.visitedKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.cursorKey(canonical))
             UserDefaults.standard.removeObject(forKey: Self.frontierKey(canonical))
+            UserDefaults.standard.removeObject(forKey: Self.frontierSortKey(canonical))
             UserDefaults.standard.set(1, forKey: galleryMigrationKey)
         }
-        let checkpoint = FeedCheckpoint(
+        // Tri non chronologique (hot, top) : l'ordre dépend des votes et se
+        // réordonne entre deux lancements. Une page entièrement connue n'y
+        // prouve rien sur les suivantes : la phase « nouveautés » balaye le
+        // flux depuis la tête jusqu'à une vraie fin, sans retélécharger ce
+        // qui est déjà vu. Une frontière écrite sous un autre tri est donc
+        // ignorée : elle ferait sauter la tête du flux.
+        let chronological: Bool
+        if case .subreddit = source { chronological = subSort == "new" }
+        else { chronological = true }
+        var checkpoint = FeedCheckpoint(
             cursor: UserDefaults.standard.string(forKey: Self.cursorKey(canonical)),
             frontier: UserDefaults.standard.string(forKey: Self.frontierKey(canonical)),
             visited: UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         )
+        let frontierTag = chronological ? "new" : subSort
+        if UserDefaults.standard.string(forKey: Self.frontierSortKey(canonical)) != frontierTag {
+            checkpoint.frontier = nil
+        }
         LogCenter.info(L("Dossier : \(source.folderName), \(checkpoint.visited.count) déjà vus, curseur \(checkpoint.cursor ?? "début"), frontière \(checkpoint.frontier ?? "aucune").", "Folder: \(source.folderName), \(checkpoint.visited.count) seen, cursor \(checkpoint.cursor ?? "start"), frontier \(checkpoint.frontier ?? "none")."))
         var pageNumber = 0
         let completed = try await FeedTraversal.run(checkpoint: checkpoint,
+            maximumPages: sessionPageLimit == 0 ? .max : sessionPageLimit,
+            chronological: chronological,
             validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
             fetch: { after in
                 self.status = L("Recherche…", "Searching…")
@@ -1235,7 +1269,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 LogCenter.info(L("Page \(pageNumber) terminée : total préparé \(preparedCount).", "Page \(pageNumber) done: total prepared \(preparedCount)."))
             }, persist: { state in
                 Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
-                Self.persistFrontier(canonical, state.frontier)
+                Self.persistFrontier(canonical, state.frontier, tag: frontierTag)
                 LogCenter.info(L("Point de reprise : curseur \(state.cursor.map { String($0.suffix(8)) } ?? "fin"), frontière \(state.frontier.map { String($0.suffix(8)) } ?? "aucune"), \(state.visited.count) vus.", "Checkpoint: cursor \(state.cursor.map { String($0.suffix(8)) } ?? "end"), frontier \(state.frontier.map { String($0.suffix(8)) } ?? "none"), \(state.visited.count) seen."))
             }, trace: { LogCenter.info($0) })
         LogCenter.info(L("Parcours des pages : \(pageNumber) lues, \(completed ? "complet" : "limite atteinte"), \(preparedCount) médias préparés.", "Page scan: \(pageNumber) read, \(completed ? "complete" : "limit reached"), \(preparedCount) media prepared."))
@@ -1864,6 +1898,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Curseur de la phase nouveautés : position jusqu'à laquelle les pages ont
     /// été parcourues, pour reprendre là où une session interrompue s'est arrêtée.
     private static func frontierKey(_ canonical: String) -> String { "newPostsFrontier.\(canonical)" }
+    /// Tri sous lequel la frontière a été écrite : une frontière héritée
+    /// d'un autre tri (new ↔ hot/top) ne décrit pas la même position du flux
+    /// et doit être ignorée plutôt que reprise.
+    private static func frontierSortKey(_ canonical: String) -> String { "newPostsFrontierSort.\(canonical)" }
 
     /// Marque-page persisté par collection : curseur de la dernière page
     /// traitée + posts déjà vus (borné). `cursor: nil` efface la reprise
@@ -1877,10 +1915,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
 
     /// Distinct de la reprise : la phase 2 n'y touche pas, seule la phase
     /// nouveautés avance ce curseur, et `nil` signifie « plus rien à sauter ».
-    private static func persistFrontier(_ canonical: String, _ frontier: String?) {
+    private static func persistFrontier(_ canonical: String, _ frontier: String?, tag: String) {
         let key = frontierKey(canonical)
-        if let frontier { UserDefaults.standard.set(frontier, forKey: key) }
-        else { UserDefaults.standard.removeObject(forKey: key) }
+        let sortKey = frontierSortKey(canonical)
+        if let frontier {
+            UserDefaults.standard.set(frontier, forKey: key)
+            UserDefaults.standard.set(tag, forKey: sortKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+            UserDefaults.standard.removeObject(forKey: sortKey)
+        }
     }
 
     private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
