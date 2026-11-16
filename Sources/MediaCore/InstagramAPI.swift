@@ -624,8 +624,9 @@ public enum InstagramWeb {
            let url = URL(string: raw), url.scheme == "https" {
             return InstagramMedia(storageKey: mediaKey(pk, video: true), url: url, isVideo: true)
         }
-        guard let raw = item["display_url"] as? String,
-              let url = URL(string: raw), url.scheme == "https" else { return nil }
+        guard let url = bestDisplayResource(item)
+            ?? (item["display_url"] as? String).flatMap(URL.init(string:)),
+              url.scheme == "https" else { return nil }
         return InstagramMedia(storageKey: mediaKey(pk, video: false), url: url, isVideo: false)
     }
 
@@ -692,10 +693,10 @@ public enum InstagramWeb {
     }
 
     /// Média : `image_versions2.candidates` pour une image, `video_versions`
-    /// pour une vidéo (`media_type` 2), la meilleure candidate étant la
-    /// première. Le rendu SEO ne publie jamais d'URL vidéo : la vidéo y est
-    /// alors remplacée par son affiche, téléchargée comme image (clé `igm-`,
-    /// extension d'image) et non comme un faux fichier vidéo.
+    /// pour une vidéo (`media_type` 2). Le rendu SEO ne publie jamais d'URL
+    /// vidéo : la vidéo y est alors remplacée par son affiche, téléchargée
+    /// comme image (clé `igm-`, extension d'image) et non comme un faux
+    /// fichier vidéo.
     private static func feedMedia(_ item: [String: Any], postPK: String, position: Int) -> InstagramMedia? {
         let mediaType = item["media_type"] as? Int
         let versions = item["video_versions"] as? [[String: Any]]
@@ -704,13 +705,63 @@ public enum InstagramWeb {
         // l'identifiant du média est celui du post.
         let pk = (item["pk"] as? String) ?? "\(postPK)-\(position)"
         let isVideo = mediaType == 2 || versions?.isEmpty == false
-        if isVideo, let raw = (versions?.first)?["url"] as? String,
-           let url = URL(string: raw), url.scheme == "https" {
+        if isVideo, let url = bestVariantURL(versions, video: true) {
             return InstagramMedia(storageKey: mediaKey(pk, video: true), url: url, isVideo: true)
         }
-        guard let raw = (candidates?.first)?["url"] as? String,
-              let url = URL(string: raw), url.scheme == "https" else { return nil }
+        guard let url = bestVariantURL(candidates, video: false) else { return nil }
         return InstagramMedia(storageKey: mediaKey(pk, video: false), url: url, isVideo: false)
+    }
+
+    /// Meilleure variante d'une liste `image_versions2.candidates` ou
+    /// `video_versions` : celle qui couvre la plus grande surface.
+    ///
+    /// L'ordre du serveur n'est pas une garantie — l'image est servie du plus
+    /// grand au plus petit, la vidéo dans l'autre sens — donc se fier à la
+    /// première entrée livrait la plus petite vidéo disponible. La surface
+    /// tranche quel que soit l'ordre. Sans aucune dimension publiée, le repli
+    /// suit l'ordre documenté : dernière entrée pour une vidéo, première pour
+    /// une image.
+    static func bestVariantURL(_ variants: [[String: Any]]?, video: Bool) -> URL? {
+        guard let variants, !variants.isEmpty else { return nil }
+        let usable = variants.filter { variant in
+            guard let raw = variant["url"] as? String else { return false }
+            return URL(string: raw)?.scheme == "https"
+        }
+        guard !usable.isEmpty else { return nil }
+        let sized = usable.compactMap { variant -> (url: URL, area: Int)? in
+            guard let raw = variant["url"] as? String, let url = URL(string: raw) else { return nil }
+            let width = dimension(variant["width"])
+            let height = dimension(variant["height"])
+            guard width > 0, height > 0 else { return nil }
+            return (url, width * height)
+        }
+        if let best = sized.max(by: { $0.area < $1.area }) { return best.url }
+        let fallback = video ? usable.last : usable.first
+        return (fallback?["url"] as? String).flatMap(URL.init(string:))
+    }
+
+    /// Nombre d'un champ JSON, quel que soit le type que le décodeur lui a
+    /// donné (`Int`, `Double` ou `NSNumber`).
+    static func dimension(_ value: Any?) -> Int {
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        if let number = value as? NSNumber { return number.intValue }
+        return 0
+    }
+
+    /// Plus grande des `display_resources` d'un nœud `api/v1` : ces entrées
+    /// énumèrent toutes les tailles et `display_url` n'est pas garanti d'être
+    /// la plus grande.
+    private static func bestDisplayResource(_ item: [String: Any]) -> URL? {
+        let resources = item["display_resources"] as? [[String: Any]] ?? []
+        let sized = resources.compactMap { resource -> (url: URL, area: Int)? in
+            guard let raw = resource["src"] as? String, let url = URL(string: raw),
+                  url.scheme == "https" else { return nil }
+            let area = dimension(resource["config_width"]) * dimension(resource["config_height"])
+            guard area > 0 else { return nil }
+            return (url, area)
+        }
+        return sized.max(by: { $0.area < $1.area })?.url
     }
 
     /// Clé stable `igm-<chiffres>` / `igv-<chiffres>`. Les identifiants

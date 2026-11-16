@@ -235,7 +235,6 @@ final class InstagramTests: XCTestCase {
     }
 
     // MARK: - Clés de médias
-
     func testMediaKey() {
         XCTAssertEqual(InstagramWeb.mediaKey("2743123456789012345", video: false), "igm-2743123456789012345")
         XCTAssertEqual(InstagramWeb.mediaKey("2743123456789012345", video: true), "igv-2743123456789012345")
@@ -246,6 +245,87 @@ final class InstagramTests: XCTestCase {
         // Les chiffres isolés d'un identifiant sale ne deviennent pas une clé
         // ambiguë : l'identifiant entier est filtré.
         XCTAssertEqual(InstagramWeb.mediaKey("12x34", video: false), "igm-1234")
+    }
+
+    // MARK: - Qualité des variantes
+
+    /// La meilleure variante est la plus grande surface, quel que soit l'ordre
+    /// du serveur : Instagram sert les images du plus grand au plus petit et
+    /// les vidéos dans l'autre sens.
+    func testBestVariantIgnoresServerOrder() throws {
+        let ascending: [[String: Any]] = [
+            ["url": "https://cdn/640.mp4", "width": 640, "height": 1136],
+            ["url": "https://cdn/720.mp4", "width": 720, "height": 1280],
+            ["url": "https://cdn/1080.mp4", "width": 1080, "height": 1920]
+        ]
+        XCTAssertEqual(InstagramWeb.bestVariantURL(ascending, video: true)?.absoluteString,
+                       "https://cdn/1080.mp4")
+        // Même liste à l'envers : la réponse ne doit pas changer.
+        XCTAssertEqual(InstagramWeb.bestVariantURL(Array(ascending.reversed()), video: true)?.absoluteString,
+                       "https://cdn/1080.mp4")
+        // Une image servie du plus grand au plus petit garde la plus grande.
+        let descending: [[String: Any]] = [
+            ["url": "https://cdn/1080.jpg", "width": 1080, "height": 1350],
+            ["url": "https://cdn/640.jpg", "width": 640, "height": 800]
+        ]
+        XCTAssertEqual(InstagramWeb.bestVariantURL(descending, video: false)?.absoluteString,
+                       "https://cdn/1080.jpg")
+        // Sans dimensions publiées, le repli suit l'ordre documenté.
+        let unsized: [[String: Any]] = [["url": "https://cdn/a.mp4"], ["url": "https://cdn/b.mp4"]]
+        XCTAssertEqual(InstagramWeb.bestVariantURL(unsized, video: true)?.absoluteString, "https://cdn/b.mp4")
+        XCTAssertEqual(InstagramWeb.bestVariantURL(unsized, video: false)?.absoluteString, "https://cdn/a.mp4")
+        // Une variante non HTTPS n'est jamais retenue, même la plus grande.
+        let insecure: [[String: Any]] = [
+            ["url": "http://cdn/1080.jpg", "width": 1080, "height": 1350],
+            ["url": "https://cdn/640.jpg", "width": 640, "height": 800]
+        ]
+        XCTAssertEqual(InstagramWeb.bestVariantURL(insecure, video: false)?.absoluteString,
+                       "https://cdn/640.jpg")
+        XCTAssertNil(InstagramWeb.bestVariantURL([], video: true))
+        XCTAssertNil(InstagramWeb.bestVariantURL(nil, video: false))
+    }
+
+    /// Une vidéo est téléchargée dans sa plus grande définition, pas dans la
+    /// première servie.
+    func testParseTimelinePicksLargestVideo() throws {
+        let json = """
+        {"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{"edges":[
+            {"node":{"pk":"2743000000000000009","code":"CaDDDDD","taken_at":1710000000,"media_type":2,
+                     "caption":{"text":""},
+                     "video_versions":[
+                        {"url":"https://cdn/small.mp4","width":480,"height":854},
+                        {"url":"https://cdn/large.mp4","width":1080,"height":1920}],
+                     "image_versions2":{"candidates":[{"url":"https://cdn/small.jpg","width":480,"height":854}]}}}
+        ],"page_info":{"end_cursor":null,"has_next_page":false}}}}
+        """
+        let page = try InstagramWeb.parseTimeline(Data(json.utf8))
+        XCTAssertEqual(page.posts[0].media.first?.url.absoluteString, "https://cdn/large.mp4")
+        XCTAssertTrue(try XCTUnwrap(page.posts[0].media.first).isVideo)
+    }
+
+    /// Un carrousel est pris en entier : chaque enfant garde son identifiant,
+    /// donc sa clé et son fichier, image comme vidéo.
+    func testCarouselKeepsEveryChild() throws {
+        let json = """
+        {"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{"edges":[
+            {"node":{"pk":"2743000000000000020","code":"CaEEEEE","taken_at":1710000000,"media_type":8,
+                     "caption":{"text":"Carrousel"},
+                     "carousel_media":[
+                        {"pk":"2743000000000000021","media_type":1,
+                         "image_versions2":{"candidates":[{"url":"https://cdn/1.jpg","width":1080,"height":1350}]}},
+                        {"pk":"2743000000000000022","media_type":2,
+                         "video_versions":[{"url":"https://cdn/2.mp4","width":1080,"height":1920}],
+                         "image_versions2":{"candidates":[{"url":"https://cdn/2.jpg","width":1080,"height":1920}]}},
+                        {"pk":"2743000000000000023","media_type":1,
+                         "image_versions2":{"candidates":[{"url":"https://cdn/3.jpg","width":1080,"height":1350}]}}]}}
+        ],"page_info":{"end_cursor":null,"has_next_page":false}}}}
+        """
+        let page = try InstagramWeb.parseTimeline(Data(json.utf8))
+        XCTAssertEqual(page.posts.count, 1)
+        XCTAssertEqual(page.posts[0].media.map(\.storageKey),
+                       ["igm-2743000000000000021", "igv-2743000000000000022", "igm-2743000000000000023"])
+        XCTAssertEqual(page.posts[0].media.map(\.url.lastPathComponent), ["1.jpg", "2.mp4", "3.jpg"])
+        XCTAssertEqual(page.posts[0].media.map(\.isVideo), [false, true, false])
     }
 
     func testMediaIDInFileName() {
