@@ -76,8 +76,10 @@ final class InstagramSessionTests: XCTestCase {
     func testProfileInfoURL() {
         let url = InstagramAPI.profileInfoURL(username: "pulpeuse_")
         XCTAssertEqual(url.host, "www.instagram.com")
-        XCTAssertEqual(url.path, "/api/v1/users/web_profile_info/")
-        XCTAssertTrue(url.absoluteString.contains("username=pulpeuse_"))
+        XCTAssertEqual(url.path, "/api/v1/users/web_profile_info")
+        // Le pseudo est percent-encodé (l'underscore devient %5F) et se relit tel quel.
+        XCTAssertTrue(url.absoluteString.contains("username=pulpeuse%5F"))
+        XCTAssertTrue(url.absoluteString.removingPercentEncoding?.contains("username=pulpeuse_") == true)
         XCTAssertTrue(url.absoluteString.contains("count=50"))
     }
 
