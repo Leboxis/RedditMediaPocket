@@ -67,20 +67,24 @@ final class InstagramTests: XCTestCase {
 
     // MARK: - Jetons et corps de requête
 
-    /// La page de profil livre le jeton `lsd` exigé par `api/graphql` ; le
-    /// `csrf_token` est facultatif (absent de certaines variantes de page).
+    /// La page de profil livre le jeton `lsd` exigé par `graphql/query` ; le
+    /// `csrf_token` et le `fb_dtsg` sont facultatifs (absents de certaines
+    /// variantes de page).
     func testTokensFromProfilePage() throws {
         let html = """
         <html><script>["LSD",[],{"token":"LsdToken123"}]</script>
-        <script>["InstagramSecurityConfig",[],{"csrf_token":"Csrf456"}]</script></html>
+        <script>["InstagramSecurityConfig",[],{"csrf_token":"Csrf456"}]</script>
+        <script>{"dtsg":{"token":"Dtsg789"}}</script></html>
         """
         let tokens = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data(html.utf8)))
         XCTAssertEqual(tokens.lsd, "LsdToken123")
         XCTAssertEqual(tokens.csrf, "Csrf456")
-        // Page réelle sans `csrf_token` : les jetons restent utilisables.
+        XCTAssertEqual(tokens.dtsg, "Dtsg789")
+        // Page réelle sans `csrf_token` ni `dtsg` : les jetons restent utilisables.
         let withoutCSRF = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data(#"["LSD",[],{"token":"LsdToken123"}]"#.utf8)))
         XCTAssertEqual(withoutCSRF.lsd, "LsdToken123")
         XCTAssertEqual(withoutCSRF.csrf, "")
+        XCTAssertEqual(withoutCSRF.dtsg, "")
         // Page sans jeton (interface modifiée) : pas de faux jetons inventés.
         XCTAssertNil(InstagramAPI.tokens(inHTML: Data("<html></html>".utf8)))
     }
@@ -108,14 +112,29 @@ final class InstagramTests: XCTestCase {
         XCTAssertEqual(first["lsd"], "LsdToken123")
         XCTAssertEqual(first["doc_id"], InstagramAPI.postsQueryID)
         XCTAssertEqual(first["server_timestamps"], "true")
+        // La requête renommée d'octobre 2026 exige son nom amical et le champ
+        // racine ; sans eux, Instagram répond `missing_required_variable_value`.
+        XCTAssertEqual(first["fb_api_req_friendly_name"], InstagramAPI.postsQueryName)
+        XCTAssertEqual(first["fb_api_caller_class"], "RelayModern")
+        XCTAssertEqual(first["__d"], "www")
         let variables = try XCTUnwrap(first["variables"])
         XCTAssertTrue(variables.contains("\"username\":\"nasa\""))
         XCTAssertTrue(variables.contains("\"after\":\"CURSOR1\""))
         XCTAssertTrue(variables.contains("\"first\":12"))
         XCTAssertTrue(variables.contains("__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider"))
+        XCTAssertTrue(variables.contains("\"include_multi_captions\":true"))
+        // Le bloc `data` porte les options que la requête renommée réclame.
+        XCTAssertTrue(variables.contains("\"count\":12"))
+        XCTAssertTrue(variables.contains("\"latest_reel_media\":true"))
         // Première page : `after` est nul, pas une chaîne vide.
         let noCursor = fields(of: InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: nil))
         XCTAssertTrue(try XCTUnwrap(noCursor["variables"]).contains("\"after\":null"))
+        // Un `fb_dtsg` lu sur la page accompagne le corps ; absent, il n'est
+        // pas envoyé comme une chaîne vide.
+        let withDtsg = fields(of: InstagramAPI.postsRequestBody(
+            tokens: InstagramAPI.Tokens(lsd: "Lsd", csrf: "", dtsg: "Dtsg789"),
+            username: "nasa", cursor: nil))
+        XCTAssertEqual(withDtsg["fb_dtsg"], "Dtsg789")
     }
 
     /// Les en-têtes portent l'identifiant d'application et les jetons : sans
@@ -136,6 +155,28 @@ final class InstagramTests: XCTestCase {
         XCTAssertNil(anonymous["X-CSRF-Token"])
         XCTAssertNil(anonymous["Cookie"])
         XCTAssertEqual(anonymous["X-FB-LSD"], "Lsd")
+    }
+
+    /// Le point paginé est `graphql/query`, pas `api/graphql` : c'est la route
+    /// que le site appelle pour la liste paginée des publications.
+    func testPostsEndpoint() {
+        XCTAssertEqual(InstagramAPI.postsURL.absoluteString, "https://www.instagram.com/graphql/query")
+        // L'ancien identifiant de requête est périmé : il répond
+        // `missing_required_variable_value` depuis fin octobre 2026.
+        XCTAssertEqual(InstagramAPI.postsQueryID, "28544666141895803")
+        XCTAssertEqual(InstagramAPI.postsQueryName, "PolarisProfilePostsTabContentQuery_connection")
+    }
+
+    /// `graphql/query` précède parfois son JSON du garde anti-hijack : il est
+    /// retiré avant le décodage, et un corps JSON nu reste intact.
+    func testStrippedGuard() throws {
+        let guarded = Data("for (;;);{\"data\":{}}".utf8)
+        XCTAssertEqual(InstagramWeb.strippedGuard(guarded), Data("{\"data\":{}}".utf8))
+        let bare = Data("{\"data\":{}}".utf8)
+        XCTAssertEqual(InstagramWeb.strippedGuard(bare), bare)
+        // Un corps qui n'est pas du JSON n'est pas tronqué au premier `{`.
+        let html = Data("<html>{}".utf8)
+        XCTAssertEqual(InstagramWeb.strippedGuard(html), html)
     }
 
     // MARK: - Clés de médias

@@ -30,12 +30,18 @@ public enum InstagramError: LocalizedError {
 /// client non connecté, quel que soit l'agent ou l'en-tête d'application. Le
 /// seul chemin anonyme qui reste est celui qu'emprunte le site lui-même :
 ///
-/// 1. la page publique du profil, qui livre le jeton `lsd` et le jeton
-///    `csrf_token` de la session ;
-/// 2. `POST /api/graphql` avec l'identifiant de requête `doc_id` des
+/// 1. la page publique du profil, qui livre le jeton `lsd` (et `fb_dtsg`) ;
+/// 2. `POST graphql/query` avec l'identifiant de requête `doc_id` des
 ///    publications du profil et la variable `username`.
 ///
-/// Cette route anonyme est soumise à un quota par adresse : quand Instagram le
+/// Fin octobre 2026, Instagram a renommé la requête
+/// (`PolarisProfilePostsQuery` → `PolarisProfilePostsTabContentQuery`),
+/// changé son `doc_id` et durci ses variables obligatoires : les anciens
+/// clients reçoivent `missing_required_variable_value` et ne gardent que le
+/// repli SEO, sans vidéos. La forme ci-dessous est celle que le site envoie
+/// lui-même depuis ce changement.
+///
+/// Cette route reste soumise à un quota par adresse : quand Instagram le
 /// signale (`Rate limit exceeded`, code 1675004), le parcours se rabat sur le
 /// rendu SEO de la page (agent Googlebot), qui expose les douze dernières
 /// publications avec leurs images, sans pagination ni URL vidéo.
@@ -53,15 +59,18 @@ public enum InstagramAPI {
     public static let appID = "936619743392459"
 
     /// Identifiant de la requête GraphQL « publications d'un profil »
-    /// (`PolarisProfilePostsQuery`), lu dans le paquet web d'instagram.com.
-    public static let postsQueryID = "29114630661562380"
+    /// (`PolarisProfilePostsTabContentQuery`), lu dans le paquet web
+    /// d'instagram.com. Instagram l'a changé fin octobre 2026 avec le
+    /// renommage de la requête : l'ancien identifiant répond
+    /// `missing_required_variable_value`.
+    public static let postsQueryID = "28544666141895803"
 
-    /// Indicateurs de fonctionnalité joints par le site à la requête. Tous sont
-    /// exigés par le serveur ; `false` reproduit le client web déconnecté.
-    static let featureFlags = [
-        "PolarisMultiCaptionCarouselEnabled", "PolarisShortDramaEnabled", "PolarisSEOIsCrawler",
-        "PolarisThreadsStyleCommentsEnabled", "PolarisReelsRecoDebugOverlayEnabled"
-    ]
+    /// Nom de la requête tel que le site l'envoie, repris dans l'en-tête
+    /// `X-FB-Friendly-Name` et le champ `fb_api_req_friendly_name` du corps.
+    public static let postsQueryName = "PolarisProfilePostsTabContentQuery_connection"
+
+    /// Champ racine de la réponse, annoncé par l'en-tête `X-Root-Field-Name`.
+    static let postsRootField = "xdt_api__v1__feed__user_timeline_graphql_connection"
 
     /// Un pseudo Instagram fait 1 à 30 caractères : lettres, chiffres, points
     /// ou underscores, et ne finit pas par un point.
@@ -98,16 +107,21 @@ public enum InstagramAPI {
         URL(string: "https://www.instagram.com/\(username)/")!
     }
 
-    /// Point d'entrée GraphQL du site web, seul appel anonyme encore servi.
-    public static var graphqlURL: URL { URL(string: "https://www.instagram.com/api/graphql")! }
+    /// Point GraphQL paginé du site : c'est lui que le navigateur appelle
+    /// pour la liste paginée des publications d'un profil (la route
+    /// `api/graphql` ne sert plus que les requêtes isolées).
+    public static var postsURL: URL { URL(string: "https://www.instagram.com/graphql/query")! }
 
     /// Jetons lus dans la page du profil. Sans eux, l'appel GraphQL est refusé.
     public struct Tokens: Sendable, Equatable {
         public let lsd: String
         public let csrf: String
+        /// Jeton `fb_dtsg` de la page, facultatif : le point `graphql/query`
+        /// le redemanderait sinon. Vide quand la page n'en publie pas.
+        public let dtsg: String
 
-        public init(lsd: String, csrf: String) {
-            self.lsd = lsd; self.csrf = csrf
+        public init(lsd: String, csrf: String, dtsg: String = "") {
+            self.lsd = lsd; self.csrf = csrf; self.dtsg = dtsg
         }
     }
 
@@ -121,7 +135,8 @@ public enum InstagramAPI {
         let csrf = firstGroup(#""csrf_token":"([A-Za-z0-9_-]+)""#, in: html)
             ?? firstGroup(#"csrftoken=([A-Za-z0-9_-]+)"#, in: cookies ?? "")
             ?? ""
-        return Tokens(lsd: lsd, csrf: csrf)
+        let dtsg = firstGroup(#""dtsg":\{"token":"([^"]+)""#, in: html) ?? ""
+        return Tokens(lsd: lsd, csrf: csrf, dtsg: dtsg)
     }
 
     /// En-têtes de la page du profil, lue avec l'agent du site.
@@ -147,8 +162,8 @@ public enum InstagramAPI {
         ]
     }
 
-    /// En-têtes de l'appel `api/graphql` : identifiant d'application, jetons de
-    /// la page et marqueurs d'origine que le site envoie lui-même.
+    /// En-têtes de l'appel `graphql/query` : identifiant d'application, jetons
+    /// de la page et marqueurs d'origine que le site envoie lui-même.
     public static func graphqlHeaders(tokens: Tokens, referer: URL,
                                       sessionCookies: String? = nil) -> [String: String] {
         var fields = [
@@ -160,8 +175,11 @@ public enum InstagramAPI {
             "X-FB-LSD": tokens.lsd,
             // Nom de requête et marqueurs du client web connecté ; sans eux,
             // Instagram peut servir la coquille HTML de l'application.
-            "X-FB-Friendly-Name": "PolarisProfilePostsQuery",
-            "X-ASBD-ID": "129477",
+            "X-FB-Friendly-Name": postsQueryName,
+            "X-ASBD-ID": "359341",
+            "X-IG-Max-Touch-Points": "0",
+            "X-Root-Field-Name": postsRootField,
+            "Alt-Used": "www.instagram.com",
             "X-IG-WWW-Claim": "0",
             "Origin": "https://www.instagram.com",
             "Referer": referer.absoluteString,
@@ -176,9 +194,11 @@ public enum InstagramAPI {
             // `csrftoken`, et remplacent les jetons anonymes.
             fields["Cookie"] = cookies
             if let csrf = firstGroup(#"csrftoken=([A-Za-z0-9_-]+)"#, in: cookies) {
+                fields["X-CSRFToken"] = csrf
                 fields["X-CSRF-Token"] = csrf
             }
         } else if !tokens.csrf.isEmpty {
+            fields["X-CSRFToken"] = tokens.csrf
             fields["X-CSRF-Token"] = tokens.csrf
             fields["Cookie"] = "csrftoken=\(tokens.csrf)"
         }
@@ -186,28 +206,61 @@ public enum InstagramAPI {
     }
 
     /// Corps `application/x-www-form-urlencoded` de la requête des
-    /// publications : `lsd`, `doc_id`, `variables` (JSON) et horodatages
-    /// serveur. `after` est le curseur de la page précédente.
+    /// publications : jetons, identification de la requête Relay (`doc_id`,
+    /// nom amical), variables (JSON) et horodatages serveur. `after` est le
+    /// curseur de la page précédente. Les champs `data`, `include_multi_captions`
+    /// et le relais `PolarisSEOIsCrawler` sont exigés par la requête renommée
+    /// d'octobre 2026 : sans eux, Instagram répond
+    /// `missing_required_field_value`.
     public static func postsRequestBody(tokens: Tokens, username: String, cursor: String?,
                                         count: Int = 12) -> Data {
-        var variables: [String: Any] = [
+        let data: [String: Any] = [
+            "count": count,
+            "include_reel_media_seen_timestamp": true,
+            "include_relationship_info": true,
+            "latest_besties_reel_media": true,
+            "latest_reel_media": true
+        ]
+        let variables: [String: Any] = [
             "after": cursor ?? NSNull(),
             "before": NSNull(),
-            "data": ["count": count],
+            "data": data,
             "first": count,
+            "include_multi_captions": true,
             "last": NSNull(),
-            "username": username
+            "username": username,
+            // Relais obligatoire de la requête renommée : faux pour un client
+            // normal, vrai seulement pour un robot d'indexation.
+            "__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider": false
         ]
-        for flag in featureFlags {
-            variables["__relay_internal__pv__\(flag)relayprovider"] = false
-        }
         let json = (try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]))
             ?? Data("{}".utf8)
+        // `jazoest` est une somme de contrôle héritée que le site joint à
+        // chaque envoi Relay ; le serveur ne la vérifie pas. La valeur du
+        // client web est reprise telle quelle plutôt que recalculée sur un
+        // jeton `dtsg` facultatif.
         let pairs = [
+            // Champs de session du client web, constants pour un client anonyme
+            // comme pour un compte connecté.
+            "av=17841415137994167",
+            "__d=www",
+            "__user=0",
+            "__a=1",
+            "__req=0",
+            "dpr=1",
+            "__ccg=EXCELLENT",
+            "__rev=1049285836",
+            "__hsi=7693193318680449885",
+            "__hs=20731.HYP%3Ainstagram_web_pkg.2.1...0",
+            "__comet_req=7",
+            "fb_dtsg=" + formEncode(tokens.dtsg),
+            "jazoest=26461",
             "lsd=" + formEncode(tokens.lsd),
-            "doc_id=" + postsQueryID,
+            "fb_api_caller_class=RelayModern",
+            "fb_api_req_friendly_name=" + formEncode(postsQueryName),
+            "server_timestamps=true",
             "variables=" + formEncode(String(decoding: json, as: UTF8.self)),
-            "server_timestamps=true"
+            "doc_id=" + postsQueryID
         ]
         return Data(pairs.joined(separator: "&").utf8)
     }
@@ -368,11 +421,11 @@ public struct InstagramPage: Sendable {
 }
 
 public enum InstagramWeb {
-    /// Réponse de `api/graphql` : `data.xdt_api__v1__feed__user_timeline_graphql_connection`
+    /// Réponse de `graphql/query` : `data.xdt_api__v1__feed__user_timeline_graphql_connection`
     /// porte les publications (`edges[].node`) et `page_info`
     /// (`end_cursor`, `has_next_page`).
     public static func parseTimeline(_ data: Data) throws -> InstagramPage {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let root = try? JSONSerialization.jsonObject(with: strippedGuard(data)) as? [String: Any] else {
             throw InstagramError.invalidResponse
         }
         if let errors = root["errors"] as? [[String: Any]], !errors.isEmpty {
@@ -391,6 +444,16 @@ public enum InstagramWeb {
         // retrouvée par sa forme plutôt que par sa clé.
         guard let connection = findTimelineConnection(payload) else { throw InstagramError.invalidResponse }
         return page(from: connection)
+    }
+
+    /// `graphql/query` fait parfois précéder son JSON du garde anti-hijack
+    /// `for (;;);`. Le préfixe est retiré avant le décodage ; un corps qui
+    /// commence déjà par `{` est rendu tel quel.
+    static func strippedGuard(_ data: Data) -> Data {
+        let text = String(decoding: data, as: UTF8.self)
+        guard let brace = text.firstIndex(of: "{"), brace != text.startIndex,
+              text[..<brace].contains("for") else { return data }
+        return Data(text[brace...].utf8)
     }
 
     /// Rendu SEO de la page de profil : la connexion est enfouie dans un

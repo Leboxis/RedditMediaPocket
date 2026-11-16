@@ -2073,7 +2073,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func instagramPostsPage(tokens: InstagramAPI.Tokens, username: String,
                                     referer: URL, cursor: String?, sessionCookies: String?) async throws -> InstagramPage {
         let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor)
-        let data = try await network.data(InstagramAPI.graphqlURL,
+        let data = try await network.data(InstagramAPI.postsURL,
                                           headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer,
                                                                                sessionCookies: sessionCookies),
                                           body: body)

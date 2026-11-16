@@ -1,3 +1,8 @@
+Correction des vidéos Instagram.
+
+- **Vidéos Instagram à nouveau téléchargées.** Fin octobre 2026, Instagram a renommé sa requête GraphQL de publications (`PolarisProfilePostsQuery` → `PolarisProfilePostsTabContentQuery`), changé son `doc_id` et rendu obligatoires plusieurs variables Relay. L'ancienne requête répondait `missing_required_variable_value` : le parcours retombait sur le repli SEO, qui ne contient que des images, d'où des vidéos manquantes. La source envoie désormais la requête du site (`graphql/query`, `fb_dtsg`, champ racine, marqueurs Relay) et récupère les `video_versions`.
+- **Réponse GraphQL plus tolérante.** Le garde anti-hijack `for (;;);` qui précède parfois le JSON est retiré avant décodage, et un corps inattendu n'est plus pris pour une fin de fil.
+
 Source Instagram, journal des échecs et test de santé des sources.
 
 - **Instagram : API anonyme fermée.** Instagram répond désormais 404 à `api/v1/users/web_profile_info`. La source passe par le point GraphQL du site (`api/graphql`, jetons pris sur la page du profil, curseur de page en curseur) et, si le quota anonyme est atteint, par le rendu SEO de la page (douze dernières publications, images seules, sans pagination).
