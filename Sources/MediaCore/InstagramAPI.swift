@@ -158,6 +158,11 @@ public enum InstagramAPI {
             "X-IG-App-ID": appID,
             "X-IG-D": "www",
             "X-FB-LSD": tokens.lsd,
+            // Nom de requête et marqueurs du client web connecté ; sans eux,
+            // Instagram peut servir la coquille HTML de l'application.
+            "X-FB-Friendly-Name": "PolarisProfilePostsQuery",
+            "X-ASBD-ID": "129477",
+            "X-IG-WWW-Claim": "0",
             "Origin": "https://www.instagram.com",
             "Referer": referer.absoluteString,
             // Sans ces marqueurs d'origine, Instagram sert la coquille HTML de
@@ -205,6 +210,33 @@ public enum InstagramAPI {
             "server_timestamps=true"
         ]
         return Data(pairs.joined(separator: "&").utf8)
+    }
+
+    /// Route REST du site, servie au client connecté : la même réponse que la
+    /// page de profil, mais en JSON, avec `video_url` sur les vidéos. Lecture
+    /// seule (GET), donc sans jeton CSRF — c'est le chemin le plus robuste
+    /// quand `api/graphql` refuse la requête connectée.
+    public static func profileInfoURL(username: String, count: Int = 50) -> URL {
+        URL(string: "https://www.instagram.com/api/v1/users/web_profile_info/?username=\(formEncode(username))&count=\(count)")!
+    }
+
+    /// En-têtes de la route REST : identifiant d'application, marqueurs
+    /// d'origine et cookies de session. Sans session, elle répond 429.
+    public static func profileInfoHeaders(referer: URL, sessionCookies: String?) -> [String: String] {
+        var fields = [
+            "User-Agent": userAgent,
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "X-IG-App-ID": appID,
+            "X-IG-D": "www",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": referer.absoluteString,
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin"
+        ]
+        if let cookies = sessionCookies, !cookies.isEmpty { fields["Cookie"] = cookies }
+        return fields
     }
 
     /// En-têtes des transferts de médias : le CDN d'Instagram exige le
@@ -372,6 +404,67 @@ public enum InstagramWeb {
             return page(from: connection)
         }
         throw InstagramError.invalidResponse
+    }
+
+    /// Réponse de `api/v1/users/web_profile_info` : `data.user` porte
+    /// `edge_owner_to_timeline_media` (`edges[].node`), où chaque nœud expose
+    /// `video_url` (vidéo) ou `display_url` (image), `is_video`, `shortcode` et
+    /// `edge_sidecar_to_children`. Cette route ne pagine pas ici : une page
+    /// unique, sans curseur.
+    public static func parseProfileInfo(_ data: Data) throws -> InstagramPage {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw InstagramError.invalidResponse
+        }
+        if let errors = root["errors"] as? [[String: Any]], !errors.isEmpty {
+            throw InstagramError.rateLimited
+        }
+        guard let user = (root["data"] as? [String: Any])?["user"] as? [String: Any],
+              let media = user["edge_owner_to_timeline_media"] as? [String: Any] else {
+            // Corps vide ou page de connexion : aucun compte lisible.
+            throw InstagramError.invalidResponse
+        }
+        let edges = (media["edges"] as? [[String: Any]]) ?? []
+        var posts: [InstagramPost] = []
+        for edge in edges {
+            guard let node = edge["node"] as? [String: Any] else { continue }
+            if let post = profilePost(node) { posts.append(post) }
+        }
+        guard !posts.isEmpty else { throw InstagramError.invalidResponse }
+        return InstagramPage(posts: posts, nextCursor: nil, hasMore: false)
+    }
+
+    /// Nœud de `edge_owner_to_timeline_media` : `is_video` et `video_url` pour
+    /// une vidéo, `edge_sidecar_to_children` pour un carrousel.
+    private static func profilePost(_ node: [String: Any]) -> InstagramPost? {
+        guard let pk = (node["id"] as? String) ?? (node["pk"] as? String), !pk.isEmpty else { return nil }
+        var media: [InstagramMedia] = []
+        if let children = ((node["edge_sidecar_to_children"] as? [String: Any])?["edges"] as? [[String: Any]]) {
+            for edge in children {
+                guard let child = edge["node"] as? [String: Any],
+                      let value = profileMedia(child, postPK: pk, position: media.count + 1) else { continue }
+                media.append(value)
+            }
+        }
+        if media.isEmpty, let value = profileMedia(node, postPK: pk, position: 1) { media.append(value) }
+        guard !media.isEmpty else { return nil }
+        let caption = (((node["edge_media_to_caption"] as? [String: Any])?["edges"] as? [[String: Any]])?
+            .first?["node"] as? [String: Any])?["text"] as? String
+        let taken = node["taken_at_timestamp"] as? Double
+        return InstagramPost(id: pk, code: node["shortcode"] as? String, text: caption ?? "",
+                             publishedAt: taken.map { Date(timeIntervalSince1970: $0) },
+                             media: media)
+    }
+
+    private static func profileMedia(_ item: [String: Any], postPK: String, position: Int) -> InstagramMedia? {
+        let pk = (item["id"] as? String) ?? "\(postPK)-\(position)"
+        let isVideo = (item["is_video"] as? Bool) == true
+        if isVideo, let raw = item["video_url"] as? String,
+           let url = URL(string: raw), url.scheme == "https" {
+            return InstagramMedia(storageKey: mediaKey(pk, video: true), url: url, isVideo: true)
+        }
+        guard let raw = item["display_url"] as? String,
+              let url = URL(string: raw), url.scheme == "https" else { return nil }
+        return InstagramMedia(storageKey: mediaKey(pk, video: false), url: url, isVideo: false)
     }
 
     /// Construit une page depuis une connexion de publications, commune aux

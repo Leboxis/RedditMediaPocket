@@ -1948,16 +1948,27 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                                 cursor: nil, sessionCookies: sessionCookies)
             if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(true) }
         } catch InstagramError.rateLimited, InstagramError.invalidResponse {
-            if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(false) }
-            LogCenter.err(L("Instagram : API GraphQL indisponible, repli sur le rendu SEO (douze dernières publications, images seules).",
-                            "Instagram: anonymous quota reached, falling back to the SEO render (twelve latest posts, images only)."))
-            page = try InstagramWeb.parseCrawlerPage(try await network.data(pageURL,
-                                                                           headers: InstagramAPI.crawlerHeaders()))
-            if sessionCookies == nil {
-                LogCenter.info(L("Instagram : connecte une session dans les Réglages pour obtenir les vidéos.",
-                                 "Instagram: sign in from Settings to get videos."))
+            // Requête connectée refusée : la route REST du profil rend le même
+            // contenu en JSON, vidéos comprises, et ne demande pas de jeton CSRF.
+            if sessionCookies != nil,
+               let profile = try? await instagramProfileInfo(username: username, referer: pageURL,
+                                                             sessionCookies: sessionCookies) {
+                LogCenter.info(L("Instagram : API GraphQL refusée, profil lu par la route REST (une page, vidéos comprises).",
+                                 "Instagram: GraphQL API refused, profile read through the REST route (one page, videos included)."))
+                await InstagramSession.shared.recordAPIAcceptance(true)
+                page = profile
+            } else {
+                if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(false) }
+                LogCenter.err(L("Instagram : API GraphQL indisponible, repli sur le rendu SEO (douze dernières publications, images seules).",
+                                "Instagram: anonymous quota reached, falling back to the SEO render (twelve latest posts, images only)."))
+                page = try InstagramWeb.parseCrawlerPage(try await network.data(pageURL,
+                                                                               headers: InstagramAPI.crawlerHeaders()))
+                if sessionCookies == nil {
+                    LogCenter.info(L("Instagram : connecte une session dans les Réglages pour obtenir les vidéos.",
+                                     "Instagram: sign in from Settings to get videos."))
+                }
+                degraded = true
             }
-            degraded = true
         }
 
         while scannedPages < 100 {
@@ -2050,6 +2061,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Une page de publications Instagram par le point GraphQL du site : le
     /// corps porte les jetons de la page et le curseur, la réponse est lue par
     /// `InstagramWeb.parseTimeline`.
+    /// Une page de profil par la route REST du site : JSON connecté, avec
+    /// `video_url` sur les vidéos. Sans pagination.
+    private func instagramProfileInfo(username: String, referer: URL, sessionCookies: String?) async throws -> InstagramPage {
+        let data = try await network.data(InstagramAPI.profileInfoURL(username: username),
+                                          headers: InstagramAPI.profileInfoHeaders(referer: referer,
+                                                                                  sessionCookies: sessionCookies))
+        return try InstagramWeb.parseProfileInfo(data)
+    }
+
     private func instagramPostsPage(tokens: InstagramAPI.Tokens, username: String,
                                     referer: URL, cursor: String?, sessionCookies: String?) async throws -> InstagramPage {
         let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor)

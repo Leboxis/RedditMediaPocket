@@ -73,6 +73,58 @@ final class InstagramSessionTests: XCTestCase {
         XCTAssertEqual(session["X-FB-LSD"], "LSD123")
     }
 
+    func testProfileInfoURL() {
+        let url = InstagramAPI.profileInfoURL(username: "pulpeuse_")
+        XCTAssertEqual(url.host, "www.instagram.com")
+        XCTAssertEqual(url.path, "/api/v1/users/web_profile_info/")
+        XCTAssertTrue(url.absoluteString.contains("username=pulpeuse_"))
+        XCTAssertTrue(url.absoluteString.contains("count=50"))
+    }
+
+    /// Réponse REST du profil : `video_url` pour une vidéo, `display_url` pour
+    /// une image, `edge_sidecar_to_children` pour un carrousel.
+    func testParseProfileInfo() throws {
+        let json = #"""
+        {"data":{"user":{"edge_owner_to_timeline_media":{"count":2,"page_info":{"has_next_page":true,"end_cursor":"CUR"},"edges":[
+          {"node":{"id":"4031845282429052247","shortcode":"N_P97DiEpVc","is_video":true,
+                   "video_url":"https://scontent.cdninstagram.com/v/t50/a.mp4",
+                   "display_url":"https://scontent.cdninstagram.com/v/t51/a.jpg",
+                   "taken_at_timestamp":1760000000,
+                   "edge_media_to_caption":{"edges":[{"node":{"text":"Une video"}}]}}},
+          {"node":{"id":"4000000000000000001","shortcode":"ABC123","is_video":false,
+                   "display_url":"https://scontent.cdninstagram.com/v/t51/b.jpg",
+                   "edge_sidecar_to_children":{"edges":[
+                     {"node":{"id":"4000000000000000002","is_video":false,
+                              "display_url":"https://scontent.cdninstagram.com/v/t51/c.jpg"}},
+                     {"node":{"id":"4000000000000000003","is_video":true,
+                              "video_url":"https://scontent.cdninstagram.com/v/t50/d.mp4",
+                              "display_url":"https://scontent.cdninstagram.com/v/t51/d.jpg"}}]}}}
+        ]}}}}
+        """#
+        let page = try InstagramWeb.parseProfileInfo(Data(json.utf8))
+        XCTAssertEqual(page.posts.count, 2)
+        XCTAssertFalse(page.hasMore)
+        XCTAssertNil(page.nextCursor)
+
+        let video = try XCTUnwrap(page.posts.first)
+        XCTAssertEqual(video.code, "N_P97DiEpVc")
+        XCTAssertEqual(video.text, "Une video")
+        XCTAssertEqual(video.media.count, 1)
+        XCTAssertTrue(video.media[0].isVideo)
+        XCTAssertEqual(video.media[0].storageKey, "igv-4031845282429052247")
+        XCTAssertEqual(video.media[0].url.absoluteString, "https://scontent.cdninstagram.com/v/t50/a.mp4")
+
+        let carousel = try XCTUnwrap(page.posts.last)
+        XCTAssertEqual(carousel.media.map(\.storageKey), ["igm-4000000000000000002", "igv-4000000000000000003"])
+        XCTAssertEqual(carousel.media.map(\.isVideo), [false, true])
+    }
+
+    /// Une coquille HTML ou un corps vide ne doit pas se faire passer pour une page.
+    func testParseProfileInfoRejectsNonJSON() {
+        XCTAssertThrowsError(try InstagramWeb.parseProfileInfo(Data("<html></html>".utf8)))
+        XCTAssertThrowsError(try InstagramWeb.parseProfileInfo(Data("{}".utf8)))
+    }
+
     func testPageHeadersCarrySessionCookie() throws {
         let url = InstagramAPI.profilePageURL(username: "nasa")
         XCTAssertNil(InstagramAPI.pageHeaders(referer: url)["Cookie"])
