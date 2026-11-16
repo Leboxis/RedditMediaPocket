@@ -85,6 +85,16 @@ final class InstagramTests: XCTestCase {
         XCTAssertNil(InstagramAPI.tokens(inHTML: Data("<html></html>".utf8)))
     }
 
+    /// Le `csrf_token` a quitté le HTML : il n'arrive plus que par le cookie
+    /// `Set-Cookie` de la page, sans lequel Instagram refuse la requête.
+    func testTokensFromCookies() throws {
+        let html = #"["LSD",[],{"token":"LsdToken123"}]"#
+        let cookies = "csrftoken=h7FVwzA-3B5t1lulGQA2AT; Path=/; Domain=.instagram.com; Secure"
+        let tokens = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data(html.utf8), cookies: cookies))
+        XCTAssertEqual(tokens.lsd, "LsdToken123")
+        XCTAssertEqual(tokens.csrf, "h7FVwzA-3B5t1lulGQA2AT")
+    }
+
     func testPostsRequestBody() throws {
         let tokens = InstagramAPI.Tokens(lsd: "LsdToken123", csrf: "Csrf456")
         func fields(of body: Data) -> [String: String] {

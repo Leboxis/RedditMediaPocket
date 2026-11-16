@@ -118,8 +118,8 @@ struct SourceDiagnosticsView: View {
     private func probeInstagram(_ network: Network) async -> DiagnosticState {
         let pageURL = InstagramAPI.profilePageURL(username: "instagram")
         do {
-            let page = try await network.data(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
-            guard InstagramAPI.tokens(inHTML: page) != nil else {
+            let page = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
+            guard InstagramAPI.tokens(inHTML: page.data, cookies: page.headers["set-cookie"]) != nil else {
                 return .fail(L("Page de profil servie sans jeton d'API (interface modifiée).",
                                "Profile page served without an API token (interface changed)."))
             }

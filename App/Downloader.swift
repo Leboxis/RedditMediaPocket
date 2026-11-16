@@ -1913,15 +1913,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
                               preparedCount: inout Int) async throws -> Bool {
         status = L("Résolution du compte Instagram…", "Resolving Instagram account…")
         let pageURL = InstagramAPI.profilePageURL(username: username)
-        let pageHTML: Data
+        let pageHTML: (data: Data, headers: [String: String])
         do {
-            pageHTML = try await network.data(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
+            pageHTML = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
         } catch NetworkError.refused(let code) where code == 404 || code == 401 {
             throw InstagramError.unknownAccount
         } catch NetworkError.refused(let code) where code == 403 || code == 429 {
             throw InstagramError.loginRequired
         }
-        guard let tokens = InstagramAPI.tokens(inHTML: pageHTML) else {
+        guard let tokens = InstagramAPI.tokens(inHTML: pageHTML.data, cookies: pageHTML.headers["set-cookie"]) else {
             throw InstagramError.invalidResponse
         }
         LogCenter.info(L("Instagram : page du compte \(username) lue.", "Instagram: page for account \(username) read."))
@@ -2045,7 +2045,15 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let data = try await network.data(InstagramAPI.graphqlURL,
                                           headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer),
                                           body: body)
-        return try InstagramWeb.parseTimeline(data)
+        do {
+            return try InstagramWeb.parseTimeline(data)
+        } catch {
+            // Le motif exact du refus (quota, variable, coquille HTML) reste
+            // lisible dans le journal, sans jeton ni cookie.
+            let detail = LogDiagnostics.sanitize(String(decoding: data.prefix(300), as: UTF8.self))
+            LogCenter.err(L("Instagram : réponse GraphQL refusée : \(detail)", "Instagram: GraphQL response refused: \(detail)"))
+            throw error
+        }
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }

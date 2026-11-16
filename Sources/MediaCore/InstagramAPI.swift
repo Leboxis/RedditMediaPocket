@@ -113,10 +113,14 @@ public enum InstagramAPI {
 
     /// Extrait `lsd` (exigé) et `csrf_token` (facultatif, absent de certaines
     /// variantes de page) du HTML de la page de profil.
-    public static func tokens(inHTML data: Data) -> Tokens? {
+    /// `cookies` porte les en-têtes `Set-Cookie` de la page : le `csrf_token`
+    /// n'est plus publié dans le HTML, il n'arrive que par ce cookie.
+    public static func tokens(inHTML data: Data, cookies: String? = nil) -> Tokens? {
         let html = String(decoding: data, as: UTF8.self)
         guard let lsd = firstGroup(#""LSD",\[\],\{"token":"([^"]+)""#, in: html) else { return nil }
-        let csrf = firstGroup(#""csrf_token":"([A-Za-z0-9]+)""#, in: html) ?? ""
+        let csrf = firstGroup(#""csrf_token":"([A-Za-z0-9_-]+)""#, in: html)
+            ?? firstGroup(#"csrftoken=([A-Za-z0-9_-]+)"#, in: cookies ?? "")
+            ?? ""
         return Tokens(lsd: lsd, csrf: csrf)
     }
 

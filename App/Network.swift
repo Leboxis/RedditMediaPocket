@@ -122,13 +122,24 @@ import MediaCore
     }
     func data(_ url: URL, bearer: String? = nil, headers: [String: String]? = nil,
               body: Data? = nil) async throws -> Data {
+        (try await fetch(url, bearer: bearer, headers: headers, body: body)).data
+    }
+
+    /// Comme `data`, en rendant aussi les en-têtes de la réponse : Instagram ne
+    /// livre son jeton `csrf` que par `Set-Cookie`, plus dans le HTML.
+    func dataAndHeaders(_ url: URL, headers: [String: String]? = nil) async throws -> (data: Data, headers: [String: String]) {
+        try await fetch(url, bearer: nil, headers: headers, body: nil)
+    }
+
+    private func fetch(_ url: URL, bearer: String?, headers: [String: String]?,
+                       body: Data?) async throws -> (data: Data, headers: [String: String]) {
         let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
         let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
         if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 {
             LogCenter.net(L("Page déjà en mémoire (\(cached.data.count / 1024) Ko), pas de nouvel appel.", "Page already in memory (\(cached.data.count / 1024) KB), no new call."))
-            return cached.data
+            return (cached.data, [:])
         }
         // Album and video pages hand out signed get_image / get_file routes.
         let isXFetishSite = url.host?.lowercased() == "x-fetish.tube"
@@ -170,7 +181,11 @@ import MediaCore
             if rssCache.count >= 16, let oldest = rssCache.min(by: { $0.value.date < $1.value.date })?.key { rssCache.removeValue(forKey: oldest) }
             rssCache[url] = (Date(), data)
         }
-        return data
+        var fields: [String: String] = [:]
+        for (key, value) in http?.allHeaderFields ?? [:] {
+            fields[String(describing: key).lowercased()] = String(describing: value)
+        }
+        return (data, fields)
     }
 
     func savedFeed(username: String? = nil) async throws -> SavedFeed {
