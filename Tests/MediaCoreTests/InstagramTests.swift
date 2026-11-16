@@ -179,6 +179,61 @@ final class InstagramTests: XCTestCase {
         XCTAssertEqual(InstagramWeb.strippedGuard(html), html)
     }
 
+    // MARK: - Requête Relay lue dans les paquets de la page
+
+    /// Les paquets JavaScript sont annoncés dans la page, sur le CDN statique.
+    func testScriptURLs() throws {
+        let html = """
+        <html><head>
+        <link rel="preload" href="https://static.cdninstagram.com/rsrc.php/v4/yQ/l/en_US-j/AbCdEf.js" as="script">
+        <link rel="preload" href="https://static.cdninstagram.com/rsrc.php/v4/yQ/l/en_US-j/AbCdEf.js" as="script">
+        <script src="https://static.cdninstagram.com/rsrc.php/v4/yZ/l/en_US-j/GhIjKl.js"></script>
+        <script src="https://example.com/autre.js"></script>
+        </head></html>
+        """
+        let urls = InstagramRelay.scriptURLs(inHTML: Data(html.utf8))
+        // Le doublon est retiré, l'hôte étranger n'est pas suivi.
+        XCTAssertEqual(urls.map(\.lastPathComponent), ["AbCdEf.js", "GhIjKl.js"])
+    }
+
+    /// Le `doc_id` et la liste des variables Relay sont lus dans le paquet,
+    /// comme le fait le navigateur : c'est cette liste, et non une constante,
+    /// qu'Instagram exige.
+    func testRelayOperationFromBundle() throws {
+        let bundle = """
+        __d("PolarisProfilePostsTabContentQuery_connection_instagramRelayOperation",[],(function(a,b,c,d,e,f){e.exports="28544666141895803"}),null);
+        __d("PolarisProfilePostsTabContentQuery_connection.graphql",["PolarisSEOIsCrawler.relayprovider","PolarisCommunityNoteCommentsEnabled.relayprovider"],(function(a,b,c,d,e,f){}),null);
+        """
+        XCTAssertEqual(InstagramRelay.docID(in: bundle), "28544666141895803")
+        XCTAssertEqual(InstagramRelay.relayParams(in: bundle),
+                       ["PolarisSEOIsCrawler", "PolarisCommunityNoteCommentsEnabled"])
+        let operation = try XCTUnwrap(InstagramRelay.operation(in: [bundle]))
+        XCTAssertEqual(operation.docID, "28544666141895803")
+        XCTAssertEqual(operation.relayParams.count, 2)
+        // Un paquet qui ne porte pas la requête ne produit rien.
+        XCTAssertNil(InstagramRelay.docID(in: "__d(\"Autre\",[],function(){});"))
+        XCTAssertTrue(InstagramRelay.relayParams(in: "__d(\"Autre\",[],function(){});").isEmpty)
+        XCTAssertNil(InstagramRelay.operation(in: ["__d(\"Autre\",[],function(){});"]))
+    }
+
+    /// La requête découverte remplace le `doc_id` figé et impose ses propres
+    /// variables Relay : `PolarisSEOIsCrawler` reste faux, les autres vrai.
+    func testPostsRequestBodyUsesDiscoveredRelay() throws {
+        let operation = InstagramRelayOperation(
+            docID: "28544666141895803",
+            relayParams: ["PolarisSEOIsCrawler", "PolarisCommunityNoteCommentsEnabled"])
+        let body = InstagramAPI.postsRequestBody(
+            tokens: InstagramAPI.Tokens(lsd: "Lsd", csrf: ""),
+            username: "nasa", cursor: nil, operation: operation)
+        let form = String(decoding: body, as: UTF8.self)
+        XCTAssertTrue(form.contains("doc_id=28544666141895803"))
+        let variables = try XCTUnwrap(form.split(separator: "&")
+            .first { $0.hasPrefix("variables=") }
+            .map { String($0.dropFirst("variables=".count)).removingPercentEncoding ?? "" })
+        XCTAssertTrue(variables.contains("\"__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider\":false"))
+        XCTAssertTrue(variables.contains("\"__relay_internal__pv__PolarisCommunityNoteCommentsEnabledrelayprovider\":true"))
+    }
+
     // MARK: - Clés de médias
 
     func testMediaKey() {

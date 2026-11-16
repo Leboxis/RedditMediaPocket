@@ -213,7 +213,8 @@ public enum InstagramAPI {
     /// d'octobre 2026 : sans eux, Instagram répond
     /// `missing_required_field_value`.
     public static func postsRequestBody(tokens: Tokens, username: String, cursor: String?,
-                                        count: Int = 12) -> Data {
+                                        count: Int = 12,
+                                        operation: InstagramRelayOperation? = nil) -> Data {
         let data: [String: Any] = [
             "count": count,
             "include_reel_media_seen_timestamp": true,
@@ -221,18 +222,22 @@ public enum InstagramAPI {
             "latest_besties_reel_media": true,
             "latest_reel_media": true
         ]
-        let variables: [String: Any] = [
+        var variables: [String: Any] = [
             "after": cursor ?? NSNull(),
             "before": NSNull(),
             "data": data,
             "first": count,
             "include_multi_captions": true,
             "last": NSNull(),
-            "username": username,
-            // Relais obligatoire de la requête renommée : faux pour un client
-            // normal, vrai seulement pour un robot d'indexation.
-            "__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider": false
+            "username": username
         ]
+        // Variables Relay : leur liste vient des paquets de la page, elle
+        // change avec l'interface. `PolarisSEOIsCrawler` vaut faux pour un
+        // client ordinaire, les autres reprennent la valeur par défaut du
+        // site.
+        for param in operation?.relayParams ?? ["PolarisSEOIsCrawler"] {
+            variables["__relay_internal__pv__\(param)relayprovider"] = (param != "PolarisSEOIsCrawler")
+        }
         let json = (try? JSONSerialization.data(withJSONObject: variables, options: [.sortedKeys]))
             ?? Data("{}".utf8)
         // `jazoest` est une somme de contrôle héritée que le site joint à
@@ -301,16 +306,110 @@ public enum InstagramAPI {
         ]
     }
 
+    /// En-têtes des paquets JavaScript servis avec la page : le CDN statique
+    /// les rend à l'agent du site, avec le Referer de la page.
+    public static func scriptHeaders(referer: URL) -> [String: String] {
+        [
+            "User-Agent": userAgent,
+            "Accept": "*/*",
+            "Referer": referer.absoluteString
+        ]
+    }
+
     static func formEncode(_ text: String) -> String {
         text.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
     }
 
-    static func firstGroup(_ pattern: String, in text: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+    static func firstGroup(_ pattern: String, in text: String,
+                           options: NSRegularExpression.Options = []) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               match.numberOfRanges > 1,
               let range = Range(match.range(at: 1), in: text) else { return nil }
         return String(text[range])
+    }
+}
+
+/// Requête Relay des publications, telle que le paquet web d'Instagram la
+/// publie. Le nom et le `doc_id` changent quand Instagram renomme son
+/// interface, et la liste des variables `__relay_internal__pv__…` qu'elle
+/// exige change aussi — sans prévenir, et sans être déductible de la réponse
+/// d'erreur. Seule source fiable : les paquets JavaScript servis avec la page.
+public struct InstagramRelayOperation: Sendable, Equatable {
+    public let docID: String
+    /// Noms des fournisseurs Relay exigés, sans le préfixe
+    /// `__relay_internal__pv__` ni le suffixe `relayprovider`.
+    public let relayParams: [String]
+
+    public init(docID: String, relayParams: [String]) {
+        self.docID = docID; self.relayParams = relayParams
+    }
+}
+
+public enum InstagramRelay {
+    /// Nom de la requête de publications. Il sert à retrouver son `doc_id` et
+    /// ses variables dans les paquets ; un renommage côté Instagram le rend
+    /// introuvable, ce que le parcours signale au lieu de deviner.
+    public static let operationName = "PolarisProfilePostsTabContentQuery_connection"
+
+    /// Adresses des paquets JavaScript servis avec la page, dans l'ordre du
+    /// document. Les doublons sont retirés.
+    public static func scriptURLs(inHTML data: Data) -> [URL] {
+        let html = String(decoding: data, as: UTF8.self)
+        let pattern = #"https://static\.cdninstagram\.com/rsrc\.php/[^"'\s]+\.js"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let range = NSRange(html.startIndex..., in: html)
+        var seen = Set<String>()
+        var urls: [URL] = []
+        for match in regex.matches(in: html, range: range) {
+            guard let found = Range(match.range, in: html) else { continue }
+            // Dans le document, l'adresse peut être échappée (`\u0025` pour
+            // `%`, `\/` pour `/`) : elle est remise en forme avant usage.
+            let raw = String(html[found])
+                .replacingOccurrences(of: "\\u0025", with: "%")
+                .replacingOccurrences(of: "\\u0026", with: "&")
+                .replacingOccurrences(of: "\\/", with: "/")
+            guard seen.insert(raw).inserted, let url = URL(string: raw) else { continue }
+            urls.append(url)
+        }
+        return urls
+    }
+
+    /// `doc_id` de la requête, lu dans un paquet JavaScript.
+    public static func docID(in script: String) -> String? {
+        let name = NSRegularExpression.escapedPattern(for: operationName)
+        let pattern = #"__d\(""# + name + #"_instagramRelayOperation",\[\],\(function\([^)]+\).+?\bexports="([^"]+)""#
+        // Un paquet est minifié sur une seule ligne, mais la définition peut
+        // être coupée par un retour à la ligne : le motif traverse les lignes.
+        return InstagramAPI.firstGroup(pattern, in: script, options: [.dotMatchesLineSeparators])
+    }
+
+    /// Variables Relay exigées par la requête, lues dans un paquet
+    /// JavaScript : les entrées `"…relayprovider"` de sa liste de paramètres.
+    public static func relayParams(in script: String) -> [String] {
+        let name = NSRegularExpression.escapedPattern(for: operationName)
+        let pattern = #"__d\(""# + name + #"(?:\.graphql|\$Parameters)",\[([^\]]+)\]"#
+        guard let list = InstagramAPI.firstGroup(pattern, in: script,
+                                                 options: [.dotMatchesLineSeparators]) else { return [] }
+        return list.split(separator: ",").compactMap { raw in
+            let text = raw.trimmingCharacters(in: .whitespaces)
+            guard text.hasPrefix("\""), text.hasSuffix(".relayprovider\"") else { return nil }
+            // Retire le guillemet ouvrant et le suffixe `.relayprovider"`.
+            return String(text.dropFirst().dropLast(15))
+        }
+    }
+
+    /// Requête complète, quand un seul paquet porte les deux informations.
+    public static func operation(in scripts: [String]) -> InstagramRelayOperation? {
+        var foundDocID: String?
+        var foundParams: [String] = []
+        for script in scripts {
+            if foundDocID == nil { foundDocID = docID(in: script) }
+            if foundParams.isEmpty { foundParams = relayParams(in: script) }
+            if foundDocID != nil, !foundParams.isEmpty { break }
+        }
+        guard let foundDocID, !foundDocID.isEmpty else { return nil }
+        return InstagramRelayOperation(docID: foundDocID, relayParams: foundParams)
     }
 }
 

@@ -1928,6 +1928,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
             throw InstagramError.invalidResponse
         }
         LogCenter.info(L("Instagram : page du compte \(username) lue.", "Instagram: page for account \(username) read."))
+        // `doc_id` et variables Relay sont lus dans les paquets de la page :
+        // Instagram les change sans prévenir, et une liste figée fait répondre
+        // `missing_required_variable_value` (plus aucune vidéo).
+        let relay = await instagramRelayOperation(pageHTML: pageHTML.data, referer: pageURL)
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publiée.
@@ -1945,7 +1949,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var page: InstagramPage
         do {
             page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL,
-                                                cursor: nil, sessionCookies: sessionCookies)
+                                                cursor: nil, sessionCookies: sessionCookies,
+                                                relay: relay)
             if sessionCookies != nil { await InstagramSession.shared.recordAPIAcceptance(true) }
         } catch InstagramError.rateLimited, InstagramError.invalidResponse {
             // Requête connectée refusée : la route REST du profil rend le même
@@ -2026,7 +2031,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
             status = L("Recherche des médias Instagram… page \(scannedPages + 1)", "Searching Instagram media… page \(scannedPages + 1)")
             do {
                 page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL,
-                                                    cursor: cursor, sessionCookies: sessionCookies)
+                                                    cursor: cursor, sessionCookies: sessionCookies,
+                                                    relay: relay)
             } catch InstagramError.rateLimited {
                 // Quota atteint en cours de parcours : ce qui est déjà
                 // téléchargé reste en place, le parcours est incomplet.
@@ -2071,8 +2077,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     private func instagramPostsPage(tokens: InstagramAPI.Tokens, username: String,
-                                    referer: URL, cursor: String?, sessionCookies: String?) async throws -> InstagramPage {
-        let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor)
+                                    referer: URL, cursor: String?, sessionCookies: String?,
+                                    relay: InstagramRelayOperation?) async throws -> InstagramPage {
+        let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor,
+                                                 operation: relay)
         let data = try await network.data(InstagramAPI.postsURL,
                                           headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer,
                                                                                sessionCookies: sessionCookies),
@@ -2086,6 +2094,41 @@ struct UserCollection: Codable, Identifiable, Equatable {
             LogCenter.err(L("Instagram : réponse GraphQL refusée : \(detail)", "Instagram: GraphQL response refused: \(detail)"))
             throw error
         }
+    }
+
+    /// `doc_id` et variables Relay de la requête des publications, lus dans
+    /// les paquets JavaScript servis avec la page du profil. Instagram les
+    /// change avec son interface : les figer fait répondre
+    /// `missing_required_variable_value`, donc plus aucune vidéo. La lecture
+    /// s'arrête dès que les deux informations sont trouvées ; un échec laisse
+    /// la requête sur ses valeurs par défaut plutôt que d'arrêter le parcours.
+    private func instagramRelayOperation(pageHTML: Data, referer: URL) async -> InstagramRelayOperation? {
+        let urls = InstagramRelay.scriptURLs(inHTML: pageHTML)
+        guard !urls.isEmpty else {
+            LogCenter.info(L("Instagram : aucun paquet de page à lire, requête d'API par défaut.",
+                             "Instagram: no page bundle to read, default API request."))
+            return nil
+        }
+        var docID: String?
+        var params: [String] = []
+        // Les paquets utiles sont servis tôt dans la page ; au-delà, la lecture
+        // coûterait plus qu'elle ne rapporte.
+        for url in urls.prefix(40) {
+            if Task.isCancelled { break }
+            guard let data = try? await network.data(url, headers: InstagramAPI.scriptHeaders(referer: referer)) else { continue }
+            let script = String(decoding: data, as: UTF8.self)
+            if docID == nil { docID = InstagramRelay.docID(in: script) }
+            if params.isEmpty { params = InstagramRelay.relayParams(in: script) }
+            if docID != nil, !params.isEmpty { break }
+        }
+        guard let docID, !docID.isEmpty else {
+            LogCenter.err(L("Instagram : requête de publications introuvable dans les paquets de la page (interface renommée ?).",
+                            "Instagram: posts query not found in the page bundles (interface renamed?)."))
+            return nil
+        }
+        LogCenter.info(L("Instagram : requête \(InstagramRelay.operationName) lue (\(docID)), \(params.count) variables Relay.",
+                         "Instagram: \(InstagramRelay.operationName) read (\(docID)), \(params.count) Relay variables."))
+        return InstagramRelayOperation(docID: docID, relayParams: params)
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }
