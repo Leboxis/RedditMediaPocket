@@ -73,14 +73,14 @@ struct SourceDiagnosticsView: View {
             let state: DiagnosticState
             switch id {
             case "reddit-feed":
-                state = await probeFeed(URL(string: "https://www.reddit.com/r/pics/.rss")!,
+                state = await probeFeed(network, url: URL(string: "https://www.reddit.com/r/pics/.rss")!,
                                         ok: L("Flux RSS servi.", "RSS feed served."))
             case "reddit-session":
                 state = sessionState(reddit.hasSession,
                                      ok: L("Session détectée.", "Session detected."),
                                      missing: L("Aucune session : les sauvegardés exigent une connexion.", "No session: saved posts require sign-in."))
             case "redgifs":
-                state = await probeRedgifs()
+                state = await probeRedgifs(network)
             case "x-session":
                 state = sessionState(xSession.hasSession,
                                      ok: L("Session détectée.", "Session detected."),
@@ -90,11 +90,11 @@ struct SourceDiagnosticsView: View {
                                      ok: L("Session détectée.", "Session detected."),
                                      missing: L("Aucune session : TikTok exige une connexion pour un profil.", "No session: TikTok requires sign-in for a profile."))
             case "instagram":
-                state = await probeFeed(InstagramAPI.profileInfoURL(username: "instagram"),
+                state = await probeFeed(network, url: InstagramAPI.profileInfoURL(username: "instagram"),
                                         ok: L("API web servie anonymement.", "Web API served anonymously."),
                                         headers: InstagramAPI.headers(referer: URL(string: "https://www.instagram.com/instagram/")!))
             default:
-                state = await probeFeed(URL(string: "https://x-fetish.tube/")!,
+                state = await probeFeed(network, url: URL(string: "https://x-fetish.tube/")!,
                                         ok: L("Site joignable.", "Site reachable."))
             }
             checks[index].state = state
@@ -106,7 +106,7 @@ struct SourceDiagnosticsView: View {
         present ? .ok(ok) : .fail(missing)
     }
 
-    private func probeFeed(_ url: URL, ok: String, headers: [String: String]? = nil) async -> DiagnosticState {
+    private func probeFeed(_ network: Network, url: URL, ok: String, headers: [String: String]? = nil) async -> DiagnosticState {
         do {
             let data = try await network.data(url, headers: headers)
             return data.isEmpty ? .fail(L("Réponse vide.", "Empty response.")) : .ok(ok)
@@ -115,7 +115,7 @@ struct SourceDiagnosticsView: View {
         }
     }
 
-    private func probeRedgifs() async -> DiagnosticState {
+    private func probeRedgifs(_ network: Network) async -> DiagnosticState {
         do {
             let data = try await network.data(URL(string: "https://api.redgifs.com/v2/auth/temporary")!)
             let token = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["token"] as? String
