@@ -27,6 +27,12 @@ Un média écarté par un filtre n'est pas téléchargé mais reste « vu » : i
 
 **Réglages → Stockage → Espace disque maximal** propose une limite de 5 à 100 Go, ou aucune. Le plafond porte sur la collection en cours et est vérifié avant chaque page : quand il est atteint, le parcours s'arrête proprement et les médias déjà téléchargés restent en place.
 
+## Parcours
+
+**Réglages → Parcours → Pages par lancement** fixe le budget de pages des flux Reddit — profil, subreddit, sauvegardés — à **25, 50, 100 ou illimité** (environ 25 posts par page), **100 par défaut**. Le choix est mémorisé et figé au début du parcours. Au-delà du budget, le parcours s'arrête proprement et reprend au prochain lancement. Illimité signifie que la lecture ne s'arrête que sur une vraie fin de flux : page vide, page répétée ou curseur refusé.
+
+Un 429 dont le serveur annonce une reprise à moins de 46 s est attendu puis la page relue (deux fois au plus), au lieu d'arrêter la session entière. Sans délai annoncé ou au-delà de ce seuil, un 429 reste fatal.
+
 ## Galerie : recherche et tri
 
 Au-dessus de la grille, la recherche porte sur le nom des fichiers, l'auteur et le lien du post (lus depuis les métadonnées des téléchargements). Le menu voisin propose un tri (plus récent, plus ancien, plus lourd, plus léger, nom) et un filtre rapide images / vidéos. Ces réglages ne changent que l'affichage : ils ne modifient jamais ce qui est téléchargé.
@@ -37,9 +43,9 @@ Chaque pastille de collection affiche `+N` lorsque le dernier parcours y a ajout
 
 Le code et le workflow sont disponibles dans ce dépôt. GitHub Actions compile et publie une IPA à chaque push sur main. Consulter le résultat du dernier workflow avant de télécharger une release. Les essais dans LiveContainer sur iPhone restent à effectuer. Un appel public au RSS de `u/reddit` a répondu HTTP 200 le 5 septembre 2026. Ce résultat ne garantit pas l'accès depuis un autre réseau ou pour un autre profil.
 
-Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronquer l'historique, refuser la pagination ou refuser l'accès. L'application s'arrête si une page se répète, si le curseur n'est pas reconnu ou après 100 pages. Les miniatures ne sont pas utilisées à la place des originaux.
+Ce prototype ne promet pas de télécharger tous les posts. Le flux peut tronquer l'historique, refuser la pagination ou refuser l'accès. L'application s'arrête si une page se répète, si le curseur n'est pas reconnu ou après le budget de pages (Réglages → Parcours, 100 par défaut). Les miniatures ne sont pas utilisées à la place des originaux.
 
-Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencontrer une page entièrement déjà connue : c'est là que les nouveaux posts s'arrêtent. Si une session précédente a été interrompue au milieu de cette lecture, le point d'arrivée est mémorisé et l'exécution suivante saute directement dessus au lieu de conclure à tort qu'elle a tout vu. Ce point est effacé dès que le parcours rejoint l'historique, ou conservé si les 100 pages ont été consommées sans l'atteindre.
+Chaque exécution relit le flux depuis le début, page par page, jusqu'à rencontrer une page entièrement déjà connue : c'est là que les nouveaux posts s'arrêtent. Si une session précédente a été interrompue au milieu de cette lecture, le point d'arrivée est mémorisé et l'exécution suivante saute directement dessus au lieu de conclure à tort qu'elle a tout vu. Ce point est effacé dès que le parcours rejoint l'historique, ou conservé si le budget de pages a été consommé sans l'atteindre. Ce raisonnement suppose un flux chronologique : il ne vaut que pour le tri Nouveaux. Pour Chauds et Top, dont l'ordre dépend des votes et se réordonne entre deux lancements, la lecture ne s'arrête pas à la première page déjà connue : elle balaye le flux jusqu'à une vraie fin (page vide, page répétée ou curseur refusé), sans retélécharger ce qui est déjà vu.
 
 Les profils (`u/pseudo`, flux `submitted`), les subreddits (`r/sub`, tri Nouveaux / Chauds / Top du mois) et les comptes RedGifs (`RG/pseudo` ou URL `redgifs.com/users/pseudo`, tri Nouveaux via `order=new`, 80 par page, 100 pages max côté API) sont pris en charge. Le Top utilise le filtre serveur `t=month`. Les dossiers des subreddits sont préfixés `r.` (ex. `r.pics`), ceux des comptes RedGifs `redgifs.` (ex. `redgifs.upset_trash_3094`) et les clés `rg/pseudo` pour ne jamais entrer en collision avec un profil du même nom. Les archives existantes (pseudo nu) restent lues comme des profils.
 
@@ -148,7 +154,7 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. X n'
 
 - De 1 à 6 médias simultanés (6 par défaut pour X-Fetish, 3 pour les autres sources), remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
-- Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts en vol. L’alerte indique uniquement la cause (service et code HTTP) et le nombre total de médias conservés dans la collection. Les limites annoncées par le serveur sont mémorisées, mais une relance manuelle efface ces limites et le cache RSS puis retente le réseau ; un refus réel du serveur peut donc se reproduire.
+- Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts en vol — sauf quand le serveur annonce une reprise à moins de 46 s : la page est alors attendue puis relue (deux fois au plus), et la session continue. L’alerte indique uniquement la cause (service et code HTTP) et le nombre total de médias conservés dans la collection. Les limites annoncées par le serveur sont mémorisées, mais une relance manuelle efface ces limites et le cache RSS puis retente le réseau ; un refus réel du serveur peut donc se reproduire.
 - Les curseurs des nouveautés et de l’historique restent distincts. Seule une page complètement traitée est validée ; une page interrompue est reprise et les fichiers complets déjà présents sont ignorés. L’ancien historique est reconstruit une fois par collection pour récupérer les posts marqués à tort comme terminés par les versions précédentes.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
 - Garder l'application au premier plan. Le prototype n'implémente pas de service de téléchargement en arrière-plan.
@@ -221,7 +227,7 @@ Cette fonction reste à valider dans LiveContainer avec une connexion réelle su
 
 ## Transferts immédiats et état de session
 
-Les pauses artificielles de départ ont été supprimées, ainsi que le lissage du débit inféré des quotas encore disponibles. Aucun Task.sleep n’est utilisé par la couche réseau. Les tâches démarrent dès qu’un emplacement est libre. Seul un refus HTTP 429 arrête la session ; l’app applique alors le délai annoncé par le serveur, ou aucun délai si le serveur n’en annonce pas.
+Les pauses artificielles de départ ont été supprimées, ainsi que le lissage du débit inféré des quotas encore disponibles. Aucun Task.sleep n’est utilisé par la couche réseau. Les tâches démarrent dès qu’un emplacement est libre. Seul un refus HTTP 429 arrête la session ; l’app applique alors le délai annoncé par le serveur, ou aucun délai si le serveur n’en annonce pas. Une reprise annoncée à moins de 46 s est attendue puis la page relue, au lieu d’arrêter la session.
 
 Le compteur affiche les médias en cours de transfert réseau, et non la totalité des tâches de résolution/assemblage ni chaque morceau HTTP d'une vidéo X-Fetish. Le nombre choisi est un maximum de médias traités simultanément ; il peut être inférieur pendant la découverte RSS, les résolutions, l’assemblage ou à la fin d’une page.
 

@@ -1,6 +1,11 @@
 import Foundation
 
 public enum RatePolicy {
+    /// A 429 whose server-stated retry date is within this many seconds (below
+    /// the budget of a user task) is waited out and the page re-read, instead
+    /// of aborting the whole session. Beyond it, the limit stays fatal.
+    public static let shortWaitLimit: TimeInterval = 46
+
     // Related CDN/API hosts share a limit; changing subdomains cannot bypass it.
     public static func service(for host: String) -> String {
         let host = host.lowercased()

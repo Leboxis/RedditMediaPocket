@@ -15,9 +15,16 @@ public struct FeedCheckpoint {
 public enum FeedTraversal {
     /// The news frontier and historical cursor are independent. Commit a page
     /// only after all its media have completed (or were individually unavailable).
+    ///
+    /// `chronological` describes the feed ordering, not the posts: `new` and
+    /// the private feeds are reverse-chronological, so a page without any new
+    /// post proves the known history was reached. `hot` and `top` reorder
+    /// between runs — a fully known page says nothing about the next one, so
+    /// the news phase must sweep on to a real end-of-feed signal instead.
     @MainActor public static func run(
         checkpoint: FeedCheckpoint,
         maximumPages: Int = 100,
+        chronological: Bool = true,
         validCursor: (String) -> Bool = { $0.hasPrefix("t3_") },
         fetch: (String?) async throws -> [Post],
         process: ([Post]) async throws -> Void,
@@ -61,6 +68,13 @@ public enum FeedTraversal {
                     break
                 }
                 if fresh.isEmpty {
+                    guard chronological else {
+                        trace(L("Nouveautés : page entièrement connue (tri non chronologique), le balayage continue.", "New-post scan: fully known page (non-chronological sort), sweep continues."))
+                        after = last
+                        state.frontier = last
+                        persist(state)
+                        continue
+                    }
                     trace(L("Nouveautés terminées : historique déjà connu atteint.", "New-post scan ended: reached known history."))
                     reachedHistory = true
                     break
