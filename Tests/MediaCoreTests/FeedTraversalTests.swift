@@ -163,16 +163,20 @@ final class FeedTraversalTests: XCTestCase {
         XCTAssertNil(saved.cursor)
     }
 
-    /// Contrôle du test précédent : en tri chronologique, la première page
-    /// entièrement connue met fin à la phase nouveautés (comportement établi).
+    /// Contrôle : en tri chronologique, la première page entièrement connue
+    /// met fin à la phase nouveautés (comportement établi). La phase
+    /// historique, elle, continue depuis le curseur — sa page est vide ici
+    /// pour que seuls les signaux de la phase nouveautés soient observés.
     @MainActor func testChronologicalSortStopsAtKnownPage() async throws {
-        var saved = FeedCheckpoint(visited: ["t3_head"])
+        var saved = FeedCheckpoint(cursor: "t3_old", visited: ["t3_head"])
         var requests: [String?] = []
         let completed = try await FeedTraversal.run(checkpoint: saved, fetch: { after in
             requests.append(after)
-            return after == nil ? [self.post("t3_head")] : [self.post("t3_reorder")]
+            if after == nil { return [self.post("t3_head")] }
+            return []
         }, process: { _ in XCTFail("Known history must not be processed") }, persist: { saved = $0 })
         XCTAssertTrue(completed)
-        XCTAssertEqual(requests, [nil, "t3_head"])
+        XCTAssertEqual(requests, [nil])
+        XCTAssertNil(saved.frontier)
     }
 }
