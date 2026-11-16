@@ -43,7 +43,8 @@ import MediaCore
         config.httpMaximumConnectionsPerHost = 6
         session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }
-    private func request(_ url: URL, bearer: String?, headers: [String: String]? = nil) async throws -> URLRequest {
+    private func request(_ url: URL, bearer: String?, headers: [String: String]? = nil,
+                         body: Data? = nil) async throws -> URLRequest {
         guard url.scheme == "https" else { throw NetworkError.invalid(L("Seuls les liens HTTPS sont acceptés.", "Only HTTPS links are accepted.")) }
         let service = RatePolicy.service(for: url.host ?? "Serveur")
         try checkLimit(service)
@@ -86,6 +87,13 @@ import MediaCore
                 request.setValue(value, forHTTPHeaderField: field)
             }
         }
+        // Appels POST (site Instagram `api/graphql`) : le corps est déjà
+        // encodé en formulaire, l'en-tête reste surchargeable via `headers`.
+        if let body {
+            request.httpMethod = "POST"
+            request.httpBody = body
+            request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        }
         return request
     }
     private func check(_ response: URLResponse, requestedURL: URL) throws {
@@ -112,7 +120,8 @@ import MediaCore
             throw NetworkError.limited(service: service, until: date)
         }
     }
-    func data(_ url: URL, bearer: String? = nil, headers: [String: String]? = nil) async throws -> Data {
+    func data(_ url: URL, bearer: String? = nil, headers: [String: String]? = nil,
+              body: Data? = nil) async throws -> Data {
         let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
@@ -127,10 +136,10 @@ import MediaCore
         let isXFetishSignedPage = isXFetishVideoPage || (isXFetishSite && url.path.hasPrefix("/albums/"))
         var effectiveHeaders = headers ?? [:]
         if isXFetishVideoPage { effectiveHeaders["Accept"] = XFetishAPI.videoAccept }
-        let req = try await request(url, bearer: bearer, headers: effectiveHeaders)
+        let req = try await request(url, bearer: bearer, headers: effectiveHeaders, body: body)
         guard generation == requestGeneration else { throw CancellationError() }
         let started = Date()
-        LogCenter.net("GET \(LogDiagnostics.requestSummary(url))…")
+        LogCenter.net("\(body == nil ? "GET" : "POST") \(LogDiagnostics.requestSummary(url))…")
         let result: (Data, URLResponse)
         do {
             if isXFetishSignedPage {

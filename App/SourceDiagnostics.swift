@@ -90,9 +90,7 @@ struct SourceDiagnosticsView: View {
                                      ok: L("Session détectée.", "Session detected."),
                                      missing: L("Aucune session : TikTok exige une connexion pour un profil.", "No session: TikTok requires sign-in for a profile."))
             case "instagram":
-                state = await probeFeed(network, url: InstagramAPI.profileInfoURL(username: "instagram"),
-                                        ok: L("API web servie anonymement.", "Web API served anonymously."),
-                                        headers: InstagramAPI.headers(referer: URL(string: "https://www.instagram.com/instagram/")!))
+                state = await probeInstagram(network)
             default:
                 state = await probeFeed(network, url: URL(string: "https://x-fetish.tube/")!,
                                         ok: L("Site joignable.", "Site reachable."))
@@ -110,6 +108,22 @@ struct SourceDiagnosticsView: View {
         do {
             let data = try await network.data(url, headers: headers)
             return data.isEmpty ? .fail(L("Réponse vide.", "Empty response.")) : .ok(ok)
+        } catch {
+            return .fail(error.localizedDescription)
+        }
+    }
+
+    /// Instagram n'a plus d'API anonyme : la sonde vérifie le chemin qui la
+    /// remplace — page du profil lue, jetons d'API GraphQL présents.
+    private func probeInstagram(_ network: Network) async -> DiagnosticState {
+        let pageURL = InstagramAPI.profilePageURL(username: "instagram")
+        do {
+            let page = try await network.data(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
+            guard InstagramAPI.tokens(inHTML: page) != nil else {
+                return .fail(L("Page de profil servie sans jeton d'API (interface modifiée).",
+                               "Profile page served without an API token (interface changed)."))
+            }
+            return .ok(L("Page de profil et jetons anonymes servis.", "Anonymous profile page and tokens served."))
         } catch {
             return .fail(error.localizedDescription)
         }

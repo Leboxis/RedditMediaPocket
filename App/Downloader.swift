@@ -1902,26 +1902,29 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return true
     }
 
-    /// Parcours des publications publiques d'un compte Instagram. Le fil est
-    /// anonyme : la page de profil résout l'identifiant du compte et embarque
-    /// les publications récentes, puis `feed/user/<id>` page par page. Les clés
-    /// `igm-…` / `igv-…` des noms de fichiers évitent tout retéléchargement au
-    /// lancement suivant, même si les URL du CDN changent entre les formats.
+    /// Parcours des publications publiques d'un compte Instagram. L'API
+    /// anonyme historique (`api/v1`) est fermée : le parcours lit la page du
+    /// profil pour y prendre ses jetons d'API, puis interroge le point GraphQL
+    /// du site (`api/graphql`, publications paginées par curseur). Quand
+    /// Instagram oppose son quota anonyme, le rendu SEO de la page sert de
+    /// repli (douze dernières publications, images seules, sans pagination).
     private func runInstagram(username: String, canonical: String, folder: URL,
                               seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
                               preparedCount: inout Int) async throws -> Bool {
         status = L("Résolution du compte Instagram…", "Resolving Instagram account…")
-        let profileURL = InstagramAPI.profileInfoURL(username: username)
-        let headers = InstagramAPI.headers(referer: URL(string: "https://www.instagram.com/\(username)/")!)
-        let profile: InstagramWeb.Profile
+        let pageURL = InstagramAPI.profilePageURL(username: username)
+        let pageHTML: Data
         do {
-            profile = try InstagramWeb.parseProfile(try await network.data(profileURL, headers: headers))
+            pageHTML = try await network.data(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
         } catch NetworkError.refused(let code) where code == 404 || code == 401 {
             throw InstagramError.unknownAccount
         } catch NetworkError.refused(let code) where code == 403 || code == 429 {
             throw InstagramError.loginRequired
         }
-        LogCenter.info(L("Instagram : compte \(username) résolu.", "Instagram: account \(username) resolved."))
+        guard let tokens = InstagramAPI.tokens(inHTML: pageHTML) else {
+            throw InstagramError.invalidResponse
+        }
+        LogCenter.info(L("Instagram : page du compte \(username) lue.", "Instagram: page for account \(username) read."))
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publiée.
@@ -1933,31 +1936,23 @@ struct UserCollection: Codable, Identifiable, Equatable {
         var scannedPages = 0
         var idle = 0
         var caughtUp = false
+        var degraded = false
         var cursor: String?
-        // Première page gratuite : le profil embarque les publications les plus
-        // récentes, dans un format différent du fil paginé.
-        var embedded = profile.posts
 
-        for _ in 0..<100 {
+        var page: InstagramPage
+        do {
+            page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL, cursor: nil)
+        } catch InstagramError.rateLimited, InstagramError.invalidResponse {
+            LogCenter.err(L("Instagram : API GraphQL indisponible, repli sur le rendu SEO (douze dernières publications, images seules).",
+                            "Instagram: anonymous quota reached, falling back to the SEO render (twelve latest posts, images only)."))
+            page = try InstagramWeb.parseCrawlerPage(try await network.data(pageURL,
+                                                                           headers: InstagramAPI.crawlerHeaders()))
+            degraded = true
+        }
+
+        while scannedPages < 100 {
             try Task.checkCancellation()
-            let page: InstagramPage
-            if !embedded.isEmpty {
-                page = InstagramPage(posts: embedded, nextCursor: nil, hasMore: true)
-                embedded = []
-            } else {
-                scannedPages += 1
-                status = L("Recherche des médias Instagram… page \(scannedPages)", "Searching Instagram media… page \(scannedPages)")
-                let feedURL = InstagramAPI.userFeedURL(userID: profile.userID, cursor: cursor)
-                do {
-                    page = try InstagramWeb.parseFeed(try await network.data(feedURL, headers: headers))
-                } catch NetworkError.refused(let code) where code == 401 || code == 403 || code == 429 {
-                    // Mur de connexion en cours de parcours : ce qui est déjà
-                    // téléchargé reste en place, le parcours est incomplet.
-                    LogCenter.err(L("Instagram : fil interrompu par un refus HTTP \(code) à la page \(scannedPages).", "Instagram: feed interrupted by HTTP \(code) refusal at page \(scannedPages)."))
-                    return false
-                }
-                cursor = page.nextCursor
-            }
+            scannedPages += 1
             var fresh: [InstagramPost] = []
             for post in page.posts where scanned.insert(post.id).inserted {
                 // Le profil et le fil paginé exposent le même média sous des
@@ -1983,7 +1978,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                         mediaOverrides[id] = [.direct(media.url)]
                         // Anti-hotlink : le CDN exige le Referer du profil et
                         // l'UA navigateur.
-                        mediaHeadersByMedia[id] = InstagramAPI.mediaHeaders(referer: profileURL)
+                        mediaHeadersByMedia[id] = InstagramAPI.mediaHeaders(referer: pageURL)
                         if media.isVideo { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
@@ -2000,10 +1995,26 @@ struct UserCollection: Codable, Identifiable, Equatable {
             }
             try Task.checkCancellation()
             // Deux pages sans nouveautés : le compte est rattrapé, même si
-            // Instagram annonce encore des pages (doublons inter-pages).
-            if idle >= 2 || !page.hasMore {
+            // Instagram annonce encore des pages (doublons inter-pages). Le
+            // rendu SEO n'a pas de suite : une seule page suffit.
+            if idle >= 2 || !page.hasMore || degraded || page.nextCursor == nil {
                 caughtUp = true
                 break
+            }
+            cursor = page.nextCursor
+            status = L("Recherche des médias Instagram… page \(scannedPages + 1)", "Searching Instagram media… page \(scannedPages + 1)")
+            do {
+                page = try await instagramPostsPage(tokens: tokens, username: username, referer: pageURL, cursor: cursor)
+            } catch InstagramError.rateLimited {
+                // Quota atteint en cours de parcours : ce qui est déjà
+                // téléchargé reste en place, le parcours est incomplet.
+                LogCenter.err(L("Instagram : quota anonyme atteint à la page \(scannedPages + 1).", "Instagram: anonymous quota reached at page \(scannedPages + 1)."))
+                return false
+            } catch NetworkError.refused(let code) where code == 401 || code == 403 || code == 429 {
+                // Mur de connexion en cours de parcours : ce qui est déjà
+                // téléchargé reste en place, le parcours est incomplet.
+                LogCenter.err(L("Instagram : fil interrompu par un refus HTTP \(code) à la page \(scannedPages + 1).", "Instagram: feed interrupted by HTTP \(code) refusal at page \(scannedPages + 1)."))
+                return false
             }
         }
         guard caughtUp else { return false }
@@ -2023,6 +2034,18 @@ struct UserCollection: Codable, Identifiable, Equatable {
         status = count == 0 ? L("Aucun nouveau média Instagram accessible", "No new accessible Instagram media")
                             : L("\(count) médias Instagram téléchargés", "\(count) Instagram media downloaded")
         return true
+    }
+
+    /// Une page de publications Instagram par le point GraphQL du site : le
+    /// corps porte les jetons de la page et le curseur, la réponse est lue par
+    /// `InstagramWeb.parseTimeline`.
+    private func instagramPostsPage(tokens: InstagramAPI.Tokens, username: String,
+                                    referer: URL, cursor: String?) async throws -> InstagramPage {
+        let body = InstagramAPI.postsRequestBody(tokens: tokens, username: username, cursor: cursor)
+        let data = try await network.data(InstagramAPI.graphqlURL,
+                                          headers: InstagramAPI.graphqlHeaders(tokens: tokens, referer: referer),
+                                          body: body)
+        return try InstagramWeb.parseTimeline(data)
     }
 
     private static func cursorKey(_ canonical: String) -> String { "resumeCursor.\(canonical)" }

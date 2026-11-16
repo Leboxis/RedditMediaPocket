@@ -44,7 +44,8 @@ final class InstagramTests: XCTestCase {
         XCTAssertEqual(source.id, "ig/nasa")
         XCTAssertEqual(source.folderName, "ig.nasa")
         XCTAssertEqual(source.displayName, "ig/nasa")
-        XCTAssertEqual(source.feedURL(), InstagramAPI.profileInfoURL(username: "nasa"))
+        XCTAssertEqual(source.feedURL(), InstagramAPI.profilePageURL(username: "nasa"))
+        XCTAssertEqual(InstagramAPI.profilePageURL(username: "nasa").absoluteString, "https://www.instagram.com/nasa/")
     }
 
     /// `ig.nasa` ne doit jamais être confondu avec `tk.nasa` (TikTok),
@@ -62,6 +63,66 @@ final class InstagramTests: XCTestCase {
 
     func testKDriveFolderNameForInstagram() {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("ig/nasa"), "Nasa - Instagram")
+    }
+
+    // MARK: - Jetons et corps de requête
+
+    /// La page de profil livre les deux jetons exigés par `api/graphql`.
+    func testTokensFromProfilePage() throws {
+        let html = """
+        <html><script>["LSD",[],{"token":"LsdToken123"}]</script>
+        <script>["InstagramSecurityConfig",[],{"csrf_token":"Csrf456"}]</script></html>
+        """
+        let tokens = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data(html.utf8)))
+        XCTAssertEqual(tokens.lsd, "LsdToken123")
+        XCTAssertEqual(tokens.csrf, "Csrf456")
+        // Page réelle sans `csrf_token` : les jetons restent utilisables.
+        let withoutCSRF = try XCTUnwrap(InstagramAPI.tokens(inHTML: Data("["LSD",[],{"token":"LsdToken123"}]".utf8)))
+        XCTAssertEqual(withoutCSRF.lsd, "LsdToken123")
+        XCTAssertEqual(withoutCSRF.csrf, "")
+        // Page sans jeton (interface modifiée) : pas de faux jetons inventés.
+        XCTAssertNil(InstagramAPI.tokens(inHTML: Data("<html></html>".utf8)))
+    }
+
+    func testPostsRequestBody() throws {
+        let tokens = InstagramAPI.Tokens(lsd: "LsdToken123", csrf: "Csrf456")
+        let body = InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: "CURSOR1")
+        let form = String(decoding: body, as: UTF8.self)
+        let fields = Dictionary(uniqueKeysWithValues: form.split(separator: "&").map { pair -> (String, String) in
+            let parts = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return (String(parts[0]), (String(parts[1]).removingPercentEncoding ?? ""))
+        })
+        XCTAssertEqual(fields["lsd"], "LsdToken123")
+        XCTAssertEqual(fields["doc_id"], InstagramAPI.postsQueryID)
+        XCTAssertEqual(fields["server_timestamps"], "true")
+        let variables = try XCTUnwrap(fields["variables"])
+        XCTAssertTrue(variables.contains("\"username\":\"nasa\""))
+        XCTAssertTrue(variables.contains("\"after\":\"CURSOR1\""))
+        XCTAssertTrue(variables.contains("\"first\":12"))
+        XCTAssertTrue(variables.contains("__relay_internal__pv__PolarisSEOIsCrawlerrelayprovider"))
+        // Première page : `after` est nul, pas une chaîne vide.
+        let first = InstagramAPI.postsRequestBody(tokens: tokens, username: "nasa", cursor: nil)
+        XCTAssertTrue(String(decoding: first, as: UTF8.self).contains("\"after\":null"))
+    }
+
+    /// Les en-têtes portent l'identifiant d'application et les jetons : sans
+    /// eux, Instagram ne répond pas.
+    func testGraphqlHeaders() {
+        let tokens = InstagramAPI.Tokens(lsd: "LsdToken123", csrf: "Csrf456")
+        let headers = InstagramAPI.graphqlHeaders(tokens: tokens, referer: InstagramAPI.profilePageURL(username: "nasa"))
+        XCTAssertEqual(headers["X-IG-App-ID"], InstagramAPI.appID)
+        XCTAssertEqual(headers["X-FB-LSD"], "LsdToken123")
+        XCTAssertEqual(headers["X-CSRF-Token"], "Csrf456")
+        XCTAssertEqual(headers["Cookie"], "csrftoken=Csrf456")
+        XCTAssertEqual(headers["Referer"], "https://www.instagram.com/nasa/")
+        XCTAssertEqual(headers["Sec-Fetch-Mode"], "cors")
+        // Sans `csrf_token` dans la page, aucun en-tête de jeton vide n'est
+        // envoyé : Instagram répond à la requête anonyme sans lui.
+        let anonymous = InstagramAPI.graphqlHeaders(tokens: InstagramAPI.Tokens(lsd: "Lsd", csrf: ""),
+                                                    referer: InstagramAPI.profilePageURL(username: "nasa"))
+        XCTAssertNil(anonymous["X-CSRF-Token"])
+        XCTAssertNil(anonymous["Cookie"])
+        XCTAssertEqual(anonymous["X-FB-LSD"], "Lsd")
     }
 
     // MARK: - Clés de médias
@@ -91,100 +152,112 @@ final class InstagramTests: XCTestCase {
 
     // MARK: - Analyse des réponses
 
-    func testParseProfile() throws {
+    /// Réponse `api/graphql` du site : `edges[].node` et `page_info`.
+    func testParseTimeline() throws {
         let json = """
-        {"data":{"user":{"id":"1234567","edge_owner_to_timeline_media":{"edges":[
-            {"node":{"id":"2743000000000000001","shortcode":"CaAAAAA","taken_at_timestamp":1710000000,
-                     "is_video":false,
-                     "display_url":"https://scontent.cdninstagram.com/img.jpg",
-                     "edge_media_to_caption":{"edges":[{"node":{"text":"Une légende"}}]}}},
-            {"node":{"id":"2743000000000000002","shortcode":"CaBBBBB","taken_at_timestamp":1710000100,
-                     "is_video":true,
-                     "video_url":"https://scontent.cdninstagram.com/video.mp4",
-                     "edge_media_to_caption":{"edges":[]}}}
-        ]}}}}
+        {"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{
+            "edges":[
+                {"cursor":"C1","node":{"pk":"2743000000000000001","code":"CaAAAAA","taken_at":1710000000,
+                     "media_type":1,
+                     "caption":{"text":"Une légende"},
+                     "image_versions2":{"candidates":[{"url":"https://scontent.cdninstagram.com/img.jpg","width":1080,"height":1080}]}}},
+                {"cursor":"C2","node":{"pk":"2743000000000000002","code":"CaBBBBB","taken_at":1710000100,
+                     "media_type":2,
+                     "caption":{"text":""},
+                     "video_versions":[{"url":"https://scontent.cdninstagram.com/video.mp4"}],
+                     "image_versions2":{"candidates":[{"url":"https://scontent.cdninstagram.com/thumb.jpg"}]}}}
+            ],
+            "page_info":{"end_cursor":"AQHCURSOR","has_next_page":true}}}}
         """
-        let profile = try InstagramWeb.parseProfile(Data(json.utf8))
-        XCTAssertEqual(profile.userID, "1234567")
-        XCTAssertEqual(profile.posts.count, 2)
-        XCTAssertEqual(profile.posts[0].text, "Une légende")
-        XCTAssertEqual(profile.posts[0].code, "CaAAAAA")
-        XCTAssertEqual(profile.posts[0].media, [InstagramMedia(storageKey: "igm-2743000000000000001",
-                                                               url: URL(string: "https://scontent.cdninstagram.com/img.jpg")!,
-                                                               isVideo: false)])
-        XCTAssertEqual(profile.posts[1].media, [InstagramMedia(storageKey: "igv-2743000000000000002",
-                                                               url: URL(string: "https://scontent.cdninstagram.com/video.mp4")!,
-                                                               isVideo: true)])
-        XCTAssertNotNil(profile.posts[0].publishedAt)
-    }
-
-    func testParseProfileCarrousel() throws {
-        let json = """
-        {"data":{"user":{"id":"42","edge_owner_to_timeline_media":{"edges":[
-            {"node":{"id":"2743000000000000003","shortcode":"CaCCCCC","taken_at_timestamp":1710000000,
-                     "edge_sidecar_to_children":{"edges":[
-                        {"node":{"id":"2743000000000000010","is_video":false,"display_url":"https://cdn/a.jpg"}},
-                        {"node":{"id":"2743000000000000011","is_video":true,"video_url":"https://cdn/b.mp4"}}
-                     ]},
-                     "edge_media_to_caption":{"edges":[]}}}
-        ]}}}}
-        """
-        let profile = try InstagramWeb.parseProfile(Data(json.utf8))
-        XCTAssertEqual(profile.posts.count, 1)
-        XCTAssertEqual(profile.posts[0].media.map(\.storageKey),
-                       ["igm-2743000000000000010", "igv-2743000000000000011"])
-    }
-
-    func testParseProfileInvalid() {
-        XCTAssertThrowsError(try InstagramWeb.parseProfile(Data("{}".utf8))) { error in
-            XCTAssertEqual(error as? InstagramError, .invalidResponse)
-        }
-        XCTAssertThrowsError(try InstagramWeb.parseProfile(Data("<html>login</html>".utf8)))
-    }
-
-    func testParseFeed() throws {
-        let json = """
-        {"items":[
-            {"pk":"2743000000000000020","code":"CaDDDDD","taken_at":1710000000,
-             "caption":{"text":"Texte du post"},
-             "media_type":1,
-             "image_versions2":{"candidates":[{"url":"https://cdn/x.jpg"}]}},
-            {"pk":"2743000000000000021","code":"CaEEEEE","taken_at":1710000100,
-             "media_type":2,
-             "video_versions":[{"url":"https://cdn/y.mp4"}],
-             "image_versions2":{"candidates":[{"url":"https://cdn/y.jpg"}]}},
-            {"pk":"2743000000000000022","code":"CaFFFFF","taken_at":1710000200,
-             "media_type":8,
-             "carousel_media":[
-                {"pk":"2743000000000000030","media_type":1,"image_versions2":{"candidates":[{"url":"https://cdn/z1.jpg"}]}},
-                {"pk":"2743000000000000031","media_type":2,"video_versions":[{"url":"https://cdn/z2.mp4"}]}
-             ]}
-        ],"next_max_id":"2743000000000000022","more_available":true}
-        """
-        let page = try InstagramWeb.parseFeed(Data(json.utf8))
-        XCTAssertEqual(page.posts.count, 3)
-        XCTAssertEqual(page.nextCursor, "2743000000000000022")
+        let page = try InstagramWeb.parseTimeline(Data(json.utf8))
+        XCTAssertEqual(page.posts.count, 2)
+        XCTAssertEqual(page.nextCursor, "AQHCURSOR")
         XCTAssertTrue(page.hasMore)
-        XCTAssertEqual(page.posts[0].text, "Texte du post")
-        XCTAssertEqual(page.posts[0].media.map(\.storageKey), ["igm-2743000000000000020"])
-        XCTAssertEqual(page.posts[1].media.map(\.storageKey), ["igv-2743000000000000021"])
-        XCTAssertEqual(page.posts[2].media.map(\.storageKey),
-                       ["igm-2743000000000000030", "igv-2743000000000000031"])
+        XCTAssertEqual(page.posts[0].text, "Une légende")
+        XCTAssertEqual(page.posts[0].code, "CaAAAAA")
+        XCTAssertEqual(page.posts[0].media, [InstagramMedia(storageKey: "igm-2743000000000000001",
+                                                             url: URL(string: "https://scontent.cdninstagram.com/img.jpg")!,
+                                                             isVideo: false)])
+        XCTAssertNotNil(page.posts[0].publishedAt)
+        // Une vidéo garde son URL vidéo, jamais son affiche.
+        XCTAssertEqual(page.posts[1].media, [InstagramMedia(storageKey: "igv-2743000000000000002",
+                                                             url: URL(string: "https://scontent.cdninstagram.com/video.mp4")!,
+                                                             isVideo: true)])
     }
 
-    func testParseFeedLoginWall() {
+    func testParseTimelineCarousel() throws {
         let json = """
-        {"message":"login_required","error_type":"OAuthForbiddenException"}
+        {"data":{"xdt_api__v1__feed__user_timeline_graphql_connection":{"edges":[
+            {"node":{"pk":"2743000000000000003","code":"CaCCCCC","taken_at":1710000000,"media_type":8,
+                     "caption":{"text":""},
+                     "carousel_media":[
+                        {"pk":"2743000000000000010","media_type":1,"image_versions2":{"candidates":[{"url":"https://cdn/a.jpg"}]}},
+                        {"pk":"2743000000000000011","media_type":2,"video_versions":[{"url":"https://cdn/b.mp4"}]}
+                     ]}}
+        ],"page_info":{"end_cursor":null,"has_next_page":false}}}}
         """
-        XCTAssertThrowsError(try InstagramWeb.parseFeed(Data(json.utf8))) { error in
-            XCTAssertEqual(error as? InstagramError, .loginRequired)
-        }
-    }
-
-    func testParseFeedEnd() throws {
-        let page = try InstagramWeb.parseFeed(Data("{\"items\":[],\"more_available\":false}".utf8))
-        XCTAssertTrue(page.posts.isEmpty)
+        let page = try InstagramWeb.parseTimeline(Data(json.utf8))
+        XCTAssertEqual(page.posts.count, 1)
+        XCTAssertEqual(page.posts[0].media.map(\.storageKey),
+                       ["igm-2743000000000000010", "igv-2743000000000000011"])
         XCTAssertFalse(page.hasMore)
         XCTAssertNil(page.nextCursor)
+    }
+
+    /// L'ancien format `api/v1` n'est plus servi : un corps message ne doit pas
+    /// passer pour une fin de fil.
+    func testParseTimelineRejectsLegacyFeedBody() {
+        XCTAssertThrowsError(try InstagramWeb.parseTimeline(Data("{\"items\":[],\"more_available\":false}".utf8))) { error in
+            XCTAssertEqual(error as? InstagramError, .invalidResponse)
+        }
+        XCTAssertThrowsError(try InstagramWeb.parseTimeline(Data("<html>login</html>".utf8))) { error in
+            XCTAssertEqual(error as? InstagramError, .invalidResponse)
+        }
+    }
+
+    /// Quota anonyme : Instagram répond 200 avec un message d'API.
+    func testParseTimelineRateLimited() {
+        let json = """
+        {"errors":[{"message":"Rate limit exceeded","severity":"CRITICAL","code":1675004}],
+         "extensions":{"is_final":true}}
+        """
+        XCTAssertThrowsError(try InstagramWeb.parseTimeline(Data(json.utf8))) { error in
+            XCTAssertEqual(error as? InstagramError, .rateLimited)
+        }
+    }
+
+    /// Repli SEO : la connexion est enfouie dans un script JSON de la page.
+    /// Une vidéo n'y a pas d'URL vidéo : son affiche est prise comme image,
+    /// jamais comme un faux fichier vidéo.
+    func testParseCrawlerPage() throws {
+        let payload = """
+        {"require":[["RelayPrefetchedStreamCache","next",[],["adp_preloader",{"__bbox":{"result":{"data":{
+            "xig_user_by_igid_v2":{"id":"1784140","polaris_timeline_connection":{
+                "edges":[
+                    {"node":{"__typename":"XIGPolarisVideoMedia","pk":"4031845282429052247","media_type":1,
+                              "caption":{"text":"SEO"},
+                              "image_versions2":{"candidates":[{"url":"https://cdn/seo.jpg"}]}}},
+                    {"node":{"__typename":"XIGPolarisVideoMedia","pk":"4031845282429052248","media_type":2,
+                              "caption":{"text":"Vidéo sans URL"},
+                              "image_versions2":{"candidates":[{"url":"https://cdn/poster.jpg"}]}}}
+                ],
+                "page_info":{"end_cursor":"NEXT","has_next_page":true}}}
+        }}}]]]}
+        """
+        let html = "<html><body><script type=\"application/json\" data-sjs>\(payload)</script></body></html>"
+        let page = try InstagramWeb.parseCrawlerPage(Data(html.utf8))
+        XCTAssertEqual(page.posts.count, 2)
+        XCTAssertEqual(page.posts[0].id, "4031845282429052247")
+        XCTAssertEqual(page.posts[0].text, "SEO")
+        XCTAssertEqual(page.posts[0].media.map(\.storageKey), ["igm-4031845282429052247"])
+        XCTAssertEqual(page.posts[1].media.map(\.storageKey), ["igm-4031845282429052248"])
+        XCTAssertFalse(page.posts[1].media[0].isVideo)
+        XCTAssertEqual(page.nextCursor, "NEXT")
+    }
+
+    func testParseCrawlerPageWithoutPayload() {
+        XCTAssertThrowsError(try InstagramWeb.parseCrawlerPage(Data("<html></html>".utf8))) { error in
+            XCTAssertEqual(error as? InstagramError, .invalidResponse)
+        }
     }
 }

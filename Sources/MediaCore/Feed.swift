@@ -285,9 +285,9 @@ public enum FeedSource: Hashable, Sendable {
             // avec les cookies de session, jamais par cette URL seule.
             return TikTokAPI.profileURL(username: name)
         case .instagramUser(let name):
-            // Point d'entrée anonyme : profil public via l'API web, sans
-            // session. Le parcours pagine ensuite par `feed/user/<id>`.
-            return InstagramAPI.profileInfoURL(username: name)
+            // Point d'entrée anonyme : la page publique du profil, qui porte
+            // les jetons de l'appel GraphQL du parcours.
+            return InstagramAPI.profilePageURL(username: name)
         case .redditPosts(let target):
             // Sélection de posts : l'URL de départ ne sert qu'à l'affichage.
             return target.posts.first?.url ?? URL(string: "https://www.reddit.com/")!
