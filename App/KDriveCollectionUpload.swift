@@ -343,12 +343,12 @@ private final class KDriveContinuousUploadController: ObservableObject {
         uploadedBytes = 0
         speedBytesPerSecond = 0
         totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
-        // Fichiers volumineux : 6 flux en parallèle — kDrive bride chaque
-        // connexion, la bande passante passe par le nombre de flux. Petits
-        // fichiers : 4 seulement, pour rester loin de la limite API de
-        // 60 requêtes/minute.
+        // Fichiers volumineux : 8 flux en parallèle — kDrive bride chaque
+        // connexion (~100 Ko/s observés), la bande passante passe par le
+        // nombre de flux. Petits fichiers : 4 seulement, pour rester loin
+        // de la limite API de 60 requêtes/minute.
         let averageBytes = files.isEmpty ? 0 : totalBytes / Int64(files.count)
-        activeLimit = averageBytes >= 20_000_000 ? 6 : Self.concurrentLimit
+        activeLimit = averageBytes >= 20_000_000 ? 8 : Self.concurrentLimit
 
         activeTask = Task {
             // Supervision : progression par octets + vitesse + coupe des
