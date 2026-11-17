@@ -559,10 +559,20 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard fileSize > 0 else {
             throw KDriveError.uploadFailed(L("Fichier vide (0 octet) : \(originalName)", "Empty file (0 bytes): \(originalName)"))
         }
-        guard fileSize <= 1_000_000_000 else {
-            throw KDriveError.uploadFailed(L("Fichier trop volumineux pour l'envoi direct (> 1 Go) : \(originalName)", "File too large for direct upload (> 1 GB): \(originalName)"))
-        }
         let safeName = FilenamePolicy.kDriveFileName(originalName)
+
+        // Au-delà de 100 Mo, l'envoi direct est déconseillé par Infomaniak : on
+        // passe par une session chunkée (chunks de 10 Mo, chaque requête repart
+        // sur une connexion neuve — c'est aussi ce qu'utilise rclone). Cela
+        // lève au passage l'ancienne limite de 1 Go.
+        if fileSize > 100_000_000 {
+            try await performChunkedUpload(
+                fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
+                token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+            )
+            return
+        }
+
         do {
             try await performSingleUpload(
                 fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
@@ -588,6 +598,109 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
     }
 
+    /// Envoi chunké (fichiers > 100 Mo) : ouverture d'une session kDrive,
+    /// envoi séquentiel de chunks de 10 Mo, fermeture qui assemble le
+    /// fichier. Chaque chunk est une requête indépendante — une connexion
+    /// neuve, donc pas de bridage hérité d'une connexion unique.
+    nonisolated private static func performChunkedUpload(
+        fileURL: URL,
+        remoteFileName: String,
+        fileSize: Int64,
+        token cleanToken: String,
+        driveId cleanDriveId: String,
+        directoryId cleanDirectoryId: String
+    ) async throws {
+        // Chunks de 10 Mo minimum, augmentés si le fichier depasse la limite
+        // de 10 000 chunks par session.
+        let minimumChunkSize: Int64 = 10_000_000
+        let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
+        let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
+
+        struct StartReply: Decodable {
+            struct StartData: Decodable { let token: String? }
+            let data: StartData?
+        }
+
+        guard let startURL = URL(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/start") else {
+            throw KDriveError.invalidURL
+        }
+        var startRequest = URLRequest(url: startURL)
+        startRequest.httpMethod = "POST"
+        startRequest.timeoutInterval = 30
+        startRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let startBody = try JSONSerialization.data(withJSONObject: [
+            "file_name": remoteFileName,
+            "directory_id": Int(cleanDirectoryId) ?? 1,
+            "conflict": "version",
+            "total_chunks": totalChunks,
+            "total_size": Int(fileSize)
+        ])
+        let (startData, startResponse) = try await KDriveUploadSession.session.upload(for: startRequest, from: startBody)
+        guard let startHTTP = startResponse as? HTTPURLResponse else {
+            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+        }
+        guard (200..<300).contains(startHTTP.statusCode) else {
+            throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
+        }
+        let reply = try JSONDecoder().decode(StartReply.self, from: startData)
+        guard let sessionToken = reply.data?.token, !sessionToken.isEmpty else {
+            throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
+        }
+
+        LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
+
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+
+        for chunkIndex in 0..<totalChunks {
+            if Task.isCancelled { throw KDriveError.cancelled }
+            let offset = Int64(chunkIndex) * chunkSize
+            let length = min(chunkSize, fileSize - offset)
+            try handle.seek(toOffset: UInt64(offset))
+            guard let chunkData = try handle.read(upToCount: Int(length)), chunkData.count == Int(length) else {
+                throw KDriveError.uploadFailed(L("Lecture impossible du chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName).", "Could not read chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName)."))
+            }
+
+            var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/chunk")
+            components?.queryItems = [
+                URLQueryItem(name: "chunk_number", value: String(chunkIndex + 1)),
+                URLQueryItem(name: "chunk_size", value: String(length))
+            ]
+            guard let chunkURL = components?.url else { throw KDriveError.invalidURL }
+            var chunkRequest = URLRequest(url: chunkURL)
+            chunkRequest.httpMethod = "POST"
+            chunkRequest.timeoutInterval = 600
+            chunkRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+            chunkRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+            let (_, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, from: chunkData)
+            guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
+                throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+            }
+            guard (200..<300).contains(chunkHTTP.statusCode) else {
+                throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
+            }
+        }
+
+        guard let finishURL = URL(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/finish") else {
+            throw KDriveError.invalidURL
+        }
+        var finishRequest = URLRequest(url: finishURL)
+        finishRequest.httpMethod = "POST"
+        finishRequest.timeoutInterval = 120
+        finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+        finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let finishBody = Data("{}".utf8)
+        let (_, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
+        guard let finishHTTP = finishResponse as? HTTPURLResponse else {
+            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+        }
+        guard (200..<300).contains(finishHTTP.statusCode) else {
+            throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
+        }
+    }
+
     nonisolated private static func performSingleUpload(
         fileURL: URL,
         remoteFileName: String,
@@ -609,9 +722,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
-        // Sans timeout explicite, un upload dont la réponse ne revient jamais
-        // laissait la barre de progression bloquée à 0 indéfiniment.
-        request.timeoutInterval = 120
+        // Sans timeout généreux, un upload lent (le timer compte les données
+        // reçues, inexistantes pendant un envoi) était tué en pleine transfert.
+        request.timeoutInterval = 600
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
