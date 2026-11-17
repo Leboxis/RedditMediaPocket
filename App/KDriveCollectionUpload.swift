@@ -206,6 +206,9 @@ private struct KDriveCollectionUploadFlow: View {
                 }
                 skippedCount = files.count - filtered.count
                 LogCenter.kdrive(L("kDrive : \(remoteNames.count) fichier(s) distant(s) analysé(s) — \(skippedCount) ignoré(s), \(filtered.count) à envoyer.", "kDrive: \(remoteNames.count) remote file(s) scanned — \(skippedCount) skipped, \(filtered.count) to upload."))
+                if filtered.isEmpty {
+                    LogCenter.kdrive(L("kDrive : rien à envoyer, tous les médias sont déjà présents.", "kDrive: nothing to upload, all media already present."))
+                }
                 pendingFiles = filtered
                 isPreparing = false
             } catch {
@@ -364,6 +367,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
             )
         }
 
+        let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        LogCenter.kdrive(L("kDrive : envoi démarré — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo).", "kDrive: upload started — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB)."))
+
         do {
             try await performUpload(
                 fileURL: fileURL,
@@ -377,6 +383,27 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 errorMessage: nil
             )
         } catch {
+            // Une erreur réseau (timeout, connexion coupée) mérite une relance
+            // : le fichier n'a jamais été écrit côté serveur, réessayer une
+            // fois évite un échec définitif sur un incident passager.
+            if error is URLError, !Task.isCancelled {
+                LogCenter.kdrive(L("kDrive : erreur réseau sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: network error on \(fileURL.lastPathComponent), retrying…"))
+                do {
+                    try await performUpload(
+                        fileURL: fileURL,
+                        token: token,
+                        driveId: driveId,
+                        directoryId: directoryId
+                    )
+                    return KDriveContinuousUploadOutcome(
+                        fileName: fileURL.lastPathComponent,
+                        succeeded: true,
+                        errorMessage: nil
+                    )
+                } catch {
+                    // On tombe dans le retour d'échec ci-dessous.
+                }
+            }
             return KDriveContinuousUploadOutcome(
                 fileName: fileURL.lastPathComponent,
                 succeeded: false,
@@ -455,6 +482,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
+        // Sans timeout explicite, un upload dont la réponse ne revient jamais
+        // laissait la barre de progression bloquée à 0 indéfiniment.
+        request.timeoutInterval = 120
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
@@ -467,6 +497,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
         if httpResponse.statusCode == 404 {
             throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
+        }
+        if httpResponse.statusCode == 429 {
+            throw KDriveError.serverError(429, L("\(remoteFileName) : trop de requêtes, réessaie dans un moment.", "\(remoteFileName): too many requests, try again shortly."))
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))

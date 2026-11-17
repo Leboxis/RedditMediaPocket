@@ -378,6 +378,9 @@ final class KDriveService: ObservableObject {
 
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
+        // Sans timeout explicite, un upload sans réponse bloquait la
+        // progression indéfiniment.
+        request.timeoutInterval = 120
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
