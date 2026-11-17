@@ -30,6 +30,11 @@ struct ContentView: View {
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
     @State private var filtersPresented = false
+    @State private var selectingMedia = false
+    @State private var selectedMedia: Set<URL> = []
+    @State private var bulkDeletePending = false
+    @State private var savingToGallery = false
+    @State private var gallerySaveMessage: String?
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
@@ -109,6 +114,15 @@ struct ContentView: View {
             } message: { url in
                 Text(L("\(url.lastPathComponent) sera définitivement supprimé. Les autres médias seront conservés.", "\(url.lastPathComponent) will be permanently deleted. Other media will be kept."))
             }
+            .confirmationDialog(L("Supprimer \(selectedMedia.count) média(s) ?", "Delete \(selectedMedia.count) media?"), isPresented: $bulkDeletePending, titleVisibility: .visible) {
+                Button(L("Supprimer", "Delete"), role: .destructive) {
+                    model.deleteMedia(orderedSelection())
+                    exitSelection()
+                }
+                Button(L("Annuler", "Cancel"), role: .cancel) { }
+            } message: {
+                Text(L("Ces médias seront définitivement effacés. Les autres seront conservés.", "These media will be permanently deleted. Others will be kept."))
+            }
             .alert("Pocket", isPresented: Binding(
                 get: { model.errorMessage != nil },
                 set: { if !$0 { model.errorMessage = nil } }
@@ -116,6 +130,7 @@ struct ContentView: View {
                 Button("OK", role: .cancel) { model.errorMessage = nil }
             } message: { Text(model.errorMessage ?? "") }
             .tint(.orange)
+            .errorAlert(gallerySaveMessage) { gallerySaveMessage = nil }
         }
     }
 
@@ -342,6 +357,9 @@ struct ContentView: View {
             Spacer()
         } else {
             galleryToolbar
+            if selectingMedia {
+                selectionBar
+            }
             if model.displayedFiles.isEmpty {
                 Spacer()
                 Image(systemName: "line.3.horizontal.decrease.circle")
@@ -353,28 +371,113 @@ struct ContentView: View {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 3) {
                         ForEach(model.displayedFiles, id: \.self) { url in
-                            Button { editing = false; selection = Selection(url: url, files: model.displayedFiles) } label: {
-                                MediaThumbnail(url: url)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .contentShape(Rectangle())
-                            .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l’image", "Open image"))
-                            .contextMenu {
-                                Button { info = MediaInfoSelection(url: url) } label: {
-                                    Label(L("Informations du média", "Media information"), systemImage: "info.circle")
-                                }
-                                Button(role: .destructive) { mediaPendingDeletion = url } label: {
-                                    Label(L("Supprimer", "Delete"), systemImage: "trash")
-                                }
-                                .disabled(model.running)
-                            }
+                            thumbnailButton(url)
                         }
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
         }
+    }
+
+    /// Une vignette : elle ouvre l'aperçu, ou coche le média quand la
+    /// sélection multiple est active.
+    private func thumbnailButton(_ url: URL) -> some View {
+        let picked = selectedMedia.contains(url)
+        return Button {
+            if selectingMedia {
+                toggleMediaSelection(url)
+            } else {
+                editing = false
+                selection = Selection(url: url, files: model.displayedFiles)
+            }
+        } label: {
+            MediaThumbnail(url: url)
+                .overlay(alignment: .topTrailing) {
+                    if selectingMedia {
+                        Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(picked ? Color.orange : Color.white)
+                            .shadow(color: .black.opacity(0.5), radius: 2)
+                            .padding(6)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l’image", "Open image"))
+        .accessibilityAddTraits(picked && selectingMedia ? .isSelected : [])
+        .contextMenu {
+            if !selectingMedia {
+                Button {
+                    selectingMedia = true
+                    selectedMedia = [url]
+                } label: {
+                    Label(L("Sélectionner", "Select"), systemImage: "checkmark.circle")
+                }
+            }
+            Button { info = MediaInfoSelection(url: url) } label: {
+                Label(L("Informations du média", "Media information"), systemImage: "info.circle")
+            }
+            Button(role: .destructive) { mediaPendingDeletion = url } label: {
+                Label(L("Supprimer", "Delete"), systemImage: "trash")
+            }
+            .disabled(model.running)
+        }
+    }
+
+    /// Barre de la sélection multiple : tout cocher, enregistrer le lot dans
+    /// Photos, supprimer le lot, quitter le mode.
+    private var selectionBar: some View {
+        let allPicked = !model.displayedFiles.isEmpty && selectedMedia.count == model.displayedFiles.count
+        return HStack(spacing: 14) {
+            Button {
+                if allPicked {
+                    selectedMedia.removeAll()
+                } else {
+                    selectedMedia = Set(model.displayedFiles)
+                }
+            } label: {
+                Image(systemName: allPicked ? "checkmark.circle.fill" : "circle.dashed")
+            }
+            .accessibilityLabel(allPicked ? L("Tout désélectionner", "Deselect all") : L("Tout sélectionner", "Select all"))
+
+            Text(selectedMedia.isEmpty
+                 ? L("Sélection", "Selection")
+                 : L("\(selectedMedia.count) sélectionné(s)", "\(selectedMedia.count) selected"))
+                .font(.caption.weight(.medium))
+                .monospacedDigit()
+                .foregroundStyle(selectedMedia.isEmpty ? Color.secondary : Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button { saveSelectionToGallery() } label: {
+                if savingToGallery {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "square.and.arrow.down")
+                }
+            }
+            .disabled(selectedMedia.isEmpty || savingToGallery)
+            .accessibilityLabel(L("Enregistrer la sélection dans Photos", "Save selection to Photos"))
+
+            Button(role: .destructive) { bulkDeletePending = true } label: {
+                Image(systemName: "trash")
+            }
+            .disabled(selectedMedia.isEmpty || model.running)
+            .accessibilityLabel(L("Supprimer la sélection", "Delete selection"))
+
+            Button { exitSelection() } label: {
+                Image(systemName: "xmark")
+            }
+            .accessibilityLabel(L("Quitter la sélection", "Exit selection"))
+        }
+        .font(.system(size: 17, weight: .semibold))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
     }
 
     /// Recherche, tri et filtre rapide de la galerie. Ces réglages ne changent
@@ -471,6 +574,41 @@ struct ContentView: View {
             }
             Button(role: .destructive) { collectionPendingDeletion = collection } label: {
                 Label(L("Supprimer", "Delete"), systemImage: "trash")
+            }
+        }
+    }
+
+    /// Ce qui est réellement à l'écran, dans l'ordre de la grille : la
+    /// sélection peut survivre à un changement de filtre, on n'agit que sur ce
+    /// qui est visible au moment du geste.
+    private func orderedSelection() -> [URL] {
+        model.displayedFiles.filter { selectedMedia.contains($0) }
+    }
+
+    private func toggleMediaSelection(_ url: URL) {
+        if selectedMedia.contains(url) {
+            selectedMedia.remove(url)
+        } else {
+            selectedMedia.insert(url)
+        }
+    }
+
+    private func exitSelection() {
+        selectingMedia = false
+        selectedMedia.removeAll()
+    }
+
+    private func saveSelectionToGallery() {
+        let files = orderedSelection()
+        guard !files.isEmpty, !savingToGallery else { return }
+        savingToGallery = true
+        Task { @MainActor in
+            defer { savingToGallery = false }
+            do {
+                try await GallerySave.save(files)
+                exitSelection()
+            } catch {
+                gallerySaveMessage = error.localizedDescription
             }
         }
     }

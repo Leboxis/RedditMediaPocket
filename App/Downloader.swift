@@ -739,19 +739,37 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     func deleteMedia(_ url: URL) {
-        guard !running, let collection = activeCollection, files.contains(url) else { return }
+        deleteMedia([url])
+    }
+
+    /// Suppression d'un lot : un seul rechargement de la galerie à la fin,
+    /// et les chemins hors du dossier de la collection active sont ignorés
+    /// comme pour la suppression d'un seul média.
+    func deleteMedia(_ urls: [URL]) {
+        guard !running, let collection = activeCollection else { return }
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true).standardizedFileURL
-        guard url.standardizedFileURL.deletingLastPathComponent() == folder,
-              (try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])).map({
-                  $0.isRegularFile == true && $0.isSymbolicLink != true
-              }) == true else { return }
-        do {
-            try fm.removeItem(at: url)
-            MediaMetadata.remove(for: url)
-            reload()
-        } catch {
-            errorMessage = L("Impossible de supprimer ce média : \(error.localizedDescription)", "Unable to delete this media: \(error.localizedDescription)")
+        let removable = urls.filter { url in
+            files.contains(url)
+                && url.standardizedFileURL.deletingLastPathComponent() == folder
+                && (try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])).map({
+                    $0.isRegularFile == true && $0.isSymbolicLink != true
+                }) == true
         }
+        guard !removable.isEmpty else { return }
+
+        var failures = 0
+        for url in removable {
+            do {
+                try fm.removeItem(at: url)
+                MediaMetadata.remove(for: url)
+            } catch {
+                failures += 1
+            }
+        }
+        if failures > 0 {
+            errorMessage = L("\(failures) média(s) n’ont pas pu être supprimés.", "\(failures) media file(s) could not be deleted.")
+        }
+        reload()
     }
 
     func deleteAllDownloads() {
