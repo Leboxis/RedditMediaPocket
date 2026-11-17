@@ -1622,6 +1622,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         // repéré, X n'annonce aucun total global.
         transferUnit = TransferUnit()
         var pipelineError: Error?
+        var preparedHere = 0
         var workers: [Task<Void, Never>] = []
         // Les consommateurs tournent sur l'acteur principal pour la tenue de
         // l'état, mais chaque transfert réseau s'exécute hors acteur : la
