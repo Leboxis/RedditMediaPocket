@@ -163,6 +163,7 @@ final class KDriveService: ObservableObject {
 
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
+            request.timeoutInterval = 30
             request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -181,8 +182,16 @@ final class KDriveService: ObservableObject {
 
             let decoded = try JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data)
             allFolders.append(contentsOf: decoded.data ?? [])
-            hasMore = decoded.has_more ?? false
-            cursor = decoded.cursor
+            // Garde anti-blocage : si l'API renvoie `has_more` sans nouveau
+            // cursor (ou le même), on s'arrête au lieu de boucler à l'infini
+            // sur la même page — c'est ce qui gelait la préparation des
+            // dossiers déjà remplis par un envoi partiel.
+            let nextCursor = decoded.cursor
+            if (decoded.has_more ?? false), let nextCursor, !nextCursor.isEmpty, nextCursor != cursor {
+                cursor = nextCursor
+            } else {
+                hasMore = false
+            }
         }
         return allFolders
             .filter(\.isDirectory)
@@ -223,6 +232,7 @@ final class KDriveService: ObservableObject {
 
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
+            request.timeoutInterval = 30
             request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -246,8 +256,16 @@ final class KDriveService: ObservableObject {
                 if item.type == "dir" || item.type == "directory" { continue }
                 names.insert(item.name)
             }
-            hasMore = decoded.has_more ?? false
-            cursor = decoded.cursor
+            // Garde anti-blocage : sans nouveau cursor, `has_more` seul ne
+            // doit jamais relancer la boucle — c'est ce qui gelait la
+            // déduplication sur les dossiers déjà remplis (envoi partiel
+            // puis relance, même après redémarrage de l'app).
+            let nextCursor = decoded.cursor
+            if (decoded.has_more ?? false), let nextCursor, !nextCursor.isEmpty, nextCursor != cursor {
+                cursor = nextCursor
+            } else {
+                hasMore = false
+            }
         }
         return names
     }

@@ -97,6 +97,9 @@ private struct KDriveCollectionUploadFlow: View {
                         Text(targetFolderName)
                             .font(.subheadline.monospaced())
                             .foregroundStyle(.secondary)
+                        Text(L("Analyse des médias déjà présents…", "Scanning media already present…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Spacer()
                     }
                     .frame(maxWidth: .infinity)
@@ -540,6 +543,12 @@ private struct KDriveContinuousUploadSheet: View {
                     Text(L("\(uploader.completedCount) sur \(max(1, uploader.totalCount)) terminé(s)", "\(uploader.completedCount) of \(max(1, uploader.totalCount)) completed"))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+
+                    if skippedCount > 0 {
+                        Text(L("\(skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(skippedCount) already on the Drive, skipped."))
+                            .font(.subheadline)
+                            .foregroundStyle(.green)
+                    }
 
                     Text(L("Jusqu’à \(KDriveContinuousUploadController.concurrentLimit) uploads restent actifs en continu.", "Up to \(KDriveContinuousUploadController.concurrentLimit) uploads stay active continuously."))
                         .font(.caption)
