@@ -175,8 +175,10 @@ final class KDriveService: ObservableObject {
             guard (200..<300).contains(httpResponse.statusCode) else {
                 if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
                    let description = decoded.error?.description {
+                    LogCenter.err(L("kDrive : listing des dossiers échoué (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: folder listing failed (HTTP \(httpResponse.statusCode)): \(description)"))
                     throw KDriveError.serverError(httpResponse.statusCode, description)
                 }
+                LogCenter.err(L("kDrive : listing des dossiers échoué (HTTP \(httpResponse.statusCode)).", "kDrive: folder listing failed (HTTP \(httpResponse.statusCode))."))
                 throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
             }
 
@@ -244,8 +246,10 @@ final class KDriveService: ObservableObject {
             guard (200..<300).contains(httpResponse.statusCode) else {
                 if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
                    let description = decoded.error?.description {
+                    LogCenter.err(L("kDrive : listing des fichiers échoué (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: file listing failed (HTTP \(httpResponse.statusCode)): \(description)"))
                     throw KDriveError.serverError(httpResponse.statusCode, description)
                 }
+                LogCenter.err(L("kDrive : listing des fichiers échoué (HTTP \(httpResponse.statusCode)).", "kDrive: file listing failed (HTTP \(httpResponse.statusCode))."))
                 throw KDriveError.serverError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
             }
 
@@ -297,8 +301,10 @@ final class KDriveService: ObservableObject {
         guard (200..<300).contains(httpResponse.statusCode) else {
             if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<KDriveFolderItem>.self, from: data),
                let description = decoded.error?.description {
+                LogCenter.err(L("kDrive : création du dossier « \(cleanName) » échouée (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: creating folder “\(cleanName)” failed (HTTP \(httpResponse.statusCode)): \(description)"))
                 throw KDriveError.serverError(httpResponse.statusCode, description)
             }
+            LogCenter.err(L("kDrive : création du dossier « \(cleanName) » échouée (HTTP \(httpResponse.statusCode)).", "kDrive: creating folder “\(cleanName)” failed (HTTP \(httpResponse.statusCode))."))
             throw KDriveError.serverError(httpResponse.statusCode, L("Création du dossier impossible", "Could not create folder"))
         }
 
@@ -344,6 +350,7 @@ final class KDriveService: ObservableObject {
             if case .serverError(let code, let message) = error, code == 422 {
                 let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
                 if fallback != safeName {
+                    LogCenter.kdrive(L("kDrive : nom refusé (422) pour \(originalName), nouvelle tentative avec \(fallback).", "kDrive: name rejected (422) for \(originalName), retrying with \(fallback)."))
                     do {
                         try await Self.performSingleUpload(
                             fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
@@ -489,8 +496,10 @@ final class KDriveService: ObservableObject {
                     currentProgress = Double(completed) / Double(max(1, files.count))
                     if outcome.succeeded {
                         success += 1
+                        LogCenter.kdrive(L("kDrive : envoyé — \(outcome.fileName)", "kDrive: uploaded — \(outcome.fileName)"))
                     } else {
                         failed += 1
+                        LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
                         if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
                 }

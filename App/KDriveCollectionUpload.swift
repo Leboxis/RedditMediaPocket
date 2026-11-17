@@ -147,6 +147,7 @@ private struct KDriveCollectionUploadFlow: View {
         let parentId = parentDirectoryId
         Task { @MainActor in
             do {
+                LogCenter.kdrive(L("kDrive : préparation du dossier « \(targetFolderName) » (parent \(parentId)).", "kDrive: preparing folder “\(targetFolderName)” (parent \(parentId))."))
                 let service = KDriveService.shared
                 let existing = try await service.fetchSubdirectories(
                     token: token,
@@ -204,12 +205,14 @@ private struct KDriveCollectionUploadFlow: View {
                     }
                 }
                 skippedCount = files.count - filtered.count
+                LogCenter.kdrive(L("kDrive : \(remoteNames.count) fichier(s) distant(s) analysé(s) — \(skippedCount) ignoré(s), \(filtered.count) à envoyer.", "kDrive: \(remoteNames.count) remote file(s) scanned — \(skippedCount) skipped, \(filtered.count) to upload."))
                 pendingFiles = filtered
                 isPreparing = false
             } catch {
                 uploadDirectoryId = nil
                 isPreparing = false
                 errorMessage = error.localizedDescription
+                LogCenter.err(L("kDrive : échec de préparation du dossier « \(targetFolderName) » : \(error.localizedDescription)", "kDrive: folder preparation failed for “\(targetFolderName)”: \(error.localizedDescription)"))
             }
         }
     }
@@ -284,8 +287,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
                     if outcome.succeeded {
                         success += 1
+                        LogCenter.kdrive(L("kDrive : envoyé — \(outcome.fileName)", "kDrive: uploaded — \(outcome.fileName)"))
                     } else {
                         failed += 1
+                        LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
                         if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
 
@@ -413,6 +418,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             if case .serverError(let code, let message) = error, code == 422 {
                 let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
                 if fallback != safeName {
+                    LogCenter.kdrive(L("kDrive : nom refusé (422) pour \(originalName), nouvelle tentative avec \(fallback).", "kDrive: name rejected (422) for \(originalName), retrying with \(fallback)."))
                     do {
                         try await performSingleUpload(
                             fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
