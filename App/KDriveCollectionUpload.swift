@@ -320,6 +320,8 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var lastCompletedFileName = ""
     @Published var uploadedBytes: Int64 = 0
     @Published var totalBytes: Int64 = 0
+    @Published var speedBytesPerSecond: Double = 0
+    @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
 
     private var activeTask: Task<Void, Never>?
 
@@ -339,15 +341,33 @@ private final class KDriveContinuousUploadController: ObservableObject {
         progress = 0
         lastCompletedFileName = ""
         uploadedBytes = 0
+        speedBytesPerSecond = 0
         totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
+        // Fichiers volumineux : 6 flux en parallèle — kDrive bride chaque
+        // connexion, la bande passante passe par le nombre de flux. Petits
+        // fichiers : 4 seulement, pour rester loin de la limite API de
+        // 60 requêtes/minute.
+        let averageBytes = files.isEmpty ? 0 : totalBytes / Int64(files.count)
+        activeLimit = averageBytes >= 20_000_000 ? 6 : Self.concurrentLimit
 
         activeTask = Task {
-            // Supervision : progression par octets + coupe des envois au point
-            // mort. Sans elle, un envoi qui piétine ne produit aucune erreur
-            // et la fenêtre reste bloquée à « 0 sur N ».
+            // Supervision : progression par octets + vitesse + coupe des
+            // envois au point mort. Sans elle, un envoi qui piétine ne produit
+            // aucune erreur et la fenêtre reste bloquée à « 0 sur N ».
             let monitor = Task {
+                var lastBytes: Int64 = 0
+                var lastDate = Date()
                 while !Task.isCancelled {
-                    uploadedBytes = KDriveUploadSession.shared.sentTotal()
+                    let bytes = KDriveUploadSession.shared.sentTotal()
+                    let now = Date()
+                    let elapsed = now.timeIntervalSince(lastDate)
+                    if elapsed >= 1 {
+                        let instant = Double(bytes - lastBytes) / elapsed
+                        speedBytesPerSecond = instant * 0.5 + speedBytesPerSecond * 0.5
+                        lastBytes = bytes
+                        lastDate = now
+                    }
+                    uploadedBytes = bytes
                     KDriveUploadSession.shared.cancelStalledTasks(olderThan: 90)
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
@@ -360,7 +380,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
             await withTaskGroup(of: KDriveContinuousUploadOutcome.self) { group in
                 var nextIndex = 0
-                let initialCount = min(Self.concurrentLimit, files.count)
+                let initialCount = min(activeLimit, files.count)
 
                 for _ in 0..<initialCount {
                     let fileURL = files[nextIndex]
@@ -682,7 +702,7 @@ private struct KDriveContinuousUploadSheet: View {
                         .foregroundStyle(.secondary)
 
                     if uploader.totalBytes > 0 {
-                        Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes))", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes))"))
+                        Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -693,7 +713,7 @@ private struct KDriveContinuousUploadSheet: View {
                             .foregroundStyle(.green)
                     }
 
-                    Text(L("Jusqu’à \(KDriveContinuousUploadController.concurrentLimit) uploads restent actifs en continu.", "Up to \(KDriveContinuousUploadController.concurrentLimit) uploads stay active continuously."))
+                    Text(L("Jusqu’à \(uploader.activeLimit) uploads restent actifs en continu.", "Up to \(uploader.activeLimit) uploads stay active continuously."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
