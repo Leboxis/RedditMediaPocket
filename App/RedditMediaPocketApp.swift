@@ -523,10 +523,10 @@ struct ContentView: View {
                 .disabled(model.files.isEmpty)
                 .accessibilityLabel(L("Exporter les médias affichés", "Export displayed media"))
             }
-            // Menu « … » placé en dernier : c'est le bouton le plus à droite
-            // de la barre, et il porte l'envoi vers kDrive.
+            // Dernier item de la barre : rangé dans le menu « … » du système,
+            // l'envoi vers kDrive y apparaît comme une action à plat.
             ToolbarItem(placement: .navigationBarTrailing) {
-                KDriveCollectionUploadMenu(
+                KDriveCollectionUploadAction(
                     files: model.files,
                     collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
                 )
