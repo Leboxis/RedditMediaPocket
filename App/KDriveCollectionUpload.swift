@@ -239,6 +239,9 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// jusqu'au lot suivant : leurs octets comptent dans la progression.
     private var sent: [Int: Int64] = [:]
     private var lastActivity: [Int: Date] = [:]
+    /// Tâches en vol, suivies par le délégué : `URLSession.allTasks` est
+    /// un accès asynchrone dans les SDK récents, on s'en passe.
+    private var inflight: [Int: URLSessionTask] = [:]
 
     /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
     /// accessible depuis plusieurs uploads concurrents.
@@ -248,14 +251,16 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
         lock.lock()
         sent[task.taskIdentifier] = totalBytesSent
         lastActivity[task.taskIdentifier] = Date()
+        inflight[task.taskIdentifier] = task
         lock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock()
+        inflight.removeValue(forKey: task.taskIdentifier)
+        lastActivity.removeValue(forKey: task.taskIdentifier)
         if error != nil {
             sent.removeValue(forKey: task.taskIdentifier)
-            lastActivity.removeValue(forKey: task.taskIdentifier)
         }
         lock.unlock()
     }
@@ -272,6 +277,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
         lock.lock()
         sent.removeAll()
         lastActivity.removeAll()
+        inflight.removeAll()
         lock.unlock()
     }
 
@@ -281,12 +287,12 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     func cancelStalledTasks(olderThan staleSeconds: TimeInterval) {
         lock.lock()
         let cutoff = Date().addingTimeInterval(-staleSeconds)
-        let stale = Self.session.allTasks.filter { task in
-            guard let last = lastActivity[task.taskIdentifier] else { return false }
+        let stale = inflight.filter { entry in
+            guard let last = lastActivity[entry.key] else { return false }
             return last < cutoff
         }
         lock.unlock()
-        for task in stale {
+        for (_, task) in stale {
             let name = Self.fileName(of: task)
             LogCenter.kdrive(L("kDrive : envoi au point mort, annulation pour relance — \(name).", "kDrive: stalled upload, cancelling to retry — \(name)."))
             task.cancel()
