@@ -227,6 +227,82 @@ private struct KDriveContinuousUploadOutcome {
     let errorMessage: String?
 }
 
+/// Session URLSession dédiée aux envois kDrive : elle rapporte les octets
+/// réellement transmis (progression pendant l'envoi d'un fichier, pas
+/// seulement à sa fin) et coupe les tâches au point mort — sans elle, un
+/// envoi qui piétine laisse la fenêtre bloquée à « 0 sur N » sans erreur.
+final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
+    static let shared = KDriveUploadSession()
+
+    private let lock = NSLock()
+    /// taskIdentifier -> octets envoyés. Les tâches réussies y restent
+    /// jusqu'au lot suivant : leurs octets comptent dans la progression.
+    private var sent: [Int: Int64] = [:]
+    private var lastActivity: [Int: Date] = [:]
+
+    /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
+    /// accessible depuis plusieurs uploads concurrents.
+    static let session: URLSession = URLSession(configuration: .default, delegate: KDriveUploadSession.shared, delegateQueue: nil)
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend totalBytesExpected: Int64) {
+        lock.lock()
+        sent[task.taskIdentifier] = totalBytesSent
+        lastActivity[task.taskIdentifier] = Date()
+        lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        if error != nil {
+            sent.removeValue(forKey: task.taskIdentifier)
+            lastActivity.removeValue(forKey: task.taskIdentifier)
+        }
+        lock.unlock()
+    }
+
+    /// Octets transmis du lot en cours (fichiers finis + en cours).
+    func sentTotal() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return sent.values.reduce(0, +)
+    }
+
+    /// Nouveau lot : on repart de zéro.
+    func reset() {
+        lock.lock()
+        sent.removeAll()
+        lastActivity.removeAll()
+        lock.unlock()
+    }
+
+    /// Coupe les envois sans progrès depuis `staleSeconds` : l'annulation
+    /// fait échouer la requête, qui est relancée automatiquement par le
+    /// contrôleur. C'est ce qui débloque les envois morts sans erreur.
+    func cancelStalledTasks(olderThan staleSeconds: TimeInterval) {
+        lock.lock()
+        let cutoff = Date().addingTimeInterval(-staleSeconds)
+        let stale = Self.session.allTasks.filter { task in
+            guard let last = lastActivity[task.taskIdentifier] else { return false }
+            return last < cutoff
+        }
+        lock.unlock()
+        for task in stale {
+            let name = Self.fileName(of: task)
+            LogCenter.kdrive(L("kDrive : envoi au point mort, annulation pour relance — \(name).", "kDrive: stalled upload, cancelling to retry — \(name)."))
+            task.cancel()
+        }
+    }
+
+    private static func fileName(of task: URLSessionTask) -> String {
+        guard let url = task.currentRequest?.url,
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let name = components.queryItems?.first(where: { $0.name == "file_name" })?.value else {
+            return "#\(task.taskIdentifier)"
+        }
+        return name
+    }
+}
+
 @MainActor
 private final class KDriveContinuousUploadController: ObservableObject {
     static let concurrentLimit = 4
@@ -236,6 +312,8 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var totalCount = 0
     @Published var progress = 0.0
     @Published var lastCompletedFileName = ""
+    @Published var uploadedBytes: Int64 = 0
+    @Published var totalBytes: Int64 = 0
 
     private var activeTask: Task<Void, Never>?
 
@@ -247,14 +325,28 @@ private final class KDriveContinuousUploadController: ObservableObject {
         completion: @escaping (_ successCount: Int, _ failedCount: Int, _ errorMessage: String?) -> Void
     ) {
         cancel()
+        KDriveUploadSession.shared.reset()
         LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
         completedCount = 0
         totalCount = files.count
         progress = 0
         lastCompletedFileName = ""
+        uploadedBytes = 0
+        totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
 
         activeTask = Task {
+            // Supervision : progression par octets + coupe des envois au point
+            // mort. Sans elle, un envoi qui piétine ne produit aucune erreur
+            // et la fenêtre reste bloquée à « 0 sur N ».
+            let monitor = Task {
+                while !Task.isCancelled {
+                    uploadedBytes = KDriveUploadSession.shared.sentTotal()
+                    KDriveUploadSession.shared.cancelStalledTasks(olderThan: 90)
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            defer { monitor.cancel() }
             var success = 0
             var failed = 0
             var completed = 0
@@ -488,7 +580,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
+        let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
@@ -583,6 +675,12 @@ private struct KDriveContinuousUploadSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
+                    if uploader.totalBytes > 0 {
+                        Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes))", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes))"))
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
                     if skippedCount > 0 {
                         Text(L("\(skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(skippedCount) already on the Drive, skipped."))
                             .font(.subheadline)
@@ -628,6 +726,13 @@ private struct KDriveContinuousUploadSheet: View {
         .presentationDetents([.medium])
         .interactiveDismissDisabled(uploader.isUploading)
         .onAppear { startUploadIfNeeded() }
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1_000_000_000 { return String(format: "%.2f Go", Double(bytes) / 1_000_000_000) }
+        if bytes >= 1_000_000 { return String(format: "%.1f Mo", Double(bytes) / 1_000_000) }
+        if bytes >= 1_000 { return String(format: "%.0f Ko", Double(bytes) / 1_000) }
+        return "\(bytes) o"
     }
 
     private func startUploadIfNeeded() {

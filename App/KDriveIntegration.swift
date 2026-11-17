@@ -384,7 +384,7 @@ final class KDriveService: ObservableObject {
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
+        let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
