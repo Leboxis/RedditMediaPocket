@@ -244,8 +244,14 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     private var inflight: [Int: URLSessionTask] = [:]
 
     /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
-    /// accessible depuis plusieurs uploads concurrents.
-    static let session: URLSession = URLSession(configuration: .default, delegate: KDriveUploadSession.shared, delegateQueue: nil)
+    /// accessible depuis plusieurs uploads concurrents. La configuration par
+    /// défaut plafonne à 6 connexions par hôte : sans cela, nos 8 flux
+    /// parallèles ne serviraient à rien (2 resteraient en file d'attente).
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpMaximumConnectionPerHost = 16
+        return URLSession(configuration: configuration, delegate: KDriveUploadSession.shared, delegateQueue: nil)
+    }()
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend totalBytesExpected: Int64) {
         lock.lock()
@@ -408,7 +414,6 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
                     if outcome.succeeded {
                         success += 1
-                        LogCenter.kdrive(L("kDrive : envoyé — \(outcome.fileName)", "kDrive: uploaded — \(outcome.fileName)"))
                     } else {
                         failed += 1
                         LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
@@ -487,6 +492,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         LogCenter.kdrive(L("kDrive : envoi démarré — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo).", "kDrive: upload started — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB)."))
+        let startedAt = Date()
 
         do {
             try await performUpload(
@@ -495,6 +501,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 driveId: driveId,
                 directoryId: directoryId
             )
+            let elapsed = Date().timeIntervalSince(startedAt)
+            let speed = elapsed > 0 ? Int64(Double(sizeBytes) / elapsed) : 0
+            LogCenter.kdrive(L("kDrive : envoyé — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo en \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) Ko/s).", "kDrive: uploaded — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB in \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) KB/s)."))
             return KDriveContinuousUploadOutcome(
                 fileName: fileURL.lastPathComponent,
                 succeeded: true,
