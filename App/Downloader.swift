@@ -1611,6 +1611,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let resumeCursor = stored?["userID"] == userID ? stored?["cursor"] : nil
         var scanned = Set<String>()
         var scannedPages = 0
+        // Lecture du fil et téléchargement ne s’attendent plus : un lot part en
+        // tâche de fond et la page suivante se lit pendant ce temps. Sans cela,
+        // chaque page attendait la fin de ses transferts, et une vidéo lente
+        // immobilisait tout le parcours.
+        var pendingBatch: [Download] = []
+        var batchTask: Task<Void, Error>?
+        var preparedHere = 0
+        // Une tâche non structurée n’hérite pas de l’annulation : arrêter le
+        // parcours doit arrêter le lot encore en vol.
+        defer { batchTask?.cancel() }
         let completed = try await XMediaTraversal.run(cursor: resumeCursor, fetch: { cursor in
             scannedPages += 1
             self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
@@ -1652,13 +1662,30 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let downloads = try await prepareDownloads(posts, folder: folder,
                 seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                 author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
-            // La barre suit la page : X n'annonce aucun total global et le
-            // parcours en découvre en continu, donc une unité de nombre
-            // connu est la seule progression exacte possible. `downloads`
-            // et non le nombre de médias vus : ceux déjà sur disque en sont
-            // exclus, et la barre ne doit pas annoncer plus que le lot.
-            beginTransferUnit(total: downloads.count)
-            try await executeDownloads(downloads, &preparedCount)
+            // Les médias de cette page rejoignent le lot en attente. Un lot
+            // plus petit que la limite laisserait des emplacements au repos :
+            // un compte X n’a souvent qu’un ou deux médias par page, d’où le
+            // seuil plutôt qu’un départ à moitié vide.
+            pendingBatch.append(contentsOf: downloads)
+            if pendingBatch.count >= max(1, sessionLimit) {
+                // Le lot précédent finit avant que le suivant ne démarre : la
+                // limite de transferts simultanés reste celle des Réglages,
+                // elle ne s’applique pas par lot. Pendant cette attente, la
+                // page suivante s’est déjà lue.
+                try await batchTask?.value
+                batchTask = nil
+                let batch = pendingBatch
+                pendingBatch = []
+                preparedHere += batch.count
+                // La barre suit le lot : X n’annonce aucun total global et le
+                // parcours en découvre en continu. `batch` et non le nombre de
+                // médias vus : ceux déjà sur disque n’y sont pas, et la barre
+                // ne doit pas annoncer plus que le lot.
+                beginTransferUnit(total: batch.count)
+                batchTask = Task { @MainActor in
+                    try await self.executeDownloads(batch)
+                }
+            }
             return true
         }, persist: { cursor in
             if let cursor {
@@ -1667,6 +1694,18 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 UserDefaults.standard.removeObject(forKey: resumeKey)
             }
         })
+        // Dernier lot : celui qui est encore en vol, puis les médias qui
+        // n’ont pas atteint le seuil.
+        try await batchTask?.value
+        batchTask = nil
+        if !pendingBatch.isEmpty {
+            let batch = pendingBatch
+            pendingBatch = []
+            preparedHere += batch.count
+            beginTransferUnit(total: batch.count)
+            try await executeDownloads(batch)
+        }
+        preparedCount += preparedHere
         guard completed else { return false }
 
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
@@ -2370,6 +2409,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
             await self.recordTransferredItem()
         }
         LogCenter.net(L("Transfert du lot terminé.", "Batch transfer done."))
+    }
+
+    /// Variante sans compteur : un lot lancé en tâche de fond ne peut pas
+    /// capturer une référence `inout`, le parcours X cumule lui-même les
+    /// fichiers préparés.
+    private func executeDownloads(_ downloads: [Download]) async throws {
+        var prepared = 0
+        try await executeDownloads(downloads, &prepared)
     }
 
     private func beginTransferUnit(total: Int) {
