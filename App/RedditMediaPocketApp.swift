@@ -414,17 +414,19 @@ struct ContentView: View {
                 FailureJournalButton(model: model)
             }
             ToolbarItem(placement: .navigationBarTrailing) {
-                KDriveCollectionUploadButton(
-                    files: model.files,
-                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
-                )
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
                 Button { export = ExportSelection(files: model.files) } label: {
                     Image(systemName: "square.and.arrow.up")
                 }
                 .disabled(model.files.isEmpty)
                 .accessibilityLabel(L("Exporter les médias affichés", "Export displayed media"))
+            }
+            // Menu « … » placé en dernier : c'est le bouton le plus à droite
+            // de la barre, et il porte l'envoi vers kDrive.
+            ToolbarItem(placement: .navigationBarTrailing) {
+                KDriveCollectionUploadMenu(
+                    files: model.files,
+                    collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
+                )
             }
         }
     }

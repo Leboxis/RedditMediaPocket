@@ -2,7 +2,9 @@ import Foundation
 import MediaCore
 import SwiftUI
 
-struct KDriveCollectionUploadButton: View {
+/// Menu « … » de la barre de navigation : l'envoi vers kDrive y est rangé
+/// plutôt que d'occuper sa propre icône, qui encombrait le coin droit.
+struct KDriveCollectionUploadMenu: View {
     let files: [URL]
     let collectionLabel: String
 
@@ -17,17 +19,22 @@ struct KDriveCollectionUploadButton: View {
     }
 
     var body: some View {
-        Button {
-            if configured {
-                showUpload = true
-            } else {
-                showNotConfigured = true
+        Menu {
+            Button {
+                if configured {
+                    showUpload = true
+                } else {
+                    showNotConfigured = true
+                }
+            } label: {
+                Label(L("Envoyer vers kDrive", "Upload to kDrive"), systemImage: "icloud.and.arrow.up")
             }
+            .disabled(files.isEmpty)
+            .accessibilityLabel(L("Envoyer les médias affichés vers kDrive", "Upload displayed media to kDrive"))
         } label: {
-            Image(systemName: "icloud.and.arrow.up")
+            Image(systemName: "ellipsis")
         }
-        .disabled(files.isEmpty)
-        .accessibilityLabel(L("Envoyer les médias affichés vers kDrive", "Upload displayed media to kDrive"))
+        .accessibilityLabel(L("Plus d’actions", "More actions"))
         .sheet(isPresented: $showUpload) {
             KDriveCollectionUploadFlow(
                 files: files,
