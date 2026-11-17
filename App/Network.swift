@@ -38,9 +38,13 @@ import MediaCore
         config.urlCredentialStorage = nil
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.timeoutIntervalForRequest = 60
-        config.timeoutIntervalForResource = 1800
-        config.httpMaximumConnectionsPerHost = 6
+        // Requête plus courte : une connexion morte libère son créneau au
+        // bout de 30 s au lieu d'une minute, et le retry la reprend.
+        config.timeoutIntervalForRequest = 30
+        // Filet de sécurité du watchdog : un transfert qui s'égoutte sans
+        // jamais se bloquer franchit rarement 10 minutes utiles.
+        config.timeoutIntervalForResource = 600
+        config.httpMaximumConnectionsPerHost = ConcurrentDownloads.maximumLimit
         session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }
     private func request(_ url: URL, bearer: String?, headers: [String: String]? = nil,
@@ -253,16 +257,26 @@ import MediaCore
         defer { transfers -= 1 }
         let started = Date()
         LogCenter.net(L("Média GET \(LogDiagnostics.requestSummary(url))…", "Media GET \(LogDiagnostics.requestSummary(url))…"))
+        let watchdog = StallWatchdog()
+        watchdog.start()
         let result: (URL, URLResponse)
         do {
-            result = try await session.download(for: req)
+            result = try await session.download(for: req, delegate: watchdog)
         } catch {
+            watchdog.stop()
+            // Un transfert annulé par le watchdog est un égouttement réseau,
+            // pas une annulation utilisateur : le convertir en erreur
+            // transient pour que `RetryPolicy` le reprenne au lieu d'abandonner.
+            if watchdog.stalled, (error as? URLError)?.code == .cancelled {
+                throw URLError(.timedOut)
+            }
             if !Task.isCancelled {
                 let code = (error as? URLError).map { "URLSession \($0.code.rawValue)" } ?? String(describing: type(of: error))
                 LogCenter.err(L("Média \(LogDiagnostics.requestSummary(url)) : \(code) après \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Media \(LogDiagnostics.requestSummary(url)): \(code) after \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
             }
             throw error
         }
+        watchdog.stop()
         let (temp, response) = result
         do {
             try Task.checkCancellation()
@@ -324,5 +338,67 @@ import MediaCore
             }
             throw error
         }
+    }
+}
+
+/// Détecte un transfert à l'arrêt : sans octet reçu pendant `interval`, la
+/// tâche URLSession est annulée pour libérer son créneau au lieu de rester
+/// suspendue jusqu'au filet des 10 minutes. L'appelant convertit l'annulation
+/// en `URLError(.timedOut)`, transient, que `RetryPolicy` reprend.
+///
+/// Le délégué par tâche ne reçoit pas `didWriteData` via l'API async : la
+/// progression est donc lue par sondage de `countOfBytesReceived`, sans KVO.
+private final class StallWatchdog: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    /// Sans octet pendant ce délai, le transfert est réputé à l'arrêt.
+    static let interval: TimeInterval = 20
+    private static let pollInterval: TimeInterval = 5
+
+    private let lock = NSLock()
+    private weak var task: URLSessionTask?
+    private var lastBytes: Int64 = 0
+    private var lastActivity = Date()
+    private var stopped = false
+    private(set) var stalled = false
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        lock.lock()
+        self.task = task
+        lock.unlock()
+    }
+
+    func start() {
+        Task { [weak self] in
+            while let self, !self.isStopped {
+                try? await Task.sleep(for: .seconds(Self.pollInterval))
+                self.check()
+            }
+        }
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        lock.unlock()
+    }
+
+    private var isStopped: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stopped
+    }
+
+    private func check() {
+        lock.lock()
+        guard !stopped, let task, !stalled else { lock.unlock(); return }
+        let bytes = task.countOfBytesReceived
+        if bytes != lastBytes {
+            lastBytes = bytes
+            lastActivity = Date()
+        } else if Date().timeIntervalSince(lastActivity) >= Self.interval {
+            stalled = true
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        lock.unlock()
     }
 }

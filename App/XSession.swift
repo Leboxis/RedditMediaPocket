@@ -21,6 +21,11 @@ import MediaCore
     @Published private(set) var apiRejected = false
     private var credentialValues: [String] = []
     @Published private(set) var clearing = false
+    /// Cache court du jeton CSRF : chaque page GraphQL relisait tous les
+    /// cookies WebKit, un aller-retour asynchrone à chaque page. X renouvelle
+    /// `ct0` rarement en cours de session ; 30 s suffisent, et tout
+    /// renouvellement (changement de session) ou refus 401/403 invalide.
+    private var csrfCache: (value: String, date: Date)?
 
     private override init() {
         super.init()
@@ -55,6 +60,7 @@ import MediaCore
         let apiReady = ready && XTwitterCookiePolicy.hasCredentials(cookies: cookies)
         let revoked = identity != credentialValues || !ready
         credentialValues = identity
+        if revoked { csrfCache = nil }
         // `@Published` est réaffecté uniquement sur un changement réel.
         // `refresh()` est appelé à chaque écriture de cookie par WebKit, et une
         // réaffectation de même valeur émet quand même `objectWillChange` :
@@ -87,8 +93,21 @@ import MediaCore
     /// Jeton CSRF `ct0`, exigé par l'API GraphQL. Il peut apparaître
     /// après `auth_token` : son absence ne prouve pas une déconnexion.
     func csrfToken() async -> String? {
+        if let csrfCache, Date().timeIntervalSince(csrfCache.date) < 30 {
+            return csrfCache.value
+        }
         let cookies = await allCookies()
-        return XTwitterCookiePolicy.csrfToken(cookies: cookies)
+        guard let token = XTwitterCookiePolicy.csrfToken(cookies: cookies), !token.isEmpty else {
+            return nil
+        }
+        csrfCache = (token, Date())
+        return token
+    }
+
+    /// Invalide le cache après un refus 401/403 : le jeton servi était
+    /// peut-être périmé, le prochain appel doit relire les cookies.
+    func invalidateCSRF() {
+        csrfCache = nil
     }
 
     /// En-tête `Cookie` pour les requêtes API. Le CDN média en est exclu par
@@ -109,6 +128,7 @@ import MediaCore
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
         credentialValues = []; clearing = false
+        csrfCache = nil
     }
 }
 

@@ -67,7 +67,10 @@ public enum XTwitterAPI {
         // Une chaîne brute `#"…"#` ne peut pas s'étendre sur plusieurs lignes :
         // le texte est donc assemblé par morceaux plutôt que sur une ligne
         // unique devenue illisible.
-        var variables = #"{"userId":"\#(jsonEscape(userID))","count":40"# + ","
+        // `count: 100` : X honore des pages plus grandes que les 40 du
+        // client web de référence, ce qui divise les allers-retours GraphQL
+        // d'un gros profil. Si X refuse ce paramètre, revenir à 40 ici.
+        var variables = #"{"userId":"\#(jsonEscape(userID))","count":100"# + ","
         variables += #""includePromotedContent":false"# + ","
         variables += #""withQuickPromoteEligibilityTweetFields":true"# + ","
         variables += #""withVoice":true,"withV2Timeline":true"#

@@ -355,7 +355,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             UserDefaults.standard.set(valid, forKey: "concurrentLimit")
         }
     }
-    @Published private(set) var sessionLimit = 3
+    @Published private(set) var sessionLimit = ConcurrentDownloads.defaultLimit
     @Published var xFetishSegments = XFetishRangeDownload.segmentCount(
         UserDefaults.standard.object(forKey: XFetishRangeDownload.defaultsKey) as? Int) {
         didSet {
@@ -864,7 +864,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     func start() {
         guard !running else { return }
-        sessionLimit = max(1, min(6, concurrentLimit))
+        sessionLimit = max(1, min(ConcurrentDownloads.maximumLimit, concurrentLimit))
         sessionSegments = XFetishRangeDownload.segmentCount(xFetishSegments)
         errorMessage = nil
         let target = sourceKind == "saved" ? "saved/" : "\(sourceKind)/\(username)"
@@ -1611,17 +1611,48 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let resumeCursor = stored?["userID"] == userID ? stored?["cursor"] : nil
         var scanned = Set<String>()
         var scannedPages = 0
-        // Lecture du fil et téléchargement ne s’attendent plus : un lot part en
-        // tâche de fond et la page suivante se lit pendant ce temps. Sans cela,
-        // chaque page attendait la fin de ses transferts, et une vidéo lente
-        // immobilisait tout le parcours.
-        var pendingBatch: [Download] = []
-        var batchTask: Task<Void, Error>?
-        var preparedHere = 0
+        // Pipeline continu : les médias préparés rejoignent un canal que
+        // `sessionLimit` consommateurs vident sans arrêt. Plus de lots
+        // discrets : une vidéo lente n'immobilise plus les suivantes, la
+        // pagination continue pendant les transferts, et un créneau libéré
+        // est immédiatement repris par le média suivant.
+        let channel = ConcurrentChannel<Download>()
+        let limit = max(1, sessionLimit)
+        // La barre couvre tout le parcours : le total croît à chaque média
+        // repéré, X n'annonce aucun total global.
+        transferUnit = TransferUnit()
+        var pipelineError: Error?
+        var workers: [Task<Void, Never>] = []
+        // Les consommateurs tournent sur l'acteur principal pour la tenue de
+        // l'état, mais chaque transfert réseau s'exécute hors acteur : la
+        // concurrence réelle reste celle des Réglages. Une erreur fatale
+        // (429, session révoquée) ferme le canal et arrête le parcours ; une
+        // simple annulation fait sortir le consommateur sans erreur.
+        for _ in 0..<limit {
+            workers.append(Task { @MainActor [channel, self] in
+                while let item = await channel.next() {
+                    do {
+                        try await self.saveIgnoringInaccessible(item)
+                        self.recordTransferredItem()
+                    } catch {
+                        if DownloadFailurePolicy.isCancellation(error) { return }
+                        if pipelineError == nil { pipelineError = error }
+                        channel.finish()
+                        return
+                    }
+                }
+            })
+        }
         // Une tâche non structurée n’hérite pas de l’annulation : arrêter le
-        // parcours doit arrêter le lot encore en vol.
-        defer { batchTask?.cancel() }
+        // parcours doit arrêter les transferts encore en vol.
+        defer {
+            channel.finish()
+            for worker in workers { worker.cancel() }
+        }
         let completed = try await XMediaTraversal.run(cursor: resumeCursor, fetch: { cursor in
+            // Une erreur fatale survenue chez un consommateur arrête aussi la
+            // pagination : inutile de lire des pages que personne ne videra.
+            if let pipelineError { throw pipelineError }
             scannedPages += 1
             self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
             let data = try await self.fetchXMediaPage(userID: userID, cursor: cursor)
@@ -1662,30 +1693,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
             let downloads = try await prepareDownloads(posts, folder: folder,
                 seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                 author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
-            // Les médias de cette page rejoignent le lot en attente. Un lot
-            // plus petit que la limite laisserait des emplacements au repos :
-            // un compte X n’a souvent qu’un ou deux médias par page, d’où le
-            // seuil plutôt qu’un départ à moitié vide.
-            pendingBatch.append(contentsOf: downloads)
-            if pendingBatch.count >= max(1, sessionLimit) {
-                // Le lot précédent finit avant que le suivant ne démarre : la
-                // limite de transferts simultanés reste celle des Réglages,
-                // elle ne s’applique pas par lot. Pendant cette attente, la
-                // page suivante s’est déjà lue.
-                try await batchTask?.value
-                batchTask = nil
-                let batch = pendingBatch
-                pendingBatch = []
-                preparedHere += batch.count
-                // La barre suit le lot : X n’annonce aucun total global et le
-                // parcours en découvre en continu. `batch` et non le nombre de
-                // médias vus : ceux déjà sur disque n’y sont pas, et la barre
-                // ne doit pas annoncer plus que le lot.
-                beginTransferUnit(total: batch.count)
-                batchTask = Task { @MainActor in
-                    try await self.executeDownloads(batch)
-                }
+            discovered += downloads.count
+            preparedHere += downloads.count
+            // Le total de la barre suit le parcours : chaque page repérée
+            // l'étend, les transferts terminés remplissent la fraction.
+            if transferUnit?.total != discovered {
+                transferUnit?.total = discovered
             }
+            for item in downloads { channel.send(item) }
             return true
         }, persist: { cursor in
             if let cursor {
@@ -1694,17 +1709,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 UserDefaults.standard.removeObject(forKey: resumeKey)
             }
         })
-        // Dernier lot : celui qui est encore en vol, puis les médias qui
-        // n’ont pas atteint le seuil.
-        try await batchTask?.value
-        batchTask = nil
-        if !pendingBatch.isEmpty {
-            let batch = pendingBatch
-            pendingBatch = []
-            preparedHere += batch.count
-            beginTransferUnit(total: batch.count)
-            try await executeDownloads(batch)
-        }
+        // Fin du parcours : ferme le canal et attend que les transferts en
+        // cours se terminent. Une erreur fatale (429, session révoquée)
+        // l'emporte sur une annulation de parcours.
+        channel.finish()
+        for worker in workers { await worker.value }
+        if let pipelineError { throw pipelineError }
         preparedCount += preparedHere
         guard completed else { return false }
 
@@ -1752,7 +1762,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
                                          headers: XTwitterAPI.headers(csrf: csrf))
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
             // Une session expirée se voit ici. L'utilisateur est invité à se
-            // reconnecter plutôt que de boucler sur un refus identique.
+            // reconnecter plutôt que de boucler sur un refus identique. Le
+            // cache CSRF est invalidé : le jeton servi était peut-être périmé.
+            await XSession.shared.invalidateCSRF()
             await XSession.shared.refresh()
             if code == 401 { await XSession.shared.recordAPIAcceptance(false) }
             guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }

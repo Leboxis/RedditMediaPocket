@@ -1,8 +1,15 @@
 import Foundation
 
 public enum ConcurrentDownloads {
+    /// Défaut relevé : le CDN X (`pbs.twimg.com`, `video.twimg.com`) tolère
+    /// bien plus de trois connexions simultanées, et trois transferts ne
+    /// saturent pas une liaison mobile correcte. Le plafond suit : au-delà,
+    /// X commencerait à limiter les requêtes.
+    public static let defaultLimit = 6
+    public static let maximumLimit = 12
+
     public static func configuredLimit(_ stored: Int?, isXFetish: Bool = false) -> Int {
-        max(1, min(6, stored ?? (isXFetish ? 6 : 3)))
+        max(1, min(Self.maximumLimit, stored ?? Self.defaultLimit))
     }
 
     /// Une limite invalide est un défaut de l'appelant, pas une panne réseau :

@@ -90,7 +90,7 @@ final class XTwitterTests: XCTestCase {
         let decoded = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(variables.utf8))
             as? [String: Any])
         XCTAssertEqual(decoded["userId"] as? String, "1")
-        XCTAssertEqual(decoded["count"] as? Int, 40)
+        XCTAssertEqual(decoded["count"] as? Int, 100)
         XCTAssertEqual(decoded["cursor"] as? String, "a+b/c=")
         // L'absence de curseur ne doit pas laisser de champ vide derrière.
         let first = try XCTUnwrap(URLComponents(url: XTwitterAPI.userMedia(userID: "1", cursor: nil),
