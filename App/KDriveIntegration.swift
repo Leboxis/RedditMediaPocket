@@ -101,6 +101,14 @@ final class KDriveRateLimitCenter: ObservableObject {
     static let shared = KDriveRateLimitCenter()
 
     @Published private(set) var limitedUntil: Date?
+    @Published private(set) var requestsLastMinute: Int = 0
+
+    private var requestDates: [Date] = []
+    /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
+    /// quel que soit l'abonnement (kDrive 6 To inclus).
+    static let officialLimitPerMinute = 60
+    /// Codes qui, chez Infomaniak, traduisent un bridage (pas seulement 429).
+    static let throttleStatusCodes: Set<Int> = [408, 429, 503, 509]
 
     private init() {}
 
@@ -116,6 +124,28 @@ final class KDriveRateLimitCenter: ObservableObject {
     }
 
     private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
+        let now = Date()
+        requestDates.append(now)
+        requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
+        requestsLastMinute = requestDates.count
+        if Self.throttleStatusCodes.contains(statusCode) {
+            let window = min(max(min(retryAfter ?? 60, 60), 5), 3600)
+            if (limitedUntil ?? .distantPast) < now {
+                LogCenter.err(L("kDrive : bridage détecté (HTTP \(statusCode)) — reprise estimée dans \(Int(window)) s.", "kDrive: throttling detected (HTTP \(statusCode)) — estimated resume in \(Int(window)) s."))
+            }
+            limitedUntil = max(limitedUntil ?? .distantPast, now.addingTimeInterval(window))
+            return
+        }
+        if requestsLastMinute >= Self.officialLimitPerMinute {
+            if let oldest = requestDates.first {
+                let resume = oldest.addingTimeInterval(60)
+                if (limitedUntil ?? .distantPast) < now {
+                    LogCenter.err(L("kDrive : \(requestsLastMinute) requêtes API en 60 s (limite officielle : \(Self.officialLimitPerMinute)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(requestsLastMinute) API requests in 60 s (official limit: \(Self.officialLimitPerMinute)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
+                }
+                limitedUntil = max(limitedUntil ?? .distantPast, resume)
+            }
+            return
+        }
         if statusCode == 429 {
             let window = min(max(retryAfter ?? 60, 1), 3600)
             limitedUntil = max(limitedUntil ?? .distantPast, Date().addingTimeInterval(window))
@@ -712,6 +742,9 @@ struct KDriveSettingsSection: View {
                     .font(.footnote)
                     .foregroundStyle(.green)
             }
+            Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requêtes/min (limite officielle, abonnement 6 To inclus)", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requests/min (official limit, 6 TB plan included)"))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? .orange : .secondary)
 
             if let status = connectionStatus {
                 switch status {
