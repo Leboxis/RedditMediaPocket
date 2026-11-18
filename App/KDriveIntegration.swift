@@ -107,9 +107,6 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
-    /// Codes qui, chez Infomaniak, traduisent un bridage (pas seulement 429).
-    static let throttleStatusCodes: Set<Int> = [408, 429, 503, 509]
-
     private init() {}
 
     /// À appeler après chaque réponse kDrive (listing, envoi, test…).
@@ -123,15 +120,33 @@ final class KDriveRateLimitCenter: ObservableObject {
         }
     }
 
+    /// Codes d'erreur officiels (`error.code`) qui traduisent un rate limit.
+    private func isRateLimitErrorCode(_ body: Data?) -> Bool {
+        guard let body,
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let result = json["result"] as? String, result == "error"
+        else { return false }
+        let error = json["error"] as? [String: Any]
+        let code = (error?["code"] as? String) ?? ""
+        let description = (error?["description"] as? String) ?? ""
+        return code.contains("too_many_requests")
+            || code.contains("rate_limit")
+            || code.contains("limit_exceeded")
+            || description.lowercased().contains("too many requests")
+    }
+
     private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
         let now = Date()
         requestDates.append(now)
         requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
         requestsLastMinute = requestDates.count
-        if Self.throttleStatusCodes.contains(statusCode) {
-            let window = min(max(min(retryAfter ?? 60, 60), 5), 3600)
+
+        // Mécanisme officiel d'erreur Infomaniak (developer.infomaniak.com) :
+        // HTTP 429 ou corps JSON `result: "error"` avec un code de bridage.
+        if statusCode == 429 || isRateLimitErrorCode(body) {
+            let window = min(max(retryAfter ?? 60, 1), 3600)
             if (limitedUntil ?? .distantPast) < now {
-                LogCenter.err(L("kDrive : bridage détecté (HTTP \(statusCode)) — reprise estimée dans \(Int(window)) s.", "kDrive: throttling detected (HTTP \(statusCode)) — estimated resume in \(Int(window)) s."))
+                LogCenter.err(L("kDrive : rate limit API détecté — reprise estimée dans \(Int(window)) s.", "kDrive: API rate limit detected — estimated resume in \(Int(window)) s."))
             }
             limitedUntil = max(limitedUntil ?? .distantPast, now.addingTimeInterval(window))
             return
@@ -146,18 +161,7 @@ final class KDriveRateLimitCenter: ObservableObject {
             }
             return
         }
-        if statusCode == 429 {
-            let window = min(max(retryAfter ?? 60, 1), 3600)
-            limitedUntil = max(limitedUntil ?? .distantPast, Date().addingTimeInterval(window))
-            return
-        }
-        if let body, statusCode != 401,
-           let text = String(data: body, encoding: .utf8),
-           text.contains("too_many_requests") || text.contains("rate_limit") {
-            limitedUntil = max(limitedUntil ?? .distantPast, Date().addingTimeInterval(60))
-            return
-        }
-        if (200..<300).contains(statusCode), Date() > (limitedUntil ?? .distantPast) {
+        if (200..<300).contains(statusCode), now > (limitedUntil ?? .distantPast) {
             limitedUntil = nil
         }
     }
