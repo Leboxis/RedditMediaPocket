@@ -118,12 +118,22 @@ struct LogEntry: Identifiable, Equatable {
         }
     }
 
-    /// Fichier d'export : tout l'historique mémoire + note. Léger, partageable.
-    func exportFile() -> URL {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pocket-logs-\(Int(Date().timeIntervalSince1970)).txt")
-        var text = "RedditMediaPocket logs — \(Date())\n\n"
+    /// Fichier d'export : par onglet (`level`) ou tout l'historique si nil,
+    /// restreint à la recherche courante si fournie. Léger, partageable.
+    func exportFile(level: LogLevel? = nil, search: String = "") -> URL {
+        let scope: String
+        if let level { scope = level.rawValue } else { scope = L("tout", "all") }
+        let stamp = Int(Date().timeIntervalSince1970)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pocket-logs-\(scope)-\(stamp).txt")
+        var text = "RedditMediaPocket logs (\(scope)) — \(Date())\n"
+        let needle = search.trimmingCharacters(in: .whitespaces)
+        if !needle.isEmpty {
+            text += L("Filtre recherche : \(needle)\n", "Search filter: \(needle)\n")
+        }
+        text += "\n"
         let formatter = ISO8601DateFormatter()
-        for e in entries {
+        for e in entries where level == nil || e.level == level {
+            if !needle.isEmpty, !e.message.localizedCaseInsensitiveContains(needle) { continue }
             text += "\(formatter.string(from: e.date)) [\(e.level.rawValue)] \(e.message)\n"
         }
         try? text.write(to: tmp, atomically: true, encoding: .utf8)
@@ -223,7 +233,15 @@ struct LogsView: View {
                     Button(L("Effacer", "Clear")) { logs.clear() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button { exportURL = logs.exportFile() } label: {
+                    Menu {
+                        Button(L("Exporter l'onglet courant", "Export current tab")) {
+                            exportURL = logs.exportFile(level: level, search: search)
+                        }
+                        Divider()
+                        Button(L("Exporter tout", "Export everything")) {
+                            exportURL = logs.exportFile()
+                        }
+                    } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .accessibilityLabel(L("Exporter les logs", "Export logs"))

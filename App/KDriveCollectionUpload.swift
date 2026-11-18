@@ -650,6 +650,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
+            let chunkStarted = Date()
             let handle = try FileHandle(forReadingFrom: fileURL)
             defer { try? handle.close() }
             try handle.seek(toOffset: UInt64(offset))
@@ -677,6 +678,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
             guard (200..<300).contains(chunkHTTP.statusCode) else {
                 throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
             }
+            let chunkElapsed = Date().timeIntervalSince(chunkStarted)
+            let chunkSpeed = chunkElapsed > 0 ? Int64(TimeInterval(length) / chunkElapsed) : 0
+            LogCenter.kdrive(L("kDrive : chunk \(chunkIndex + 1)/\(totalChunks) envoyé pour \(remoteFileName) (\(length / 1_000_000) Mo en \(String(format: "%.0f", chunkElapsed)) s ≈ \(chunkSpeed / 1_000) Ko/s).", "kDrive: chunk \(chunkIndex + 1)/\(totalChunks) sent for \(remoteFileName) (\(length / 1_000_000) MB in \(String(format: "%.0f", chunkElapsed)) s ≈ \(chunkSpeed / 1_000) KB/s)."))
         }
 
         var nextChunk = 0
@@ -718,6 +722,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard (200..<300).contains(finishHTTP.statusCode) else {
             throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
         }
+        LogCenter.kdrive(L("kDrive : session close — \(remoteFileName) assemblé côte serveur (\(totalChunks) chunks).", "kDrive: session closed — \(remoteFileName) assembled server-side (\(totalChunks) chunks)."))
     }
 
     nonisolated private static func performSingleUpload(
