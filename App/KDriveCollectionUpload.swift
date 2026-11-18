@@ -635,6 +635,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard let startHTTP = startResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
+        KDriveRateLimitCenter.register(response: startHTTP, body: startData)
         guard (200..<300).contains(startHTTP.statusCode) else {
             throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
         }
@@ -688,6 +689,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
             }
+            KDriveRateLimitCenter.register(response: chunkHTTP, body: nil)
             guard (200..<300).contains(chunkHTTP.statusCode) else {
                 throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
             }
@@ -732,6 +734,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard let finishHTTP = finishResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
+        KDriveRateLimitCenter.register(response: finishHTTP, body: finishData)
         guard (200..<300).contains(finishHTTP.statusCode) else {
             throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
         }
@@ -788,6 +791,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
+        KDriveRateLimitCenter.register(response: httpResponse, body: data)
         if httpResponse.statusCode == 401 {
             throw KDriveError.authenticationFailed
         }

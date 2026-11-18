@@ -97,6 +97,43 @@ private struct KDriveUploadOutcome {
 }
 
 @MainActor
+@MainActor
+final class KDriveRateLimitCenter: ObservableObject {
+    static let shared = KDriveRateLimitCenter()
+
+    @Published private(set) var limitedUntil: Date?
+
+    private init() {}
+
+    /// À appeler après chaque réponse kDrive (listing, envoi, test…).
+    /// Retient la fenêtre de rate limit (429 ou code d'erreur dédié) et
+    /// lève l'état dès qu'une requête réussit après la fenêtre.
+    nonisolated static func register(response: HTTPURLResponse, body: Data?) {
+        let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+        let statusCode = response.statusCode
+        Task { @MainActor in
+            shared.sync(statusCode: statusCode, retryAfter: retryAfter, body: body)
+        }
+    }
+
+    private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
+        if statusCode == 429 {
+            let window = min(max(retryAfter ?? 60, 1), 3600)
+            limitedUntil = max(limitedUntil ?? .distantPast, Date().addingTimeInterval(window))
+            return
+        }
+        if let body, statusCode != 401,
+           let text = String(data: body, encoding: .utf8),
+           text.contains("too_many_requests") || text.contains("rate_limit") {
+            limitedUntil = max(limitedUntil ?? .distantPast, Date().addingTimeInterval(60))
+            return
+        }
+        if (200..<300).contains(statusCode), Date() > (limitedUntil ?? .distantPast) {
+            limitedUntil = nil
+        }
+    }
+}
+
 final class KDriveService: ObservableObject {
     static let shared = KDriveService()
     static let concurrentUploadLimit = 4
@@ -129,6 +166,8 @@ final class KDriveService: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
+
+        KDriveRateLimitCenter.register(response: httpResponse, body: data)
 
         if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
         if httpResponse.statusCode == 404 { throw KDriveError.driveNotFound }
@@ -172,7 +211,8 @@ final class KDriveService: ObservableObject {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
             }
             if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
-            guard (200..<300).contains(httpResponse.statusCode) else {
+                        KDriveRateLimitCenter.register(response: httpResponse, body: data)
+guard (200..<300).contains(httpResponse.statusCode) else {
                 if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
                    let description = decoded.error?.description {
                     LogCenter.err(L("kDrive : listing des dossiers échoué (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: folder listing failed (HTTP \(httpResponse.statusCode)): \(description)"))
@@ -243,7 +283,8 @@ final class KDriveService: ObservableObject {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
             }
             if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
-            guard (200..<300).contains(httpResponse.statusCode) else {
+                        KDriveRateLimitCenter.register(response: httpResponse, body: data)
+guard (200..<300).contains(httpResponse.statusCode) else {
                 if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<[KDriveFolderItem]>.self, from: data),
                    let description = decoded.error?.description {
                     LogCenter.err(L("kDrive : listing des fichiers échoué (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: file listing failed (HTTP \(httpResponse.statusCode)): \(description)"))
@@ -298,7 +339,8 @@ final class KDriveService: ObservableObject {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
         if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
-        guard (200..<300).contains(httpResponse.statusCode) else {
+                    KDriveRateLimitCenter.register(response: httpResponse, body: data)
+guard (200..<300).contains(httpResponse.statusCode) else {
             if let decoded = try? JSONDecoder().decode(KDriveAPIResponse<KDriveFolderItem>.self, from: data),
                let description = decoded.error?.description {
                 LogCenter.err(L("kDrive : création du dossier « \(cleanName) » échouée (HTTP \(httpResponse.statusCode)) : \(description)", "kDrive: creating folder “\(cleanName)” failed (HTTP \(httpResponse.statusCode)): \(description)"))
@@ -389,6 +431,8 @@ final class KDriveService: ObservableObject {
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
+
+        KDriveRateLimitCenter.register(response: httpResponse, body: data)
         if httpResponse.statusCode == 401 { throw KDriveError.authenticationFailed }
         if httpResponse.statusCode == 404 {
             throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
@@ -577,6 +621,9 @@ private enum KDriveConnectionStatus {
 }
 
 struct KDriveSettingsSection: View {
+    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
+    @State private var now = Date()
+    private let rateLimitTicker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
     @AppStorage("kDriveDirectoryId") private var directoryId = "1"
@@ -652,6 +699,21 @@ struct KDriveSettingsSection: View {
             }
             .disabled(!configured || isTestingConnection)
 
+            if let until = rateLimit.limitedUntil, until > now {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(L("kDrive limité (rate limit actif)", "kDrive rate-limited"), systemImage: "hourglass")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                    Text(L("Reprise estimée : \(until.formatted(date: .omitted, time: .standard))", "Estimated resume: \(until.formatted(date: .omitted, time: .standard))"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Label(L("kDrive opérationnel (aucun rate limit)", "kDrive operational (no rate limit)"), systemImage: "checkmark.circle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.green)
+            }
+
             if let status = connectionStatus {
                 switch status {
                 case .success(let name):
@@ -666,6 +728,7 @@ struct KDriveSettingsSection: View {
             Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
         }
         .errorAlert(connectionError)
+        .onReceive(rateLimitTicker) { tick in now = tick }
         .onChange(of: token) { _ in connectionStatus = nil }
         .onChange(of: driveId) { _ in connectionStatus = nil }
     }
