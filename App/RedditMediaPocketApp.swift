@@ -526,7 +526,7 @@ struct ContentView: View {
             // Dernier item de la barre : rangé dans le menu « … » du système,
             // l'envoi vers kDrive y apparaît comme une action à plat.
             ToolbarItem(placement: .navigationBarTrailing) {
-                KDriveCollectionUploadAction(
+                KDriveCollectionUploadButton(
                     files: model.files,
                     collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
                 )
