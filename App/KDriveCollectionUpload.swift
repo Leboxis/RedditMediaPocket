@@ -667,11 +667,13 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
-        // Chunks en parallèle, mais sobres : chaque requête chunk compte dans
-        // la limite officielle de 60 req/min (pacing global en amont via
-        // `waitForRequestSlot`), donc on limite la concurrence pour ne pas
-        // épuiser le budget en rafale et provoquer des 429.
-        let chunkConcurrency = 3
+        // Chunks en parallèle : chaque connexion est bridée côté serveur
+        // (~100 Ko/s observés), donc le débit vient du nombre de requêtes
+        // simultanées. Les chunks de 100 Mo divisent par 4 le nombre total de
+        // requêtes par rapport à des chunks de 25 Mo, et le pacing global
+        // (`waitForRequestSlot`, 50 req/min) empêche d'épuiser la limite
+        // officielle de 60 req/min : une concurrence de 6 reste sûre.
+        let chunkConcurrency = 6
         let maxChunkAttempts = 5
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
@@ -724,6 +726,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
                         try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     }
                 } catch let urlError as URLError {
+                    // Annulation (bouton Arrêt) : URLError(.cancelled) n'est
+                    // pas une erreur transitoire, on propage sans relancer ni
+                    // attendre (sinon l'arrêt continue de logger des retries).
+                    if urlError.code == .cancelled || Task.isCancelled { throw urlError }
                     lastError = urlError
                     if attempt == maxChunkAttempts { throw urlError }
                     let wait = min(2.0 * pow(2.0, Double(attempt - 1)), 120)
