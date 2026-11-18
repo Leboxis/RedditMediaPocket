@@ -239,6 +239,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// jusqu'au lot suivant : leurs octets comptent dans la progression.
     private var sent: [Int: Int64] = [:]
     private var lastActivity: [Int: Date] = [:]
+    private var expectedBytes: [Int: Int64] = [:]
     /// Tâches en vol, suivies par le délégué : `URLSession.allTasks` est
     /// un accès asynchrone dans les SDK récents, on s'en passe.
     private var inflight: [Int: URLSessionTask] = [:]
@@ -257,6 +258,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
         lock.lock()
         sent[task.taskIdentifier] = totalBytesSent
         lastActivity[task.taskIdentifier] = Date()
+        expectedBytes[task.taskIdentifier] = totalBytesExpected
         inflight[task.taskIdentifier] = task
         lock.unlock()
     }
@@ -265,6 +267,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
         lock.lock()
         inflight.removeValue(forKey: task.taskIdentifier)
         lastActivity.removeValue(forKey: task.taskIdentifier)
+        expectedBytes.removeValue(forKey: task.taskIdentifier)
         if error != nil {
             sent.removeValue(forKey: task.taskIdentifier)
         }
@@ -283,6 +286,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
         lock.lock()
         sent.removeAll()
         lastActivity.removeAll()
+        expectedBytes.removeAll()
         inflight.removeAll()
         lock.unlock()
     }
@@ -290,15 +294,21 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// Coupe les envois sans progrès depuis `staleSeconds` : l'annulation
     /// fait échouer la requête, qui est relancée automatiquement par le
     /// contrôleur. C'est ce qui débloque les envois morts sans erreur.
+    /// kDrive bride chaque connexion (~100 Ko/s) : un gros envoi légitime peut
+    /// rester longtemps sans nouveau callback d'octets — le seuil de blocage
+    /// est donc élargi selon la taille attendue de la requête.
     func cancelStalledTasks(olderThan staleSeconds: TimeInterval) {
         lock.lock()
-        let cutoff = Date().addingTimeInterval(-staleSeconds)
-        let stale = inflight.filter { entry in
-            guard let last = lastActivity[entry.key] else { return false }
-            return last < cutoff
+        let now = Date()
+        let stale = inflight.compactMap { entry -> URLSessionTask? in
+            guard let last = lastActivity[entry.key] else { return nil }
+            let expected = max(1, expectedBytes[entry.key] ?? 0)
+            let allowance = max(staleSeconds, 3 * TimeInterval(expected) / 100_000)
+            guard last < now.addingTimeInterval(-allowance) else { return nil }
+            return entry.value
         }
         lock.unlock()
-        for (_, task) in stale {
+        for task in stale {
             let name = Self.fileName(of: task)
             LogCenter.kdrive(L("kDrive : envoi au point mort, annulation pour relance — \(name).", "kDrive: stalled upload, cancelling to retry — \(name)."))
             task.cancel()
@@ -665,13 +675,16 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-
-        for chunkIndex in 0..<totalChunks {
-            if Task.isCancelled { throw KDriveError.cancelled }
+        // Chunks envoyés en parallèle : kDrive bride chaque connexion à
+        // ~100 Ko/s, un débit multiplié par le nombre de requêtes simultanées
+        // (même principe que la limite de 60 req/minute reste respectée — le
+        // nombre de requêtes ne change pas, seul leur étalement).
+        let chunkConcurrency = 4
+        let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? handle.close() }
             try handle.seek(toOffset: UInt64(offset))
             guard let chunkData = try handle.read(upToCount: Int(length)), chunkData.count == Int(length) else {
                 throw KDriveError.uploadFailed(L("Lecture impossible du chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName).", "Could not read chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName)."))
@@ -696,6 +709,29 @@ private final class KDriveContinuousUploadController: ObservableObject {
             }
             guard (200..<300).contains(chunkHTTP.statusCode) else {
                 throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
+            }
+        }
+
+        var nextChunk = 0
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var activeChunks = 0
+            while nextChunk < totalChunks && activeChunks < chunkConcurrency {
+                if Task.isCancelled { throw KDriveError.cancelled }
+                let index = nextChunk
+                group.addTask { try await sendChunk(index) }
+                nextChunk += 1
+                activeChunks += 1
+            }
+            while activeChunks > 0 {
+                _ = try await group.next()
+                activeChunks -= 1
+                if nextChunk < totalChunks {
+                    if Task.isCancelled { throw KDriveError.cancelled }
+                    let index = nextChunk
+                    group.addTask { try await sendChunk(index) }
+                    nextChunk += 1
+                    activeChunks += 1
+                }
             }
         }
 
