@@ -2,7 +2,9 @@ import Foundation
 import MediaCore
 import SwiftUI
 
-struct KDriveCollectionUploadButton: View {
+/// Action « Envoyer vers kDrive » : elle apparaît à plat dans le menu « … »
+/// de la barre de navigation, sans sous-menu imbriqué.
+struct KDriveCollectionUploadAction: View {
     let files: [URL]
     let collectionLabel: String
 
@@ -24,7 +26,7 @@ struct KDriveCollectionUploadButton: View {
                 showNotConfigured = true
             }
         } label: {
-            Image(systemName: "icloud.and.arrow.up")
+            Label(L("Envoyer vers kDrive", "Upload to kDrive"), systemImage: "icloud.and.arrow.up")
         }
         .disabled(files.isEmpty)
         .accessibilityLabel(L("Envoyer les médias affichés vers kDrive", "Upload displayed media to kDrive"))
@@ -395,8 +397,30 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard fileSize > 0 else {
             throw KDriveError.uploadFailed(L("Fichier vide (0 octet) : \(originalName)", "Empty file (0 bytes): \(originalName)"))
         }
-        guard fileSize <= 1_000_000_000 else {
-            throw KDriveError.uploadFailed(L("Fichier trop volumineux pour l'envoi direct (> 1 Go) : \(originalName)", "File too large for direct upload (> 1 GB): \(originalName)"))
+        // Au-delà de 100 Mo, l'API kDrive refuse l'envoi direct : on passe par
+        // une session de chunks, comme les clients officiels (rclone, apps
+        // Infomaniak) — pas de limite de taille jusqu'à 10 000 chunks.
+        if fileSize > 100_000_000 {
+            let safeName = FilenamePolicy.kDriveFileName(originalName)
+            do {
+                try await performChunkedUpload(
+                    fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
+                    token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+                )
+            } catch let error as KDriveError {
+                if case .serverError(let code, _) = error, code == 422 {
+                    let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
+                    if fallback != safeName {
+                        try await performChunkedUpload(
+                            fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
+                            token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+                        )
+                        return
+                    }
+                }
+                throw error
+            }
+            return
         }
         let safeName = FilenamePolicy.kDriveFileName(originalName)
         do {
@@ -459,6 +483,142 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
+        }
+    }
+
+    /// Envoi par session de chunks (API officielle kDrive, fichiers > 100 Mo) :
+    /// ouverture de session sur l'API, envoi des chunks sur l'hôte `upload_url`
+    /// renvoyé par l'ouverture, finalisation sur l'API. Les chunks partent en
+    /// parallèle (kDrive bride chaque connexion, le débit passe par le nombre
+    /// de requêtes simultanées).
+    nonisolated private static func performChunkedUpload(
+        fileURL: URL,
+        remoteFileName: String,
+        fileSize: Int64,
+        token cleanToken: String,
+        driveId cleanDriveId: String,
+        directoryId cleanDirectoryId: String
+    ) async throws {
+        let minimumChunkSize: Int64 = 10_000_000
+        let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
+        let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
+
+        struct StartReply: Decodable {
+            struct StartData: Decodable {
+                let token: String?
+                let uploadURL: String?
+                let uploadUrl: String?
+                enum CodingKeys: String, CodingKey {
+                    case token
+                    case uploadURL = "upload_url"
+                    case uploadUrl = "uploadUrl"
+                }
+            }
+            let data: StartData?
+        }
+
+        guard let startURL = URL(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/start") else {
+            throw KDriveError.invalidURL
+        }
+        var startRequest = URLRequest(url: startURL)
+        startRequest.httpMethod = "POST"
+        startRequest.timeoutInterval = 60
+        startRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let startBody = try JSONSerialization.data(withJSONObject: [
+            "file_name": remoteFileName,
+            "directory_id": Int(cleanDirectoryId) ?? 1,
+            "conflict": "version",
+            "total_chunks": totalChunks,
+            "total_size": Int(fileSize)
+        ])
+        let (startData, startResponse) = try await URLSession.shared.upload(for: startRequest, from: startBody)
+        guard let startHTTP = startResponse as? HTTPURLResponse else {
+            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+        }
+        guard (200..<300).contains(startHTTP.statusCode) else {
+            throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
+        }
+        let reply = try JSONDecoder().decode(StartReply.self, from: startData)
+        guard let sessionToken = reply.data?.token, !sessionToken.isEmpty else {
+            throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
+        }
+        let chunkHost = (reply.data?.uploadURL ?? reply.data?.uploadUrl)
+            .flatMap { URLComponents(string: $0)?.host }
+
+        LogCenter.kdrive(L("kDrive : session de chunks ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunk session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
+
+        let sendChunk: (Int) async throws -> Void = { chunkIndex in
+            let offset = Int64(chunkIndex) * chunkSize
+            let length = min(chunkSize, fileSize - offset)
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(offset))
+            guard let chunkData = try handle.read(upToCount: Int(length)), chunkData.count == Int(length) else {
+                throw KDriveError.uploadFailed(L("Lecture impossible du chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName).", "Could not read chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName)."))
+            }
+
+            var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/chunk")
+            if let chunkHost { components?.host = chunkHost }
+            components?.queryItems = [
+                URLQueryItem(name: "chunk_number", value: String(chunkIndex + 1)),
+                URLQueryItem(name: "chunk_size", value: String(length))
+            ]
+            guard let chunkURL = components?.url else { throw KDriveError.invalidURL }
+            var chunkRequest = URLRequest(url: chunkURL)
+            chunkRequest.httpMethod = "POST"
+            chunkRequest.timeoutInterval = 600
+            chunkRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+            chunkRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+            let (_, chunkResponse) = try await URLSession.shared.upload(for: chunkRequest, from: chunkData)
+            guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
+                throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+            }
+            guard (200..<300).contains(chunkHTTP.statusCode) else {
+                throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
+            }
+        }
+
+        let chunkConcurrency = 4
+        var nextChunk = 0
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var activeChunks = 0
+            while nextChunk < totalChunks && activeChunks < chunkConcurrency {
+                if Task.isCancelled { throw KDriveError.cancelled }
+                let index = nextChunk
+                group.addTask { try await sendChunk(index) }
+                nextChunk += 1
+                activeChunks += 1
+            }
+            while activeChunks > 0 {
+                _ = try await group.next()
+                activeChunks -= 1
+                if nextChunk < totalChunks {
+                    if Task.isCancelled { throw KDriveError.cancelled }
+                    let index = nextChunk
+                    group.addTask { try await sendChunk(index) }
+                    nextChunk += 1
+                    activeChunks += 1
+                }
+            }
+        }
+
+        guard let finishURL = URL(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/finish") else {
+            throw KDriveError.invalidURL
+        }
+        var finishRequest = URLRequest(url: finishURL)
+        finishRequest.httpMethod = "POST"
+        finishRequest.timeoutInterval = 120
+        finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+        finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let finishBody = Data("{}".utf8)
+        let (_, finishResponse) = try await URLSession.shared.upload(for: finishRequest, from: finishBody)
+        guard let finishHTTP = finishResponse as? HTTPURLResponse else {
+            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+        }
+        guard (200..<300).contains(finishHTTP.statusCode) else {
+            throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
         }
     }
 
