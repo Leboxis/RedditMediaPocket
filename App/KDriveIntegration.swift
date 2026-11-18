@@ -97,7 +97,6 @@ private struct KDriveUploadOutcome {
 }
 
 @MainActor
-@MainActor
 final class KDriveRateLimitCenter: ObservableObject {
     static let shared = KDriveRateLimitCenter()
 
