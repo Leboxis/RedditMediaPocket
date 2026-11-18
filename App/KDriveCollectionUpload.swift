@@ -805,7 +805,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
         let src = try FileHandle(forReadingFrom: fileURL)
         defer { try? src.close() }
         try src.seek(toOffset: UInt64(offset))
-        let dst = try FileHandle(forWritingAtPath: tmpURL.path)
+        // `FileHandle(forWritingAtPath:)` est un initialiseur failable (FileHandle?).
+        guard let dst = FileHandle(forWritingAtPath: tmpURL.path) else {
+            throw KDriveError.uploadFailed(L("Ouverture du chunk temporaire en écriture impossible.", "Could not open temporary chunk file for writing."))
+        }
         defer { try? dst.close() }
         var remaining = length
         while remaining > 0 {
