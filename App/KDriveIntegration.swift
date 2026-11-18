@@ -130,6 +130,9 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// serveur (429 / `Retry-After`) soit passée.
     nonisolated static func waitForRequestSlot() async {
         while true {
+            // Arrêt demandé : on sort tout de suite au lieu d'attendre le
+            // créneau (le `try?` ci-dessous avale le CancellationError).
+            if Task.isCancelled { return }
             let wait = await MainActor.run { shared.reserveSlot() }
             if wait <= 0 { return }
             try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.1) * 1_000_000_000))
