@@ -621,6 +621,11 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 let token: String?
                 let uploadURL: String?
                 let uploadUrl: String?
+                enum CodingKeys: String, CodingKey {
+                    case token
+                    case uploadURL = "upload_url"
+                    case uploadUrl = "uploadUrl"
+                }
             }
             let data: StartData?
         }
@@ -654,6 +659,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         let chunkHost = (reply.data?.uploadURL ?? reply.data?.uploadUrl)
             .flatMap { URLComponents(string: $0)?.host }
+        if chunkHost == nil {
+            LogCenter.kdrive(L("kDrive : upload_url absente de la réponse de session — chunks envoyés sur api.infomaniak.com pour \(remoteFileName).", "kDrive: upload_url missing from session response — chunks sent to api.infomaniak.com for \(remoteFileName)."))
+        }
 
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
