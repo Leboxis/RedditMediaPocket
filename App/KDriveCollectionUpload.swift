@@ -617,7 +617,11 @@ private final class KDriveContinuousUploadController: ObservableObject {
         let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
 
         struct StartReply: Decodable {
-            struct StartData: Decodable { let token: String? }
+            struct StartData: Decodable {
+                let token: String?
+                let uploadURL: String?
+                let uploadUrl: String?
+            }
             let data: StartData?
         }
 
@@ -648,6 +652,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
             throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
         }
 
+        let chunkHost = (reply.data?.uploadURL ?? reply.data?.uploadUrl)
+            .flatMap { URLComponents(string: $0)?.host }
+
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
         let handle = try FileHandle(forReadingFrom: fileURL)
@@ -663,6 +670,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             }
 
             var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/chunk")
+            if let chunkHost { components?.host = chunkHost }
             components?.queryItems = [
                 URLQueryItem(name: "chunk_number", value: String(chunkIndex + 1)),
                 URLQueryItem(name: "chunk_size", value: String(length))
