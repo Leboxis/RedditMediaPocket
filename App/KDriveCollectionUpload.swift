@@ -494,11 +494,17 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 errorMessage: nil
             )
         } catch {
-            // Une erreur réseau (timeout, connexion coupée) mérite une relance
-            // : le fichier n'a jamais été écrit côté serveur, réessayer une
-            // fois évite un échec définitif sur un incident passager.
-            if error is URLError, !Task.isCancelled {
-                LogCenter.kdrive(L("kDrive : erreur réseau sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: network error on \(fileURL.lastPathComponent), retrying…"))
+            // Une erreur réseau (timeout, connexion coupée) ou un refus
+            // transitoire du serveur (429, 5xx) mérite une relance : le fichier
+            // n'a jamais été écrit côté serveur, réessayer une fois évite un
+            // échec définitif sur un incident passager.
+            let retryable: Bool = {
+                if error is URLError { return true }
+                if case KDriveError.serverError(let code, _) = error { return code == 429 || code >= 500 }
+                return false
+            }()
+            if retryable, !Task.isCancelled {
+                LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
                 do {
                     try await performUpload(
                         fileURL: fileURL,
@@ -548,9 +554,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
         let safeName = FilenamePolicy.kDriveFileName(originalName)
 
         // Au-delà de 100 Mo, l'envoi direct est déconseillé par Infomaniak : on
-        // passe par une session chunkée (chunks de 10 Mo, chaque requête repart
-        // sur une connexion neuve — c'est aussi ce qu'utilise rclone). Cela
-        // lève au passage l'ancienne limite de 1 Go.
+        // passe par une session chunkée (gros chunks pour limiter le nombre de
+        // requêtes face à la limite officielle de 60 req/min). Cela lève au
+        // passage l'ancienne limite de 1 Go.
         if fileSize > 100_000_000 {
             try await performChunkedUpload(
                 fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
@@ -585,9 +591,11 @@ private final class KDriveContinuousUploadController: ObservableObject {
     }
 
     /// Envoi chunké (fichiers > 100 Mo) : ouverture d'une session kDrive,
-    /// envoi séquentiel de chunks de 10 Mo, fermeture qui assemble le
-    /// fichier. Chaque chunk est une requête indépendante — une connexion
-    /// neuve, donc pas de bridage hérité d'une connexion unique.
+    /// envoi de gros chunks (pour rester loin de la limite de 60 requêtes/min),
+    /// fermeture qui assemble le fichier. Chaque chunk est une requête
+    /// indépendante, relancée individuellement en cas de 429/5xx (renvoyer le
+    /// même `chunk_number` est sans risque : un chunk refusé n'est jamais
+    /// assemblé côté serveur).
     nonisolated private static func performChunkedUpload(
         fileURL: URL,
         remoteFileName: String,
@@ -596,9 +604,11 @@ private final class KDriveContinuousUploadController: ObservableObject {
         driveId cleanDriveId: String,
         directoryId cleanDirectoryId: String
     ) async throws {
-        // Chunks de 10 Mo minimum, augmentés si le fichier depasse la limite
-        // de 10 000 chunks par session.
-        let minimumChunkSize: Int64 = 25_000_000
+        // Chunks de 100 Mo minimum (l'API accepte jusqu'à 1 Go par requête),
+        // augmentés si le fichier dépasse la limite de 10 000 chunks par
+        // session. De gros chunks = moins de requêtes = moins de pression sur
+        // la limite officielle de 60 req/min.
+        let minimumChunkSize: Int64 = 100_000_000
         let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
         let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
 
@@ -631,6 +641,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             "total_chunks": totalChunks,
             "total_size": Int(fileSize)
         ])
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (startData, startResponse) = try await KDriveUploadSession.session.upload(for: startRequest, from: startBody)
         guard let startHTTP = startResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -656,21 +667,21 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
-        // Chunks envoyés en parallèle : kDrive bride chaque connexion à
-        // ~100 Ko/s, un débit multiplié par le nombre de requêtes simultanées
-        // (même principe que la limite de 60 req/minute reste respectée — le
-        // nombre de requêtes ne change pas, seul leur étalement).
-        let chunkConcurrency = 6
+        // Chunks en parallèle, mais sobres : chaque requête chunk compte dans
+        // la limite officielle de 60 req/min (pacing global en amont via
+        // `waitForRequestSlot`), donc on limite la concurrence pour ne pas
+        // épuiser le budget en rafale et provoquer des 429.
+        let chunkConcurrency = 3
+        let maxChunkAttempts = 5
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
             let chunkStarted = Date()
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
-            try handle.seek(toOffset: UInt64(offset))
-            guard let chunkData = try handle.read(upToCount: Int(length)), chunkData.count == Int(length) else {
-                throw KDriveError.uploadFailed(L("Lecture impossible du chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName).", "Could not read chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName)."))
-            }
+            // Chunk extrait dans un fichier temporaire : l'upload se fait en
+            // streaming depuis le disque, la RAM ne grimpe pas avec la taille
+            // des chunks (100 Mo et plus).
+            let chunkFileURL = try Self.extractChunkToTempFile(fileURL: fileURL, offset: offset, length: length)
+            defer { try? FileManager.default.removeItem(at: chunkFileURL) }
 
             var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/chunk")
             if let chunkHost { components?.host = chunkHost }
@@ -685,14 +696,42 @@ private final class KDriveContinuousUploadController: ObservableObject {
             chunkRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             chunkRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-            let (_, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, from: chunkData)
-            guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
-                throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+            // Relance du chunk lui-même sur 429/5xx/erreur réseau : attente
+            // `Retry-After` (aussi prise en compte par le pacer via
+            // `limitedUntil`) puis backoff exponentiel. Renvoyer le même
+            // `chunk_number` est sans risque.
+            var lastError: Error?
+            for attempt in 1...maxChunkAttempts {
+                if Task.isCancelled { throw KDriveError.cancelled }
+                await KDriveRateLimitCenter.waitForRequestSlot()
+                do {
+                    let (_, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, fromFile: chunkFileURL)
+                    guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
+                        throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+                    }
+                    KDriveRateLimitCenter.register(response: chunkHTTP, body: nil)
+                    if (200..<300).contains(chunkHTTP.statusCode) {
+                        lastError = nil
+                        break
+                    }
+                    lastError = KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
+                    // 429 et 5xx sont transitoires ; tout autre code est définitif.
+                    if chunkHTTP.statusCode != 429 && chunkHTTP.statusCode < 500 { throw lastError! }
+                    if attempt < maxChunkAttempts {
+                        let retryAfter = chunkHTTP.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
+                        let wait = min(retryAfter ?? (2.0 * pow(2.0, Double(attempt - 1))), 120)
+                        LogCenter.kdrive(L("kDrive : chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName) en HTTP \(chunkHTTP.statusCode), nouvelle tentative dans \(Int(wait)) s.", "kDrive: chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName) got HTTP \(chunkHTTP.statusCode), retrying in \(Int(wait)) s."))
+                        try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                    }
+                } catch let urlError as URLError {
+                    lastError = urlError
+                    if attempt == maxChunkAttempts { throw urlError }
+                    let wait = min(2.0 * pow(2.0, Double(attempt - 1)), 120)
+                    LogCenter.kdrive(L("kDrive : erreur réseau sur le chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName), nouvelle tentative dans \(Int(wait)) s.", "kDrive: network error on chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName), retrying in \(Int(wait)) s."))
+                    try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+                }
             }
-            KDriveRateLimitCenter.register(response: chunkHTTP, body: nil)
-            guard (200..<300).contains(chunkHTTP.statusCode) else {
-                throw KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
-            }
+            if let lastError { throw lastError }
             let chunkElapsed = Date().timeIntervalSince(chunkStarted)
             let chunkSpeed = chunkElapsed > 0 ? Int64(TimeInterval(length) / chunkElapsed) : 0
             LogCenter.kdrive(L("kDrive : chunk \(chunkIndex + 1)/\(totalChunks) envoyé pour \(remoteFileName) (\(length / 1_000_000) Mo en \(String(format: "%.0f", chunkElapsed)) s ≈ \(chunkSpeed / 1_000) Ko/s).", "kDrive: chunk \(chunkIndex + 1)/\(totalChunks) sent for \(remoteFileName) (\(length / 1_000_000) MB in \(String(format: "%.0f", chunkElapsed)) s ≈ \(chunkSpeed / 1_000) KB/s)."))
@@ -730,6 +769,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let finishBody = Data("{}".utf8)
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (finishData, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
         guard let finishHTTP = finishResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -751,6 +791,32 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
             }
         }
+    }
+
+    /// Extrait l'intervalle [offset, offset+length[ du fichier source vers un
+    /// fichier temporaire, pour uploader le chunk en streaming depuis le disque
+    /// (`upload(for:fromFile:)`) sans charger tout le chunk en mémoire.
+    nonisolated private static func extractChunkToTempFile(fileURL: URL, offset: Int64, length: Int64) throws -> URL {
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kdrive-chunk-\(UUID().uuidString).bin")
+        guard FileManager.default.createFile(atPath: tmpURL.path, contents: nil) else {
+            throw KDriveError.uploadFailed(L("Écriture du chunk temporaire impossible.", "Could not create temporary chunk file."))
+        }
+        let src = try FileHandle(forReadingFrom: fileURL)
+        defer { try? src.close() }
+        try src.seek(toOffset: UInt64(offset))
+        let dst = try FileHandle(forWritingAtPath: tmpURL.path)
+        defer { try? dst.close() }
+        var remaining = length
+        while remaining > 0 {
+            let block = Int(min(remaining, 4_000_000))
+            guard let data = try src.read(upToCount: block), !data.isEmpty else {
+                throw KDriveError.uploadFailed(L("Lecture impossible du chunk à l'offset \(offset) de \(fileURL.lastPathComponent).", "Could not read chunk at offset \(offset) of \(fileURL.lastPathComponent)."))
+            }
+            try dst.write(contentsOf: data)
+            remaining -= Int64(data.count)
+        }
+        return tmpURL
     }
 
     nonisolated private static func performSingleUpload(
@@ -787,6 +853,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))

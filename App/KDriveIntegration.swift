@@ -107,6 +107,10 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
+    /// Marge de sécurité sous la limite officielle : toutes les requêtes
+    /// kDrive (chunks compris) passent par `waitForRequestSlot` avant d'être
+    /// envoyées, pour ne jamais l'atteindre et éviter les 429.
+    static let pacingLimitPerMinute = 50
     private init() {}
 
     /// À appeler après chaque réponse kDrive (listing, envoi, test…).
@@ -118,6 +122,32 @@ final class KDriveRateLimitCenter: ObservableObject {
         Task { @MainActor in
             shared.sync(statusCode: statusCode, retryAfter: retryAfter, body: body)
         }
+    }
+
+    /// À appeler avant chaque requête kDrive (listing, envoi, chunk, test…)
+    /// : bloque jusqu'à ce qu'un créneau soit disponible dans la fenêtre
+    /// glissante de pacing, ou que la fenêtre de rate limit imposée par le
+    /// serveur (429 / `Retry-After`) soit passée.
+    nonisolated static func waitForRequestSlot() async {
+        while true {
+            let wait = await MainActor.run { shared.reserveSlot() }
+            if wait <= 0 { return }
+            try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.1) * 1_000_000_000))
+        }
+    }
+
+    /// Enregistre le départ d'une requête et renvoie le délai (en s) avant le
+    /// prochain créneau ; 0 si la requête peut partir immédiatement.
+    private func reserveSlot() -> TimeInterval {
+        let now = Date()
+        requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
+        if let until = limitedUntil, until > now { return until.timeIntervalSince(now) }
+        requestDates.append(now)
+        requestsLastMinute = requestDates.count
+        if requestDates.count > Self.pacingLimitPerMinute, let oldest = requestDates.first {
+            return max(0.1, oldest.addingTimeInterval(60).timeIntervalSince(now))
+        }
+        return 0
     }
 
     /// Codes d'erreur officiels (`error.code`) qui traduisent un rate limit.
@@ -137,7 +167,8 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
         let now = Date()
-        requestDates.append(now)
+        // `requestDates` est alimenté par `reserveSlot` (avant l'envoi) :
+        // ne pas compter deux fois la même requête ici.
         requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
         requestsLastMinute = requestDates.count
 
@@ -195,6 +226,7 @@ final class KDriveService: ObservableObject {
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -239,6 +271,7 @@ final class KDriveService: ObservableObject {
             request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+            await KDriveRateLimitCenter.waitForRequestSlot()
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -311,6 +344,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
             request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+            await KDriveRateLimitCenter.waitForRequestSlot()
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -367,6 +401,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["name": cleanName])
 
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
@@ -460,6 +495,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
+        await KDriveRateLimitCenter.waitForRequestSlot()
         let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
