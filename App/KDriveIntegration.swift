@@ -378,13 +378,10 @@ final class KDriveService: ObservableObject {
 
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
-        // Sans timeout généreux, un upload lent (le timer compte les données
-        // reçues, inexistantes pendant un envoi) était tué en pleine transfert.
-        request.timeoutInterval = 600
         request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
+        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
