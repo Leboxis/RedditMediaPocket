@@ -222,6 +222,7 @@ private struct KDriveCollectionUploadFlow: View {
 }
 
 private struct KDriveContinuousUploadOutcome {
+    let fileURL: URL
     let fileName: String
     let succeeded: Bool
     let errorMessage: String?
@@ -306,6 +307,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var totalBytes: Int64 = 0
     @Published var speedBytesPerSecond: Double = 0
     @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
+    @Published private(set) var uploadedFileURLs: [URL] = []
 
     private var activeTask: Task<Void, Never>?
 
@@ -320,6 +322,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         KDriveUploadSession.shared.reset()
         LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
+        uploadedFileURLs = []
         completedCount = 0
         totalCount = files.count
         progress = 0
@@ -391,6 +394,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
                     if outcome.succeeded {
                         success += 1
+                        uploadedFileURLs.append(outcome.fileURL)
                     } else {
                         failed += 1
                         LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
@@ -453,6 +457,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
     ) async -> KDriveContinuousUploadOutcome {
         if Task.isCancelled {
             return KDriveContinuousUploadOutcome(
+                fileURL: fileURL,
                 fileName: fileURL.lastPathComponent,
                 succeeded: false,
                 errorMessage: KDriveError.cancelled.localizedDescription
@@ -461,6 +466,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             return KDriveContinuousUploadOutcome(
+                fileURL: fileURL,
                 fileName: fileURL.lastPathComponent,
                 succeeded: false,
                 errorMessage: L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
@@ -482,6 +488,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             let speed = elapsed > 0 ? Int64(Double(sizeBytes) / elapsed) : 0
             LogCenter.kdrive(L("kDrive : envoyé — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo en \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) Ko/s).", "kDrive: uploaded — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB in \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) KB/s)."))
             return KDriveContinuousUploadOutcome(
+                fileURL: fileURL,
                 fileName: fileURL.lastPathComponent,
                 succeeded: true,
                 errorMessage: nil
@@ -500,6 +507,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                         directoryId: directoryId
                     )
                     return KDriveContinuousUploadOutcome(
+                        fileURL: fileURL,
                         fileName: fileURL.lastPathComponent,
                         succeeded: true,
                         errorMessage: nil
@@ -509,6 +517,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 }
             }
             return KDriveContinuousUploadOutcome(
+                fileURL: fileURL,
                 fileName: fileURL.lastPathComponent,
                 succeeded: false,
                 errorMessage: error.localizedDescription
@@ -848,6 +857,8 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var successCount = 0
     @State private var failedCount = 0
     @State private var finalError: String?
+    @State private var showDeleteConfirm = false
+    @State private var deletedCount = 0
 
     var body: some View {
         NavigationStack {
@@ -871,6 +882,20 @@ private struct KDriveContinuousUploadSheet: View {
                         Text(L("\(skippedCount) déjà présent(s), ignoré(s).", "\(skippedCount) already present, skipped."))
                             .font(.subheadline)
                             .foregroundStyle(.green)
+                    }
+
+                    if deletedCount > 0 {
+                        Text(L("\(deletedCount) fichier(s) supprimé(s) du téléphone.", "\(deletedCount) file(s) deleted from the device."))
+                            .font(.subheadline)
+                            .foregroundStyle(.green)
+                    } else if !uploader.uploadedFileURLs.isEmpty {
+                        Button {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label(L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
                     }
                 } else {
                     ProgressView(value: uploader.progress)
@@ -935,6 +960,16 @@ private struct KDriveContinuousUploadSheet: View {
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
         }
+        .confirmationDialog(
+            L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone ?", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device?"),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(L("Supprimer", "Delete"), role: .destructive) { deleteUploadedFiles() }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Les fichiers envoyés avec succès seront supprimés définitivement du stockage de l'app (pas de corbeille). Ils restent bien sûr sur kDrive.", "Successfully uploaded files will be permanently removed from the app storage (no trash). They remain on kDrive."))
+        }
         .errorAlert(finalError)
         .presentationDetents([.medium])
         .interactiveDismissDisabled(uploader.isUploading)
@@ -967,5 +1002,21 @@ private struct KDriveContinuousUploadSheet: View {
             finalError = error
             finished = true
         }
+    }
+
+    private func deleteUploadedFiles() {
+        var deleted = 0
+        var failures = 0
+        for url in uploader.uploadedFileURLs where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                deleted += 1
+            } catch {
+                failures += 1
+                LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+            }
+        }
+        deletedCount = deleted
+        LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
     }
 }
