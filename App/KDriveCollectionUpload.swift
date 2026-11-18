@@ -589,7 +589,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
     ) async throws {
         // Chunks de 10 Mo minimum, augmentés si le fichier depasse la limite
         // de 10 000 chunks par session.
-        let minimumChunkSize: Int64 = 10_000_000
+        let minimumChunkSize: Int64 = 25_000_000
         let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
         let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
 
