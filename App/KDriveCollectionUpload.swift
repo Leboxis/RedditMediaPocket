@@ -250,7 +250,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// parallèles ne serviraient à rien (2 resteraient en file d'attente).
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.httpMaximumConnectionsPerHost = 16
+        configuration.httpMaximumConnectionsPerHost = 32
         return URLSession(configuration: configuration, delegate: KDriveUploadSession.shared, delegateQueue: nil)
     }()
 
