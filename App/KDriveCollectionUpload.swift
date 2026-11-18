@@ -97,6 +97,9 @@ private struct KDriveCollectionUploadFlow: View {
                         Text(targetFolderName)
                             .font(.subheadline.monospaced())
                             .foregroundStyle(.secondary)
+                        Text(L("Analyse des médias déjà présents…", "Scanning media already present…"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         Spacer()
                     }
                     .frame(maxWidth: .infinity)
@@ -144,6 +147,7 @@ private struct KDriveCollectionUploadFlow: View {
         let parentId = parentDirectoryId
         Task { @MainActor in
             do {
+                LogCenter.kdrive(L("kDrive : préparation du dossier « \(targetFolderName) » (parent \(parentId)).", "kDrive: preparing folder “\(targetFolderName)” (parent \(parentId))."))
                 let service = KDriveService.shared
                 let existing = try await service.fetchSubdirectories(
                     token: token,
@@ -201,12 +205,17 @@ private struct KDriveCollectionUploadFlow: View {
                     }
                 }
                 skippedCount = files.count - filtered.count
+                LogCenter.kdrive(L("kDrive : \(remoteNames.count) fichier(s) distant(s) analysé(s) — \(skippedCount) ignoré(s), \(filtered.count) à envoyer.", "kDrive: \(remoteNames.count) remote file(s) scanned — \(skippedCount) skipped, \(filtered.count) to upload."))
+                if filtered.isEmpty {
+                    LogCenter.kdrive(L("kDrive : rien à envoyer, tous les médias sont déjà présents.", "kDrive: nothing to upload, all media already present."))
+                }
                 pendingFiles = filtered
                 isPreparing = false
             } catch {
                 uploadDirectoryId = nil
                 isPreparing = false
                 errorMessage = error.localizedDescription
+                LogCenter.err(L("kDrive : échec de préparation du dossier « \(targetFolderName) » : \(error.localizedDescription)", "kDrive: folder preparation failed for “\(targetFolderName)”: \(error.localizedDescription)"))
             }
         }
     }
@@ -218,6 +227,72 @@ private struct KDriveContinuousUploadOutcome {
     let errorMessage: String?
 }
 
+/// Session URLSession dédiée aux envois kDrive : elle rapporte les octets
+/// réellement transmis (progression pendant l'envoi d'un fichier, pas
+/// seulement à sa fin) — sans elle, la fenêtre reste bloquée à « 0 sur N »
+/// tant qu'aucun fichier n'est terminé.
+final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
+    static let shared = KDriveUploadSession()
+
+    private let lock = NSLock()
+    /// taskIdentifier -> octets envoyés. Les tâches réussies y restent
+    /// jusqu'au lot suivant : leurs octets comptent dans la progression.
+    private var sent: [Int: Int64] = [:]
+    private var lastActivity: [Int: Date] = [:]
+    private var expectedBytes: [Int: Int64] = [:]
+    /// Tâches en vol, suivies par le délégué : `URLSession.allTasks` est
+    /// un accès asynchrone dans les SDK récents, on s'en passe.
+    private var inflight: [Int: URLSessionTask] = [:]
+
+    /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
+    /// accessible depuis plusieurs uploads concurrents. La configuration par
+    /// défaut plafonne à 6 connexions par hôte : sans cela, nos 8 flux
+    /// parallèles ne serviraient à rien (2 resteraient en file d'attente).
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpMaximumConnectionsPerHost = 16
+        return URLSession(configuration: configuration, delegate: KDriveUploadSession.shared, delegateQueue: nil)
+    }()
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend totalBytesExpected: Int64) {
+        lock.lock()
+        sent[task.taskIdentifier] = totalBytesSent
+        lastActivity[task.taskIdentifier] = Date()
+        expectedBytes[task.taskIdentifier] = totalBytesExpected
+        inflight[task.taskIdentifier] = task
+        lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        inflight.removeValue(forKey: task.taskIdentifier)
+        lastActivity.removeValue(forKey: task.taskIdentifier)
+        expectedBytes.removeValue(forKey: task.taskIdentifier)
+        if error != nil {
+            sent.removeValue(forKey: task.taskIdentifier)
+        }
+        lock.unlock()
+    }
+
+    /// Octets transmis du lot en cours (fichiers finis + en cours).
+    func sentTotal() -> Int64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return sent.values.reduce(0, +)
+    }
+
+    /// Nouveau lot : on repart de zéro.
+    func reset() {
+        lock.lock()
+        sent.removeAll()
+        lastActivity.removeAll()
+        expectedBytes.removeAll()
+        inflight.removeAll()
+        lock.unlock()
+    }
+
+}
+
 @MainActor
 private final class KDriveContinuousUploadController: ObservableObject {
     static let concurrentLimit = 4
@@ -227,6 +302,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var totalCount = 0
     @Published var progress = 0.0
     @Published var lastCompletedFileName = ""
+    @Published var uploadedBytes: Int64 = 0
+    @Published var totalBytes: Int64 = 0
+    @Published var speedBytesPerSecond: Double = 0
+    @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
 
     private var activeTask: Task<Void, Never>?
 
@@ -238,14 +317,45 @@ private final class KDriveContinuousUploadController: ObservableObject {
         completion: @escaping (_ successCount: Int, _ failedCount: Int, _ errorMessage: String?) -> Void
     ) {
         cancel()
+        KDriveUploadSession.shared.reset()
         LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
         completedCount = 0
         totalCount = files.count
         progress = 0
         lastCompletedFileName = ""
+        uploadedBytes = 0
+        speedBytesPerSecond = 0
+        totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
+        // Fichiers volumineux : 8 flux en parallèle — kDrive bride chaque
+        // connexion (~100 Ko/s observés), la bande passante passe par le
+        // nombre de flux. Petits fichiers : 4 seulement, pour rester loin
+        // de la limite API de 60 requêtes/minute.
+        let averageBytes = files.isEmpty ? 0 : totalBytes / Int64(files.count)
+        activeLimit = averageBytes >= 20_000_000 ? 8 : Self.concurrentLimit
 
         activeTask = Task {
+            // Supervision : progression par octets + vitesse. Sans elle, la
+            // fenêtre reste bloquée à « 0 sur N » tant qu'aucun fichier
+            // n'est terminé.
+            let monitor = Task {
+                var lastBytes: Int64 = 0
+                var lastDate = Date()
+                while !Task.isCancelled {
+                    let bytes = KDriveUploadSession.shared.sentTotal()
+                    let now = Date()
+                    let elapsed = now.timeIntervalSince(lastDate)
+                    if elapsed >= 1 {
+                        let instant = Double(bytes - lastBytes) / elapsed
+                        speedBytesPerSecond = instant * 0.5 + speedBytesPerSecond * 0.5
+                        lastBytes = bytes
+                        lastDate = now
+                    }
+                    uploadedBytes = bytes
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                }
+            }
+            defer { monitor.cancel() }
             var success = 0
             var failed = 0
             var completed = 0
@@ -253,7 +363,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
             await withTaskGroup(of: KDriveContinuousUploadOutcome.self) { group in
                 var nextIndex = 0
-                let initialCount = min(Self.concurrentLimit, files.count)
+                let initialCount = min(activeLimit, files.count)
 
                 for _ in 0..<initialCount {
                     let fileURL = files[nextIndex]
@@ -283,6 +393,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                         success += 1
                     } else {
                         failed += 1
+                        LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
                         if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
 
@@ -356,6 +467,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
             )
         }
 
+        let sizeBytes = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
+        LogCenter.kdrive(L("kDrive : envoi démarré — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo).", "kDrive: upload started — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB)."))
+        let startedAt = Date()
+
         do {
             try await performUpload(
                 fileURL: fileURL,
@@ -363,12 +478,36 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 driveId: driveId,
                 directoryId: directoryId
             )
+            let elapsed = Date().timeIntervalSince(startedAt)
+            let speed = elapsed > 0 ? Int64(Double(sizeBytes) / elapsed) : 0
+            LogCenter.kdrive(L("kDrive : envoyé — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo en \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) Ko/s).", "kDrive: uploaded — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB in \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) KB/s)."))
             return KDriveContinuousUploadOutcome(
                 fileName: fileURL.lastPathComponent,
                 succeeded: true,
                 errorMessage: nil
             )
         } catch {
+            // Une erreur réseau (timeout, connexion coupée) mérite une relance
+            // : le fichier n'a jamais été écrit côté serveur, réessayer une
+            // fois évite un échec définitif sur un incident passager.
+            if error is URLError, !Task.isCancelled {
+                LogCenter.kdrive(L("kDrive : erreur réseau sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: network error on \(fileURL.lastPathComponent), retrying…"))
+                do {
+                    try await performUpload(
+                        fileURL: fileURL,
+                        token: token,
+                        driveId: driveId,
+                        directoryId: directoryId
+                    )
+                    return KDriveContinuousUploadOutcome(
+                        fileName: fileURL.lastPathComponent,
+                        succeeded: true,
+                        errorMessage: nil
+                    )
+                } catch {
+                    // On tombe dans le retour d'échec ci-dessous.
+                }
+            }
             return KDriveContinuousUploadOutcome(
                 fileName: fileURL.lastPathComponent,
                 succeeded: false,
@@ -397,32 +536,20 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard fileSize > 0 else {
             throw KDriveError.uploadFailed(L("Fichier vide (0 octet) : \(originalName)", "Empty file (0 bytes): \(originalName)"))
         }
-        // Au-delà de 100 Mo, l'API kDrive refuse l'envoi direct : on passe par
-        // une session de chunks, comme les clients officiels (rclone, apps
-        // Infomaniak) — pas de limite de taille jusqu'à 10 000 chunks.
+        let safeName = FilenamePolicy.kDriveFileName(originalName)
+
+        // Au-delà de 100 Mo, l'envoi direct est déconseillé par Infomaniak : on
+        // passe par une session chunkée (chunks de 10 Mo, chaque requête repart
+        // sur une connexion neuve — c'est aussi ce qu'utilise rclone). Cela
+        // lève au passage l'ancienne limite de 1 Go.
         if fileSize > 100_000_000 {
-            let safeName = FilenamePolicy.kDriveFileName(originalName)
-            do {
-                try await performChunkedUpload(
-                    fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
-                    token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
-                )
-            } catch let error as KDriveError {
-                if case .serverError(let code, _) = error, code == 422 {
-                    let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
-                    if fallback != safeName {
-                        try await performChunkedUpload(
-                            fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
-                            token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
-                        )
-                        return
-                    }
-                }
-                throw error
-            }
+            try await performChunkedUpload(
+                fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
+                token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
+            )
             return
         }
-        let safeName = FilenamePolicy.kDriveFileName(originalName)
+
         do {
             try await performSingleUpload(
                 fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
@@ -432,6 +559,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             if case .serverError(let code, let message) = error, code == 422 {
                 let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
                 if fallback != safeName {
+                    LogCenter.kdrive(L("kDrive : nom refusé (422) pour \(originalName), nouvelle tentative avec \(fallback).", "kDrive: name rejected (422) for \(originalName), retrying with \(fallback)."))
                     do {
                         try await performSingleUpload(
                             fileURL: fileURL, remoteFileName: fallback, fileSize: fileSize,
@@ -447,50 +575,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
     }
 
-    nonisolated private static func performSingleUpload(
-        fileURL: URL,
-        remoteFileName: String,
-        fileSize: Int64,
-        token cleanToken: String,
-        driveId cleanDriveId: String,
-        directoryId cleanDirectoryId: String
-    ) async throws {
-        var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
-        components?.queryItems = [
-            URLQueryItem(name: "directory_id", value: cleanDirectoryId),
-            URLQueryItem(name: "file_name", value: remoteFileName),
-            URLQueryItem(name: "total_size", value: String(fileSize)),
-            URLQueryItem(name: "conflict", value: "version")
-        ]
-        guard let requestURL = components?.url else {
-            throw KDriveError.invalidURL
-        }
-
-        var request = URLRequest(url: requestURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-
-        let (data, response) = try await URLSession.shared.upload(for: request, fromFile: fileURL)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
-        }
-        if httpResponse.statusCode == 401 {
-            throw KDriveError.authenticationFailed
-        }
-        if httpResponse.statusCode == 404 {
-            throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
-        }
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
-        }
-    }
-
-    /// Envoi par session de chunks (API officielle kDrive, fichiers > 100 Mo) :
-    /// ouverture de session sur l'API, envoi des chunks sur l'hôte `upload_url`
-    /// renvoyé par l'ouverture, finalisation sur l'API. Les chunks partent en
-    /// parallèle (kDrive bride chaque connexion, le débit passe par le nombre
-    /// de requêtes simultanées).
+    /// Envoi chunké (fichiers > 100 Mo) : ouverture d'une session kDrive,
+    /// envoi séquentiel de chunks de 10 Mo, fermeture qui assemble le
+    /// fichier. Chaque chunk est une requête indépendante — une connexion
+    /// neuve, donc pas de bridage hérité d'une connexion unique.
     nonisolated private static func performChunkedUpload(
         fileURL: URL,
         remoteFileName: String,
@@ -499,6 +587,8 @@ private final class KDriveContinuousUploadController: ObservableObject {
         driveId cleanDriveId: String,
         directoryId cleanDirectoryId: String
     ) async throws {
+        // Chunks de 10 Mo minimum, augmentés si le fichier depasse la limite
+        // de 10 000 chunks par session.
         let minimumChunkSize: Int64 = 10_000_000
         let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
         let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
@@ -522,7 +612,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
         var startRequest = URLRequest(url: startURL)
         startRequest.httpMethod = "POST"
-        startRequest.timeoutInterval = 60
+        startRequest.timeoutInterval = 30
         startRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let startBody = try JSONSerialization.data(withJSONObject: [
@@ -532,7 +622,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             "total_chunks": totalChunks,
             "total_size": Int(fileSize)
         ])
-        let (startData, startResponse) = try await URLSession.shared.upload(for: startRequest, from: startBody)
+        let (startData, startResponse) = try await KDriveUploadSession.session.upload(for: startRequest, from: startBody)
         guard let startHTTP = startResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
@@ -543,11 +633,20 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard let sessionToken = reply.data?.token, !sessionToken.isEmpty else {
             throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
         }
+
         let chunkHost = (reply.data?.uploadURL ?? reply.data?.uploadUrl)
             .flatMap { URLComponents(string: $0)?.host }
+        if chunkHost == nil {
+            LogCenter.kdrive(L("kDrive : upload_url absente de la réponse de session — chunks envoyés sur api.infomaniak.com pour \(remoteFileName).", "kDrive: upload_url missing from session response — chunks sent to api.infomaniak.com for \(remoteFileName)."))
+        }
 
-        LogCenter.kdrive(L("kDrive : session de chunks ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunk session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
+        LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
+        // Chunks envoyés en parallèle : kDrive bride chaque connexion à
+        // ~100 Ko/s, un débit multiplié par le nombre de requêtes simultanées
+        // (même principe que la limite de 60 req/minute reste respectée — le
+        // nombre de requêtes ne change pas, seul leur étalement).
+        let chunkConcurrency = 6
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
@@ -571,7 +670,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
             chunkRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             chunkRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-            let (_, chunkResponse) = try await URLSession.shared.upload(for: chunkRequest, from: chunkData)
+            let (_, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, from: chunkData)
             guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
                 throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
             }
@@ -580,7 +679,6 @@ private final class KDriveContinuousUploadController: ObservableObject {
             }
         }
 
-        let chunkConcurrency = 4
         var nextChunk = 0
         try await withThrowingTaskGroup(of: Void.self) { group in
             var activeChunks = 0
@@ -613,12 +711,57 @@ private final class KDriveContinuousUploadController: ObservableObject {
         finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let finishBody = Data("{}".utf8)
-        let (_, finishResponse) = try await URLSession.shared.upload(for: finishRequest, from: finishBody)
+        let (_, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
         guard let finishHTTP = finishResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
         guard (200..<300).contains(finishHTTP.statusCode) else {
             throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
+        }
+    }
+
+    nonisolated private static func performSingleUpload(
+        fileURL: URL,
+        remoteFileName: String,
+        fileSize: Int64,
+        token cleanToken: String,
+        driveId cleanDriveId: String,
+        directoryId cleanDirectoryId: String
+    ) async throws {
+        var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
+        components?.queryItems = [
+            URLQueryItem(name: "directory_id", value: cleanDirectoryId),
+            URLQueryItem(name: "file_name", value: remoteFileName),
+            URLQueryItem(name: "total_size", value: String(fileSize)),
+            URLQueryItem(name: "conflict", value: "version")
+        ]
+        guard let requestURL = components?.url else {
+            throw KDriveError.invalidURL
+        }
+
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "POST"
+        // Sans timeout généreux, un upload lent (le timer compte les données
+        // reçues, inexistantes pendant un envoi) était tué en pleine transfert.
+        request.timeoutInterval = 600
+        request.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await KDriveUploadSession.session.upload(for: request, fromFile: fileURL)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
+        }
+        if httpResponse.statusCode == 401 {
+            throw KDriveError.authenticationFailed
+        }
+        if httpResponse.statusCode == 404 {
+            throw KDriveError.uploadFailed(L("Dossier ou Drive introuvable", "Folder or Drive not found"))
+        }
+        if httpResponse.statusCode == 429 {
+            throw KDriveError.serverError(429, L("\(remoteFileName) : trop de requêtes, réessaie dans un moment.", "\(remoteFileName): too many requests, try again shortly."))
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
         }
     }
 
@@ -699,7 +842,19 @@ private struct KDriveContinuousUploadSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
-                    Text(L("Jusqu’à \(KDriveContinuousUploadController.concurrentLimit) uploads restent actifs en continu.", "Up to \(KDriveContinuousUploadController.concurrentLimit) uploads stay active continuously."))
+                    if uploader.totalBytes > 0 {
+                        Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if skippedCount > 0 {
+                        Text(L("\(skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(skippedCount) already on the Drive, skipped."))
+                            .font(.subheadline)
+                            .foregroundStyle(.green)
+                    }
+
+                    Text(L("Jusqu’à \(uploader.activeLimit) uploads restent actifs en continu.", "Up to \(uploader.activeLimit) uploads stay active continuously."))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -738,6 +893,13 @@ private struct KDriveContinuousUploadSheet: View {
         .presentationDetents([.medium])
         .interactiveDismissDisabled(uploader.isUploading)
         .onAppear { startUploadIfNeeded() }
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        if bytes >= 1_000_000_000 { return String(format: "%.2f Go", Double(bytes) / 1_000_000_000) }
+        if bytes >= 1_000_000 { return String(format: "%.1f Mo", Double(bytes) / 1_000_000) }
+        if bytes >= 1_000 { return String(format: "%.0f Ko", Double(bytes) / 1_000) }
+        return "\(bytes) o"
     }
 
     private func startUploadIfNeeded() {
