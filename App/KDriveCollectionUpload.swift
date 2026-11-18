@@ -629,6 +629,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
         guard (200..<300).contains(startHTTP.statusCode) else {
             throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
         }
+        if let json = try? JSONSerialization.jsonObject(with: startData) as? [String: Any],
+           let result = json["result"] as? String, result != "success", result != "asynchronous" {
+            throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
+        }
         let reply = try JSONDecoder().decode(StartReply.self, from: startData)
         guard let sessionToken = reply.data?.token, !sessionToken.isEmpty else {
             throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
@@ -715,14 +719,26 @@ private final class KDriveContinuousUploadController: ObservableObject {
         finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let finishBody = Data("{}".utf8)
-        let (_, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
+        let (finishData, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
         guard let finishHTTP = finishResponse as? HTTPURLResponse else {
             throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
         }
         guard (200..<300).contains(finishHTTP.statusCode) else {
             throw KDriveError.serverError(finishHTTP.statusCode, L("\(remoteFileName) : finalisation refusée (HTTP \(finishHTTP.statusCode)).", "\(remoteFileName): finish rejected (HTTP \(finishHTTP.statusCode))."))
         }
-        LogCenter.kdrive(L("kDrive : session close — \(remoteFileName) assemblé côte serveur (\(totalChunks) chunks).", "kDrive: session closed — \(remoteFileName) assembled server-side (\(totalChunks) chunks)."))
+        if let json = try? JSONSerialization.jsonObject(with: finishData) as? [String: Any],
+           let result = json["result"] as? String, result != "success", result != "asynchronous" {
+            throw KDriveError.serverError(finishHTTP.statusCode, detailedMessage(from: finishData, statusCode: finishHTTP.statusCode, fileName: remoteFileName))
+        }
+        if let json = try? JSONSerialization.jsonObject(with: finishData) as? [String: Any],
+           let file = json["data"] as? [String: Any] {
+            let remoteName = (file["name"] as? String) ?? remoteFileName
+            let remoteId = (file["id"] as? NSNumber)?.stringValue ?? "?"
+            LogCenter.kdrive(L("kDrive : session close — \(remoteFileName) assemblé côté serveur en \(remoteName) (id \(remoteId), \(totalChunks) chunks).", "kDrive: session closed — \(remoteFileName) assembled server-side as \(remoteName) (id \(remoteId), \(totalChunks) chunks)."))
+            if remoteName != remoteFileName {
+                LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
+            }
+        }
     }
 
     nonisolated private static func performSingleUpload(
@@ -767,6 +783,24 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
+        }
+        // kDrive peut répondre 200 avec un corps « result: error » : sans cette
+        // vérification, un envoi refusé serveur passe pour une réussite et le
+        // fichier est réenvoyé à chaque fois (jamais présent dans le listing).
+        guard let reply = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            LogCenter.kdrive(L("kDrive : envoyé — \(remoteFileName) (réponse serveur illisible, non vérifiée).", "kDrive: uploaded — \(remoteFileName) (unreadable server response, unverified)."))
+            return
+        }
+        if let result = reply["result"] as? String, result != "success", result != "asynchronous" {
+            throw KDriveError.serverError(httpResponse.statusCode, detailedMessage(from: data, statusCode: httpResponse.statusCode, fileName: remoteFileName))
+        }
+        if let file = reply["data"] as? [String: Any] {
+            let remoteName = (file["name"] as? String) ?? remoteFileName
+            let remoteId = (file["id"] as? NSNumber)?.stringValue ?? "?"
+            LogCenter.kdrive(L("kDrive : fichier créé sur le Drive — \(remoteName) (id \(remoteId)).", "kDrive: file created on Drive — \(remoteName) (id \(remoteId))."))
+            if remoteName != remoteFileName {
+                LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
+            }
         }
     }
 
