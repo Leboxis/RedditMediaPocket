@@ -374,6 +374,7 @@ final class KDriveService: ObservableObject {
             URLQueryItem(name: "total_size", value: String(fileSize)),
             URLQueryItem(name: "conflict", value: "version")
         ]
+        components?.percentEncodedQuery = components?.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let requestURL = components?.url else { throw KDriveError.invalidURL }
 
         var request = URLRequest(url: requestURL)

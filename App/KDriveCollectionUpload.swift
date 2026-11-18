@@ -756,6 +756,11 @@ private final class KDriveContinuousUploadController: ObservableObject {
             URLQueryItem(name: "total_size", value: String(fileSize)),
             URLQueryItem(name: "conflict", value: "version")
         ]
+        // `URLComponents` ne percent-encode pas le « + » : kDrive le décode
+        // comme un espace (sémantique application/x-www-form-urlencoded), le
+        // fichier distant était renommé et le dédoublonnage ne le retrouvait
+        // jamais. On l'encode explicitement en %2B.
+        components?.percentEncodedQuery = components?.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let requestURL = components?.url else {
             throw KDriveError.invalidURL
         }
