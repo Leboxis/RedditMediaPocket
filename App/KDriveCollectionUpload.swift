@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import MediaCore
 import SwiftUI
 
@@ -246,12 +247,13 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     private var inflight: [Int: URLSessionTask] = [:]
 
     /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
-    /// accessible depuis plusieurs uploads concurrents. La configuration par
-    /// défaut plafonne à 6 connexions par hôte : sans cela, nos 8 flux
-    /// parallèles ne serviraient à rien (2 resteraient en file d'attente).
+    /// accessible depuis plusieurs uploads concurrents. 8 connexions par hôte,
+    /// comme Orvian-IOS : l'edge Infomaniak bride une IP qui ouvre trop de
+    /// connexions simultanées (FAQ 231), et 8 suffisent avec 4 chunks × 6
+    /// fichiers en vol.
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.httpMaximumConnectionsPerHost = 32
+        configuration.httpMaximumConnectionsPerHost = KDriveUploadPolicy.maxConnectionsPerHost
         return URLSession(configuration: configuration, delegate: KDriveUploadSession.shared, delegateQueue: nil)
     }()
 
@@ -296,7 +298,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
 
 @MainActor
 private final class KDriveContinuousUploadController: ObservableObject {
-    static let concurrentLimit = 4
+    static let concurrentLimit = KDriveUploadPolicy.maxConcurrentUploads
 
     @Published var isUploading = false
     @Published var completedCount = 0
@@ -330,12 +332,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
         uploadedBytes = 0
         speedBytesPerSecond = 0
         totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
-        // Fichiers volumineux : 8 flux en parallèle — kDrive bride chaque
-        // connexion (~100 Ko/s observés), la bande passante passe par le
-        // nombre de flux. Petits fichiers : 4 seulement, pour rester loin
-        // de la limite API de 60 requêtes/minute.
-        let averageBytes = files.isEmpty ? 0 : totalBytes / Int64(files.count)
-        activeLimit = averageBytes >= 20_000_000 ? 8 : Self.concurrentLimit
+        // 6 fichiers en parallèle, comme Orvian-IOS : avec 4 chunks par fichier
+        // et 8 connexions/hôte, on reste sous la limite officielle de 60
+        // req/min (pacing global à 50) et sous le seuil de bridage edge.
+        activeLimit = Self.concurrentLimit
 
         activeTask = Task {
             // Supervision : progression par octets + vitesse. Sans elle, la
@@ -553,11 +553,10 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
         let safeName = FilenamePolicy.kDriveFileName(originalName)
 
-        // Au-delà de 100 Mo, l'envoi direct est déconseillé par Infomaniak : on
-        // passe par une session chunkée (gros chunks pour limiter le nombre de
-        // requêtes face à la limite officielle de 60 req/min). Cela lève au
-        // passage l'ancienne limite de 1 Go.
-        if fileSize > 100_000_000 {
+        // À partir de 95 Mio (seuil Orvian-IOS, marge sous les 100 Mo
+        // officiels), on passe par une session chunkée, comme recommandé par
+        // Infomaniak au-delà de 100 Mo. Cela lève au passage la limite de 1 Go.
+        if KDriveUploadPolicy.usesChunkedSession(fileSize: fileSize) {
             try await performChunkedUpload(
                 fileURL: fileURL, remoteFileName: safeName, fileSize: fileSize,
                 token: cleanToken, driveId: cleanDriveId, directoryId: cleanDirectoryId
@@ -590,12 +589,12 @@ private final class KDriveContinuousUploadController: ObservableObject {
         }
     }
 
-    /// Envoi chunké (fichiers > 100 Mo) : ouverture d'une session kDrive,
-    /// envoi de gros chunks (pour rester loin de la limite de 60 requêtes/min),
-    /// fermeture qui assemble le fichier. Chaque chunk est une requête
-    /// indépendante, relancée individuellement en cas de 429/5xx (renvoyer le
-    /// même `chunk_number` est sans risque : un chunk refusé n'est jamais
-    /// assemblé côté serveur).
+    /// Envoi chunké (fichiers >= 95 Mio), identique à Orvian-IOS : ouverture
+    /// d'une session kDrive (`conflict=rename`, `last_modified_at`), chunks de
+    /// 32 Mio envoyés 4 par 4 avec hash SHA256 sur l'hôte `upload_url` de
+    /// confiance, chacun relancé individuellement (3 tentatives, backoff),
+    /// puis `finish` qui assemble le fichier. En cas d'échec, la session est
+    /// supprimée côté serveur (DELETE).
     nonisolated private static func performChunkedUpload(
         fileURL: URL,
         remoteFileName: String,
@@ -604,24 +603,25 @@ private final class KDriveContinuousUploadController: ObservableObject {
         driveId cleanDriveId: String,
         directoryId cleanDirectoryId: String
     ) async throws {
-        // Chunks de 100 Mo minimum (l'API accepte jusqu'à 1 Go par requête),
-        // augmentés si le fichier dépasse la limite de 10 000 chunks par
-        // session. De gros chunks = moins de requêtes = moins de pression sur
-        // la limite officielle de 60 req/min.
-        let minimumChunkSize: Int64 = 100_000_000
-        let chunkSize = max(minimumChunkSize, (fileSize + 9_999) / 10_000)
-        let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
+        // Plan de chunks façon Orvian-IOS : 32 Mio par chunk, augmenté si le
+        // fichier dépasse la limite de 10 000 chunks par session.
+        let plan = KDriveUploadPolicy.chunkPlan(fileSize: fileSize)
+        let chunkSize = plan.chunkSize
+        let totalChunks = plan.totalChunks
 
         struct StartReply: Decodable {
             struct StartData: Decodable {
                 let token: String?
+                let sessionToken: String?
                 let uploadURL: String?
                 let uploadUrl: String?
                 enum CodingKeys: String, CodingKey {
                     case token
+                    case sessionToken = "session_token"
                     case uploadURL = "upload_url"
                     case uploadUrl = "uploadUrl"
                 }
+                var resolvedToken: String? { token ?? sessionToken }
             }
             let data: StartData?
         }
@@ -634,12 +634,15 @@ private final class KDriveContinuousUploadController: ObservableObject {
         startRequest.timeoutInterval = 30
         startRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let fileAttrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let lastModifiedAt = Int(((fileAttrs?[.modificationDate] as? Date) ?? Date()).timeIntervalSince1970)
         let startBody = try JSONSerialization.data(withJSONObject: [
             "file_name": remoteFileName,
             "directory_id": Int(cleanDirectoryId) ?? 1,
-            "conflict": "version",
+            "conflict": "rename",
             "total_chunks": totalChunks,
-            "total_size": Int(fileSize)
+            "total_size": Int(fileSize),
+            "last_modified_at": lastModifiedAt
         ])
         await KDriveRateLimitCenter.waitForRequestSlot()
         let (startData, startResponse) = try await KDriveUploadSession.session.upload(for: startRequest, from: startBody)
@@ -655,73 +658,93 @@ private final class KDriveContinuousUploadController: ObservableObject {
             throw KDriveError.serverError(startHTTP.statusCode, detailedMessage(from: startData, statusCode: startHTTP.statusCode, fileName: remoteFileName))
         }
         let reply = try JSONDecoder().decode(StartReply.self, from: startData)
-        guard let sessionToken = reply.data?.token, !sessionToken.isEmpty else {
+        guard let sessionToken = reply.data?.resolvedToken, !sessionToken.isEmpty else {
             throw KDriveError.uploadFailed(L("Session d'envoi kDrive absente pour \(remoteFileName).", "kDrive upload session missing for \(remoteFileName)."))
         }
 
-        let chunkHost = (reply.data?.uploadURL ?? reply.data?.uploadUrl)
-            .flatMap { URLComponents(string: $0)?.host }
-        if chunkHost == nil {
+        // Comme Orvian-IOS : l'hôte d'upload reçoit le jeton API en en-tête,
+        // on ne suit que les hôtes Infomaniak de confiance.
+        let rawUploadURL = (reply.data?.uploadURL ?? reply.data?.uploadUrl).flatMap { URL(string: $0) }
+        let trustedUploadURL = rawUploadURL.flatMap { KDriveUploadURL.isTrustedUploadURL($0) ? $0 : nil }
+        if rawUploadURL == nil {
             LogCenter.kdrive(L("kDrive : upload_url absente de la réponse de session — chunks envoyés sur api.infomaniak.com pour \(remoteFileName).", "kDrive: upload_url missing from session response — chunks sent to api.infomaniak.com for \(remoteFileName)."))
+        } else if trustedUploadURL == nil {
+            LogCenter.err(L("kDrive : upload_url non fiable ignorée — chunks envoyés sur api.infomaniak.com pour \(remoteFileName).", "kDrive: untrusted upload_url ignored — chunks sent to api.infomaniak.com for \(remoteFileName)."))
+        }
+
+        // Session incomplète (erreur ou annulation) : supprimée côté serveur,
+        // comme Orvian-IOS (DELETE /upload/session/{token}). La tâche de
+        // nettoyage n'hérite pas de l'annulation et peut finir seule.
+        var sessionClosed = false
+        defer {
+            if !sessionClosed {
+                Task { await Self.cancelUploadSession(sessionToken: sessionToken, driveId: cleanDriveId, apiToken: cleanToken, fileName: remoteFileName) }
+            }
         }
 
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
-        // Chunks en parallèle : chaque connexion est bridée côté serveur
-        // (~100 Ko/s observés), donc le débit vient du nombre de requêtes
-        // simultanées. Les chunks de 100 Mo divisent par 4 le nombre total de
-        // requêtes par rapport à des chunks de 25 Mo, et le pacing global
-        // (`waitForRequestSlot`, 50 req/min) empêche d'épuiser la limite
-        // officielle de 60 req/min : une concurrence de 6 reste sûre.
-        let chunkConcurrency = 6
-        let maxChunkAttempts = 5
+        // 4 chunks en parallèle par fichier, comme Orvian-IOS : avec 8
+        // connexions/hôte et le pacing global (50 req/min), on reste sous la
+        // limite officielle de 60 req/min et sous le seuil de bridage edge.
+        let chunkConcurrency = KDriveUploadPolicy.maxConcurrentChunks
+        let maxChunkAttempts = 3
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
             let chunkStarted = Date()
-            // Chunk extrait dans un fichier temporaire : l'upload se fait en
-            // streaming depuis le disque, la RAM ne grimpe pas avec la taille
-            // des chunks (100 Mo et plus).
-            let chunkFileURL = try Self.extractChunkToTempFile(fileURL: fileURL, offset: offset, length: length)
-            defer { try? FileManager.default.removeItem(at: chunkFileURL) }
+            // Chunk extrait dans un fichier temporaire avec son hash SHA256
+            // (comme Orvian-IOS) : upload en streaming depuis le disque, la
+            // RAM ne dépend pas de la taille des chunks.
+            let chunk = try Self.extractChunkToTempFile(fileURL: fileURL, offset: offset, length: length)
+            defer { try? FileManager.default.removeItem(at: chunk.url) }
 
-            var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload/session/\(sessionToken)/chunk")
-            if let chunkHost { components?.host = chunkHost }
-            components?.queryItems = [
-                URLQueryItem(name: "chunk_number", value: String(chunkIndex + 1)),
-                URLQueryItem(name: "chunk_size", value: String(length))
-            ]
-            guard let chunkURL = components?.url else { throw KDriveError.invalidURL }
+            // Chemin canonique /3/drive/.../chunk, hôte = upload_url de
+            // confiance (sinon api.infomaniak.com), paramètres conservés.
+            guard let chunkURL = KDriveUploadURL.chunkURL(
+                uploadURL: trustedUploadURL,
+                driveId: cleanDriveId,
+                sessionToken: sessionToken,
+                chunkNumber: chunkIndex + 1,
+                chunkSize: length,
+                chunkHash: chunk.sha256
+            ) else { throw KDriveError.invalidURL }
             var chunkRequest = URLRequest(url: chunkURL)
             chunkRequest.httpMethod = "POST"
             chunkRequest.timeoutInterval = 600
             chunkRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
             chunkRequest.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
 
-            // Relance du chunk lui-même sur 429/5xx/erreur réseau : attente
-            // `Retry-After` (aussi prise en compte par le pacer via
-            // `limitedUntil`) puis backoff exponentiel. Renvoyer le même
-            // `chunk_number` est sans risque.
+            // Relance du chunk lui-même (3 tentatives, backoff 1 s/2 s +
+            // `Retry-After`), comme Orvian-IOS. Renvoyer le même
+            // `chunk_number` est sans risque : un chunk refusé n'est jamais
+            // assemblé côté serveur.
             var lastError: Error?
             for attempt in 1...maxChunkAttempts {
                 if Task.isCancelled { throw KDriveError.cancelled }
                 await KDriveRateLimitCenter.waitForRequestSlot()
                 do {
-                    let (_, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, fromFile: chunkFileURL)
+                    let (chunkData, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, fromFile: chunk.url)
                     guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
                         throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
                     }
-                    KDriveRateLimitCenter.register(response: chunkHTTP, body: nil)
+                    KDriveRateLimitCenter.register(response: chunkHTTP, body: chunkData)
                     if (200..<300).contains(chunkHTTP.statusCode) {
-                        lastError = nil
-                        break
+                        // Un 2xx ne suffit pas : le corps doit confirmer
+                        // `data.status == "ok"` (comme Orvian-IOS).
+                        if KDriveChunkReply.isAccepted(data: chunkData, chunkNumber: chunkIndex + 1, chunkSize: length) {
+                            lastError = nil
+                            break
+                        }
+                        lastError = KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) non confirmé par le serveur.", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) not confirmed by the server."))
+                    } else {
+                        lastError = KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
+                        // 429 et 5xx sont transitoires ; tout autre code est définitif.
+                        if chunkHTTP.statusCode != 429 && chunkHTTP.statusCode < 500 { throw lastError! }
                     }
-                    lastError = KDriveError.serverError(chunkHTTP.statusCode, L("\(remoteFileName) : chunk \(chunkIndex + 1)/\(totalChunks) refusé (HTTP \(chunkHTTP.statusCode)).", "\(remoteFileName): chunk \(chunkIndex + 1)/\(totalChunks) rejected (HTTP \(chunkHTTP.statusCode))."))
-                    // 429 et 5xx sont transitoires ; tout autre code est définitif.
-                    if chunkHTTP.statusCode != 429 && chunkHTTP.statusCode < 500 { throw lastError! }
                     if attempt < maxChunkAttempts {
                         let retryAfter = chunkHTTP.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
-                        let wait = min(retryAfter ?? (2.0 * pow(2.0, Double(attempt - 1))), 120)
+                        let wait = min(retryAfter ?? Double(attempt), 120)
                         LogCenter.kdrive(L("kDrive : chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName) en HTTP \(chunkHTTP.statusCode), nouvelle tentative dans \(Int(wait)) s.", "kDrive: chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName) got HTTP \(chunkHTTP.statusCode), retrying in \(Int(wait)) s."))
                         try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     }
@@ -732,7 +755,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                     if urlError.code == .cancelled || Task.isCancelled { throw urlError }
                     lastError = urlError
                     if attempt == maxChunkAttempts { throw urlError }
-                    let wait = min(2.0 * pow(2.0, Double(attempt - 1)), 120)
+                    let wait = min(Double(attempt), 120)
                     LogCenter.kdrive(L("kDrive : erreur réseau sur le chunk \(chunkIndex + 1)/\(totalChunks) de \(remoteFileName), nouvelle tentative dans \(Int(wait)) s.", "kDrive: network error on chunk \(chunkIndex + 1)/\(totalChunks) of \(remoteFileName), retrying in \(Int(wait)) s."))
                     try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                 }
@@ -774,7 +797,9 @@ private final class KDriveContinuousUploadController: ObservableObject {
         finishRequest.timeoutInterval = 120
         finishRequest.setValue("Bearer \(cleanToken)", forHTTPHeaderField: "Authorization")
         finishRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let finishBody = Data("{}".utf8)
+        let finishAttrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let finishModifiedAt = Int(((finishAttrs?[.modificationDate] as? Date) ?? Date()).timeIntervalSince1970)
+        let finishBody = (try? JSONSerialization.data(withJSONObject: ["last_modified_at": finishModifiedAt])) ?? Data("{}".utf8)
         await KDriveRateLimitCenter.waitForRequestSlot()
         let (finishData, finishResponse) = try await KDriveUploadSession.session.upload(for: finishRequest, from: finishBody)
         guard let finishHTTP = finishResponse as? HTTPURLResponse else {
@@ -797,12 +822,15 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
             }
         }
+        sessionClosed = true
     }
 
     /// Extrait l'intervalle [offset, offset+length[ du fichier source vers un
     /// fichier temporaire, pour uploader le chunk en streaming depuis le disque
     /// (`upload(for:fromFile:)`) sans charger tout le chunk en mémoire.
-    nonisolated private static func extractChunkToTempFile(fileURL: URL, offset: Int64, length: Int64) throws -> URL {
+    /// Renvoie l'URL temporaire et le hash SHA256 du chunk (envoyé en
+    /// `chunk_hash=sha256:…`, comme Orvian-IOS).
+    nonisolated private static func extractChunkToTempFile(fileURL: URL, offset: Int64, length: Int64) throws -> (url: URL, sha256: String) {
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kdrive-chunk-\(UUID().uuidString).bin")
         guard FileManager.default.createFile(atPath: tmpURL.path, contents: nil) else {
@@ -816,16 +844,34 @@ private final class KDriveContinuousUploadController: ObservableObject {
             throw KDriveError.uploadFailed(L("Ouverture du chunk temporaire en écriture impossible.", "Could not open temporary chunk file for writing."))
         }
         defer { try? dst.close() }
+        var digest = SHA256()
         var remaining = length
         while remaining > 0 {
             let block = Int(min(remaining, 4_000_000))
             guard let data = try src.read(upToCount: block), !data.isEmpty else {
                 throw KDriveError.uploadFailed(L("Lecture impossible du chunk à l'offset \(offset) de \(fileURL.lastPathComponent).", "Could not read chunk at offset \(offset) of \(fileURL.lastPathComponent)."))
             }
+            digest.update(data: data)
             try dst.write(contentsOf: data)
             remaining -= Int64(data.count)
         }
-        return tmpURL
+        return (tmpURL, digest.finalize().map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// Supprime une session d'upload incomplète côté serveur
+    /// (DELETE /3/drive/{driveId}/upload/session/{token}), comme Orvian-IOS.
+    /// Best-effort : les erreurs sont ignorées.
+    nonisolated private static func cancelUploadSession(sessionToken: String, driveId: String, apiToken: String, fileName: String) async {
+        guard let url = URL(string: "https://api.infomaniak.com/3/drive/\(driveId)/upload/session/\(sessionToken)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
+        await KDriveRateLimitCenter.waitForRequestSlot()
+        guard let (data, response) = try? await KDriveUploadSession.session.data(for: request),
+              let http = response as? HTTPURLResponse else { return }
+        KDriveRateLimitCenter.register(response: http, body: data)
+        LogCenter.kdrive(L("kDrive : session d'envoi annulée côté serveur pour \(fileName) (HTTP \(http.statusCode)).", "kDrive: upload session cancelled server-side for \(fileName) (HTTP \(http.statusCode))."))
     }
 
     nonisolated private static func performSingleUpload(
@@ -836,12 +882,15 @@ private final class KDriveContinuousUploadController: ObservableObject {
         driveId cleanDriveId: String,
         directoryId cleanDirectoryId: String
     ) async throws {
+        let fileAttrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let lastModifiedAt = Int(((fileAttrs?[.modificationDate] as? Date) ?? Date()).timeIntervalSince1970)
         var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
         components?.queryItems = [
             URLQueryItem(name: "directory_id", value: cleanDirectoryId),
             URLQueryItem(name: "file_name", value: remoteFileName),
             URLQueryItem(name: "total_size", value: String(fileSize)),
-            URLQueryItem(name: "conflict", value: "version")
+            URLQueryItem(name: "last_modified_at", value: String(lastModifiedAt)),
+            URLQueryItem(name: "conflict", value: "rename")
         ]
         // `URLComponents` ne percent-encode pas le « + » : kDrive le décode
         // comme un espace (sémantique application/x-www-form-urlencoded), le

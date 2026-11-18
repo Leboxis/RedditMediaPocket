@@ -103,7 +103,7 @@ final class KDriveRateLimitCenter: ObservableObject {
     @Published private(set) var limitedUntil: Date?
     @Published private(set) var requestsLastMinute: Int = 0
 
-    private var requestDates: [Date] = []
+    private var pacer = SlidingWindowPacer(limit: KDriveRateLimitCenter.pacingLimitPerMinute)
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
@@ -143,14 +143,10 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// prochain créneau ; 0 si la requête peut partir immédiatement.
     private func reserveSlot() -> TimeInterval {
         let now = Date()
-        requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
         if let until = limitedUntil, until > now { return until.timeIntervalSince(now) }
-        requestDates.append(now)
-        requestsLastMinute = requestDates.count
-        if requestDates.count > Self.pacingLimitPerMinute, let oldest = requestDates.first {
-            return max(0.1, oldest.addingTimeInterval(60).timeIntervalSince(now))
-        }
-        return 0
+        let wait = pacer.reserveSlot(now: now)
+        requestsLastMinute = pacer.count(at: now)
+        return wait > 0 ? max(wait, 0.1) : 0
     }
 
     /// Codes d'erreur officiels (`error.code`) qui traduisent un rate limit.
@@ -170,10 +166,9 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
         let now = Date()
-        // `requestDates` est alimenté par `reserveSlot` (avant l'envoi) :
+        // Le pacer est alimenté par `reserveSlot` (avant l'envoi) :
         // ne pas compter deux fois la même requête ici.
-        requestDates.removeAll { $0 < now.addingTimeInterval(-60) }
-        requestsLastMinute = requestDates.count
+        requestsLastMinute = pacer.count(at: now)
 
         // Mécanisme officiel d'erreur Infomaniak (developer.infomaniak.com) :
         // HTTP 429 ou corps JSON `result: "error"` avec un code de bridage.
@@ -186,7 +181,7 @@ final class KDriveRateLimitCenter: ObservableObject {
             return
         }
         if requestsLastMinute >= Self.officialLimitPerMinute {
-            if let oldest = requestDates.first {
+            if let oldest = pacer.oldest(at: now) {
                 let resume = oldest.addingTimeInterval(60)
                 if (limitedUntil ?? .distantPast) < now {
                     LogCenter.err(L("kDrive : \(requestsLastMinute) requêtes API en 60 s (limite officielle : \(Self.officialLimitPerMinute)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(requestsLastMinute) API requests in 60 s (official limit: \(Self.officialLimitPerMinute)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
@@ -203,7 +198,7 @@ final class KDriveRateLimitCenter: ObservableObject {
 
 final class KDriveService: ObservableObject {
     static let shared = KDriveService()
-    static let concurrentUploadLimit = 4
+    static let concurrentUploadLimit = KDriveUploadPolicy.maxConcurrentUploads
 
     @Published var isUploading = false
     @Published var currentProgress = 0.0
@@ -480,12 +475,15 @@ guard (200..<300).contains(httpResponse.statusCode) else {
     }
 
     nonisolated private static func performSingleUpload(fileURL: URL, remoteFileName: String, fileSize: Int64, token cleanToken: String, driveId cleanDriveId: String, directoryId cleanDirectoryId: String) async throws {
+        let fileAttrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let lastModifiedAt = Int(((fileAttrs?[.modificationDate] as? Date) ?? Date()).timeIntervalSince1970)
         var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/upload")
         components?.queryItems = [
             URLQueryItem(name: "directory_id", value: cleanDirectoryId),
             URLQueryItem(name: "file_name", value: remoteFileName),
             URLQueryItem(name: "total_size", value: String(fileSize)),
-            URLQueryItem(name: "conflict", value: "version")
+            URLQueryItem(name: "last_modified_at", value: String(lastModifiedAt)),
+            URLQueryItem(name: "conflict", value: "rename")
         ]
         if let encodedQuery = components?.percentEncodedQuery {
             components?.percentEncodedQuery = encodedQuery.replacingOccurrences(of: "+", with: "%2B")
