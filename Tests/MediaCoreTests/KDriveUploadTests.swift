@@ -7,11 +7,12 @@ final class KDriveUploadTests: XCTestCase {
     func testDirectUploadBelow95MiB() {
         XCTAssertFalse(KDriveUploadPolicy.usesChunkedSession(fileSize: 0))
         XCTAssertFalse(KDriveUploadPolicy.usesChunkedSession(fileSize: 95 * 1024 * 1024 - 1))
-        XCTAssertFalse(KDriveUploadPolicy.usesChunkedSession(fileSize: 100_000_000 - 1))
+        XCTAssertFalse(KDriveUploadPolicy.usesChunkedSession(fileSize: KDriveUploadPolicy.directUploadLimit - 1))
     }
 
     func testChunkedSessionAtAndAbove95MiB() {
         XCTAssertTrue(KDriveUploadPolicy.usesChunkedSession(fileSize: 95 * 1024 * 1024))
+        XCTAssertTrue(KDriveUploadPolicy.usesChunkedSession(fileSize: 100_000_000)) // 100 Mo décimaux > 95 Mio
         XCTAssertTrue(KDriveUploadPolicy.usesChunkedSession(fileSize: 753 * 1024 * 1024))
         XCTAssertTrue(KDriveUploadPolicy.usesChunkedSession(fileSize: 1_000_000_000))
     }
@@ -157,6 +158,8 @@ final class KDriveUploadTests: XCTestCase {
         pacer.reserveSlot(now: t0)
         pacer.reserveSlot(now: t0.addingTimeInterval(5))
         XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(5)), t0)
-        XCTAssertNil(pacer.oldest(at: t0.addingTimeInterval(61)))
+        // à t0+61 la fenêtre couvre ]t0+1, t0+61] : t0+5 est encore dedans
+        XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(61)), t0.addingTimeInterval(5))
+        XCTAssertNil(pacer.oldest(at: t0.addingTimeInterval(66)))
     }
 }
