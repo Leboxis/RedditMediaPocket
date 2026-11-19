@@ -257,7 +257,7 @@ public enum TikTokAPI {
 
     /// Taille de page des routes sauvegardés : TikTok plafonne la liste des
     /// publications à 35.
-    static let savedPageSize = 35
+    public static let savedPageSize = 35
 }
 
 /// Quels hôtes reçoivent les cookies de session TikTok. Les CDN de médias
