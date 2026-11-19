@@ -147,6 +147,69 @@ import MediaCore
         }
         return JSON.stringify({ user: user, links: links });
       };
+      // Pseudo du compte connecté : le chemin `/@pseudo` quand la page y est
+      // (un clic avatar y mène), sinon l'ancrage profil de l'en-tête — seul
+      // lien `/@` fiable, ceux du fil désignent des créateurs voisins.
+      window.__tiktokMe = function() {
+        var m = String(location.pathname).match(/^\/@([A-Za-z0-9._]{1,24})\/?$/);
+        if (m) return m[1];
+        var el = document.querySelector('header a[href^="/@"]');
+        if (el) {
+          var h = String(el.getAttribute('href') || '').match(/^\/@([A-Za-z0-9._]{1,24})/);
+          if (h) return h[1];
+        }
+        return '';
+      };
+      // JSON d'hydratation de la page courante : sur une page profil chargée
+      // entièrement, il porte le `secUid` du compte.
+      window.__tiktokProfileJSON = function() {
+        var el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
+        return el ? (el.textContent || '') : '';
+      };
+      // Appel API depuis le contexte de la page : cookies, empreinte et
+      // msToken du vrai client, et signature X-Bogus du signer que le site
+      // expose globalement (shapes essayés dans l'ordre des générations).
+      // Le corps — même vide — repart au natif, taggé par l'identifiant.
+      window.__tiktokSignedFetch = function(url, id) {
+        var handler = function(payload) {
+          try { window.webkit.messageHandlers.tiktokItemListHook.postMessage(payload); } catch (e) {}
+        };
+        (async function() {
+          var status = 0;
+          var text = '';
+          try {
+            var target = url;
+            try {
+              if (target.indexOf('msToken=') === -1) {
+                var m = document.cookie.match(/(?:^|;\s*)msToken=([^;]+)/);
+                if (m && m[1]) target += (target.indexOf('?') === -1 ? '?' : '&') + 'msToken=' + m[1];
+              }
+            } catch (e) {}
+            try {
+              var bogus = null;
+              if (window.bytedAcrawler && typeof window.bytedAcrawler.sign === 'function') {
+                bogus = window.bytedAcrawler.sign(target);
+              }
+              if ((!bogus || typeof bogus !== 'string' || bogus.length === 0) &&
+                  window.bytedAcrawler && typeof window.bytedAcrawler.frontierSign === 'function') {
+                var fs = window.bytedAcrawler.frontierSign(target);
+                bogus = (fs && typeof fs === 'object') ? (fs['X-Bogus'] || '') : fs;
+              }
+              if (bogus && typeof bogus === 'string' && bogus.length > 0) {
+                target += '&X-Bogus=' + encodeURIComponent(bogus);
+              }
+            } catch (e) {}
+            var r = await fetch(target, { method: 'GET', credentials: 'include',
+                                          headers: { 'Accept': 'application/json, text/plain, */*' } });
+            status = r.status;
+            text = await r.text();
+          } catch (e) {
+            handler({ kind: 'api', id: id, status: 0, body: '' });
+            return;
+          }
+          handler({ kind: 'api', id: id, status: status, body: text });
+        })();
+      };
       // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
       // les requêtes hors navigateur (403), mais depuis la page le TLS, les
       // cookies et les en-têtes sont ceux du vrai client. Le corps part par
@@ -283,6 +346,19 @@ import MediaCore
 
     private var mediaTransfers: [String: MediaTransfer] = [:]
 
+    /// Réponse d'un appel API signé par la page.
+    struct APIResponse {
+        let status: Int
+        let body: String
+    }
+
+    private struct APICall {
+        let continuation: CheckedContinuation<APIResponse?, Never>
+        let timeout: Task<Void, Never>
+    }
+
+    private var apiCalls: [String: APICall] = [:]
+
     /// UA réel de la WebView, lu après le chargement de la page. Les URL de
     /// médias d'une réponse `item_list` sont liées au client qui l'a obtenue :
     /// les téléchargements doivent s'identifier avec cet UA exact, pas avec
@@ -356,6 +432,62 @@ import MediaCore
         // Laisse TikTok hydrater la page avant le premier défilement.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         return true
+    }
+
+    /// Pseudo du compte connecté vu par la page : chemin `/@pseudo` ou
+    /// ancrage profil de l'en-tête. `nil` quand la page n'en expose aucun.
+    func ownUsername() async -> String? {
+        guard let value = await evaluateString("window.__tiktokMe ? window.__tiktokMe() : ''"),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// JSON d'hydratation de la page courante : sur une page profil chargée
+    /// entièrement, il porte le `secUid` du compte (`TikTokWeb.parseProfileData`).
+    func profileJSON() async -> String? {
+        guard let value = await evaluateString("window.__tiktokProfileJSON ? window.__tiktokProfileJSON() : ''"),
+              !value.isEmpty else { return nil }
+        return value
+    }
+
+    /// Clic sur l'avatar de l'en-tête : le chemin vers le compte connecté.
+    func openProfileMenu() async -> Bool {
+        guard let webView else { return false }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            webView.evaluateJavaScript("window.__tiktokOpenMenu && window.__tiktokOpenMenu()") { result, _ in
+                continuation.resume(returning: (result as? Bool) == true)
+            }
+        }
+    }
+
+    /// Appel GET signé par la page : TikTok signe sa propre requête, le corps
+    /// remonte intact. `nil` en échec de page, hors délai (25 s) ou corps vide.
+    func signedFetch(_ url: URL) async -> APIResponse? {
+        guard let webView else { return nil }
+        let id = UUID().uuidString
+        let literal = url.absoluteString
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return await withCheckedContinuation { (continuation: CheckedContinuation<APIResponse?, Never>) in
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 25_000_000_000)
+                guard let self, let call = self.apiCalls[id] else { return }
+                self.apiCalls[id] = nil
+                call.continuation.resume(returning: nil)
+            }
+            apiCalls[id] = APICall(continuation: continuation, timeout: timeout)
+            webView.evaluateJavaScript("window.__tiktokSignedFetch && window.__tiktokSignedFetch('\(literal)', '\(id)')",
+                                       completionHandler: nil)
+        }
+    }
+
+    private func evaluateString(_ js: String) async -> String? {
+        guard let webView else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            webView.evaluateJavaScript(js) { result, _ in
+                continuation.resume(returning: result as? String)
+            }
+        }
     }
 
     /// Ouvre un dossier de favoris de la page Sauvegardés en imitant le clic
@@ -521,6 +653,11 @@ import MediaCore
         timeoutTask = nil
         watchdog?.cancel()
         watchdog = nil
+        for call in apiCalls.values {
+            call.timeout.cancel()
+            call.continuation.resume(returning: nil)
+        }
+        apiCalls.removeAll()
         if let waiting {
             waiting.resume(returning: nil)
             self.waiting = nil
@@ -595,6 +732,14 @@ extension TikTokWebPaginator: WKNavigationDelegate {
 extension TikTokWebPaginator: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let payload = message.body as? [String: Any] else { return }
+        if payload["kind"] as? String == "api" {
+            guard let id = payload["id"] as? String, let call = apiCalls[id] else { return }
+            apiCalls[id] = nil
+            call.timeout.cancel()
+            call.continuation.resume(returning: APIResponse(status: payload["status"] as? Int ?? 0,
+                                                            body: payload["body"] as? String ?? ""))
+            return
+        }
         if payload["kind"] as? String == "route" {
             guard let route = payload["url"] as? String, !route.isEmpty else { return }
             // Les hauteurs de défilement ne sont pas dédupliquées : leur
