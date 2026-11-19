@@ -2283,11 +2283,29 @@ extension Notification.Name {
         }
 
         private func fetchPage() async -> Data? {
-            guard let response = await paginator.signedFetch(makeURL(cursor)),
-                  response.status == 200, !response.body.isEmpty,
+            guard let response = await paginator.signedFetch(makeURL(cursor)) else {
+                LogCenter.info(L("TikTok : appel signé sans réponse (page fermée ou délai dépassé).",
+                                 "TikTok: signed call returned nothing (page closed or timed out)."))
+                hasMore = false
+                return nil
+            }
+            // Un corps vide sur HTTP 200 est le refus discret de TikTok. Le
+            // signataire absent en est la cause la plus fréquente : le dire
+            // ici évite de chercher une session morte là où la signature
+            // manquait.
+            guard response.status == 200, !response.body.isEmpty,
                   response.body.contains("itemList") || response.body.contains("hasMore"),
                   let data = response.body.data(using: .utf8),
                   let page = try? TikTokWeb.parseItemList(data) else {
+                if pagesServed == 0 {
+                    if response.signer.isEmpty {
+                        LogCenter.err(L("TikTok : signataire introuvable dans la page — l'API refuse sans signature (HTTP \(response.status), \(response.body.utf8.count) octets). Aucune consigne de reconnexion ne corrigera cela : c'est le site qui a changé.",
+                                         "TikTok: signer missing from the page — the API refuses unsigned calls (HTTP \(response.status), \(response.body.utf8.count) bytes). Signing in again will not fix this: the site itself changed."))
+                    } else {
+                        LogCenter.info(L("TikTok : première page signée par \(response.signer) mais refusée (HTTP \(response.status), \(response.body.utf8.count) octets).",
+                                         "TikTok: first page signed by \(response.signer) was refused (HTTP \(response.status), \(response.body.utf8.count) bytes)."))
+                    }
+                }
                 if pagesServed > 0 {
                     LogCenter.info(L("TikTok : fil des sauvegardés interrompu après \(pagesServed) page(s).",
                                      "TikTok: saved feed interrupted after \(pagesServed) page(s)."))

@@ -137,10 +137,41 @@ import MediaCore
 
     private func fetch(_ url: URL, bearer: String?, headers: [String: String]?,
                        body: Data?) async throws -> (data: Data, headers: [String: String]) {
+        do {
+            return try await fetchOnce(url, bearer: bearer, headers: headers, body: body)
+        } catch NetworkError.refused(let code) where code == 404 {
+            // Reddit ne sert plus les flux `.rss` sur `www.reddit.com` : ils
+            // répondent un Atom « Not Found » (404). `old.reddit.com` est déjà
+            // l'hôte des préférences privées et sert le même chemin : une
+            // seule nouvelle tentative, et le journal dit laquelle a réussi —
+            // c'est ainsi que le repli sera confirmé ou remplacé.
+            guard let fallback = RedditFeedHosts.fallback(from: url) else { throw NetworkError.refused(code) }
+            LogCenter.info(L("Flux Reddit refusé (HTTP 404) sur \(LogDiagnostics.requestSummary(url)) — nouvel essai sur \(LogDiagnostics.requestSummary(fallback)).",
+                             "Reddit feed refused (HTTP 404) on \(LogDiagnostics.requestSummary(url)) — retrying on \(LogDiagnostics.requestSummary(fallback))."))
+            do {
+                let result = try await fetchOnce(fallback, bearer: bearer, headers: headers, body: body)
+                LogCenter.info(L("Repli \(fallback.host ?? "") : flux servi (\(result.data.count) octets).",
+                                 "Fallback \(fallback.host ?? ""): feed served (\(result.data.count) bytes)."))
+                return result
+            } catch {
+                LogCenter.err(L("Repli \(fallback.host ?? "") refusé : \(error.localizedDescription)",
+                                "Fallback \(fallback.host ?? "") refused: \(error.localizedDescription)"))
+                throw NetworkError.refused(code)
+            }
+        }
+    }
+
+    private func fetchOnce(_ url: URL, bearer: String?, headers: [String: String]?,
+                           body: Data?) async throws -> (data: Data, headers: [String: String]) {
         let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
-        let isRSS = url.host == "www.reddit.com" && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
+        // Le cache couvre les deux hôtes de flux Reddit : le repli
+        // `old.reddit.com` sert le même contenu et mérite la même économie de
+        // requêtes, sinon chaque page repartirait sur le repli.
+        let feedHost = url.host?.lowercased()
+        let isRSS = (feedHost == "www.reddit.com" || feedHost == "old.reddit.com")
+            && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
         if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 {
             LogCenter.net(L("Page déjà en mémoire (\(cached.data.count / 1024) Ko), pas de nouvel appel.", "Page already in memory (\(cached.data.count / 1024) KB), no new call."))
             return (cached.data, [:])

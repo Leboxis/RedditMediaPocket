@@ -87,12 +87,23 @@ public enum TikTokAPI {
         URL(string: "https://www.tiktok.com/@\(username)")!
     }
 
-    /// Page des sauvegardés du compte connecté : dossiers de favoris
-    /// (`/api/user/collection_list`) puis publications enregistrées
-    /// (`/api/user/collect/item_list`), tous deux servisés signés par le
-    /// JavaScript de la page — mêmes contraintes que `item_list`.
+    /// Page des sauvegardés du compte connecté. **Cette route n'existe pas
+    /// sur le site desktop** : `tiktok.com/saved`, `/favorites`,
+    /// `/bookmarks` et `/collections` répondent tous 302 vers
+    /// `/404?fromUrl=…`. Conservée comme point d'entrée documentaire, mais
+    /// les sauvegardés se lisent par les routes API signées
+    /// (`collect/item_list`, `collection/item_list`) lues depuis une page
+    /// tiktok.com chargée : voir `TikTokWebPaginator.signedFetch`.
     public static func savedURL() -> URL {
         URL(string: "https://www.tiktok.com/saved")!
+    }
+
+    /// Chemins de sauvegardés que le site envoie vers sa page 404. Les suivre
+    /// ne peut pas aboutir : mieux vaut le dire au journal que d'attendre
+    /// trente secondes une page qui n'existe pas.
+    public static func isDeadSavedPath(_ path: String) -> Bool {
+        let normalized = path.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return ["saved", "favorites", "bookmarks", "collections"].contains(normalized)
     }
 
     /// Route paginée « desktop » de la liste des publications : contexte

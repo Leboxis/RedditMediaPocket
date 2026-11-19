@@ -180,10 +180,65 @@ import MediaCore
         var el = document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');
         return el ? (el.textContent || '') : '';
       };
+      // Signataire du site. Le SDK `webmssdk` que tiktok.com charge publie son
+      // point d'entrée sous `self.byted_acrawler` (snake_case) : le nom
+      // historique `bytedAcrawler` en camelCase n'existe plus dans le bundle
+      // 1.0.0.422, et le chercher sous cette seule graphie rendait toute
+      // requête API non signée — refusée par un HTTP 200 à corps vide.
+      // `frontierSign` est le seul point d'entrée exporté (`sign` n'existe
+      // pas) ; les deux sont néanmoins tentés pour survivre à un changement
+      // de génération. Renvoie le nom trouvé, ou '' si aucun ne répond.
+      window.__tiktokSignerName = function() {
+        var names = ['byted_acrawler', 'bytedAcrawler', '_bytedAcrawler'];
+        for (var i = 0; i < names.length; i++) {
+          var obj = null;
+          try { obj = window[names[i]]; } catch (e) { obj = null; }
+          if (!obj) continue;
+          try {
+            if (typeof obj.frontierSign === 'function' || typeof obj.sign === 'function') return names[i];
+          } catch (e) {}
+        }
+        return '';
+      };
+      // Paramètres de signature d'une URL. `frontierSign` rend un objet dont
+      // chaque clé (`X-Bogus`, `X-Gnarly`, `X-Mssdk-Info`) est un paramètre
+      // que le site ajoute lui-même à l'URL : c'est sous cette forme que les
+      // routes paginées les attendent. Toutes sont reportées au lieu de la
+      // seule `X-Bogus`, pour qu'une génération qui en exige une autre
+      // continue de fonctionner. Renvoie [] quand rien n'a pu être signé.
+      window.__tiktokSignHeaders = function(url) {
+        var name = window.__tiktokSignerName ? window.__tiktokSignerName() : '';
+        if (!name) return [];
+        var obj = null;
+        try { obj = window[name]; } catch (e) { return []; }
+        if (!obj) return [];
+        var signed = null;
+        try {
+          if (typeof obj.frontierSign === 'function') signed = obj.frontierSign(url);
+          else if (typeof obj.sign === 'function') signed = obj.sign(url);
+        } catch (e) { return []; }
+        if (!signed) return [];
+        var out = [];
+        if (typeof signed === 'string') {
+          if (signed.length > 0) out.push(['X-Bogus', signed]);
+          return out;
+        }
+        if (typeof signed === 'object') {
+          for (var key in signed) {
+            if (!Object.prototype.hasOwnProperty.call(signed, key)) continue;
+            var value = signed[key];
+            if (typeof value !== 'string' || value.length === 0) continue;
+            out.push([key, value]);
+          }
+        }
+        return out;
+      };
       // Appel API depuis le contexte de la page : cookies, empreinte et
-      // msToken du vrai client, et signature X-Bogus du signer que le site
-      // expose globalement (shapes essayés dans l'ordre des générations).
-      // Le corps — même vide — repart au natif, taggé par l'identifiant.
+      // msToken du vrai client, et paramètres de signature produits par le
+      // signataire que le site charge lui-même. Le corps — même vide — repart
+      // au natif, taggé par l'identifiant ; `signer` dit si une signature a
+      // pu être posée, pour distinguer un refus de signature d'un refus de
+      // session.
       window.__tiktokSignedFetch = function(url, id) {
         var handler = function(payload) {
           try { window.webkit.messageHandlers.tiktokItemListHook.postMessage(payload); } catch (e) {}
@@ -191,6 +246,7 @@ import MediaCore
         (async function() {
           var status = 0;
           var text = '';
+          var signerName = '';
           try {
             var target = url;
             try {
@@ -200,17 +256,17 @@ import MediaCore
               }
             } catch (e) {}
             try {
-              var bogus = null;
-              if (window.bytedAcrawler && typeof window.bytedAcrawler.sign === 'function') {
-                bogus = window.bytedAcrawler.sign(target);
-              }
-              if ((!bogus || typeof bogus !== 'string' || bogus.length === 0) &&
-                  window.bytedAcrawler && typeof window.bytedAcrawler.frontierSign === 'function') {
-                var fs = window.bytedAcrawler.frontierSign(target);
-                bogus = (fs && typeof fs === 'object') ? (fs['X-Bogus'] || '') : fs;
-              }
-              if (bogus && typeof bogus === 'string' && bogus.length > 0) {
-                target += '&X-Bogus=' + encodeURIComponent(bogus);
+              signerName = window.__tiktokSignerName ? window.__tiktokSignerName() : '';
+              var pairs = window.__tiktokSignHeaders ? window.__tiktokSignHeaders(target) : [];
+              if (pairs.length > 0) {
+                // Les paramètres de signature sont ajoutés à l'URL, comme le
+                // fait le client web lui-même : c'est sous cette forme que les
+                // routes paginées les attendent.
+                for (var i = 0; i < pairs.length; i++) {
+                  var key = pairs[i][0];
+                  var value = pairs[i][1];
+                  target += (target.indexOf('?') === -1 ? '?' : '&') + encodeURIComponent(key) + '=' + encodeURIComponent(value);
+                }
               }
             } catch (e) {}
             var r = await fetch(target, { method: 'GET', credentials: 'include',
@@ -218,10 +274,10 @@ import MediaCore
             status = r.status;
             text = await r.text();
           } catch (e) {
-            handler({ kind: 'api', id: id, status: 0, body: '' });
+            handler({ kind: 'api', id: id, status: 0, body: '', signer: signerName });
             return;
           }
-          handler({ kind: 'api', id: id, status: status, body: text });
+          handler({ kind: 'api', id: id, status: status, body: text, signer: signerName });
         })();
       };
       // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
@@ -380,6 +436,11 @@ import MediaCore
     struct APIResponse {
         let status: Int
         let body: String
+        /// Nom sous lequel le signataire a été trouvé (`byted_acrawler` sur la
+        /// génération actuelle), ou chaîne vide si aucun n'a répondu. C'est la
+        /// distinction qui manquait : un corps vide pouvait venir d'une
+        /// signature absente comme d'une session refusée.
+        var signer: String = ""
     }
 
     private struct APICall {
@@ -588,10 +649,17 @@ import MediaCore
         if let name = payload["user"] as? String, !name.isEmpty { pageUsername = name }
         for raw in links {
             let absolute = raw.hasPrefix("http") ? raw : "https://www.tiktok.com" + raw
-            if let url = URL(string: absolute), url.host?.hasSuffix("tiktok.com") == true {
-                LogCenter.info(L("TikTok web : lien Enregistres trouve \(absolute).", "TikTok web: saved link found \(absolute)."))
-                return url
+            guard let url = URL(string: absolute), url.host?.hasSuffix("tiktok.com") == true else { continue }
+            // `tiktok.com/saved` (et variantes) redirige vers `/404` : charger
+            // cette page ne peut livrer aucun fil. Le profil du compte est le
+            // seul point d'entrée réellement servi par le site.
+            if TikTokAPI.isDeadSavedPath(url.path) {
+                LogCenter.info(L("TikTok web : lien \(url.path) ignoré — le site le renvoie vers sa page 404.",
+                                 "TikTok web: \(url.path) link skipped — the site redirects it to its 404 page."))
+                continue
             }
+            LogCenter.info(L("TikTok web : lien Enregistres trouve \(absolute).", "TikTok web: saved link found \(absolute)."))
+            return url
         }
         if let name = (payload["user"] as? String), !name.isEmpty,
            let url = URL(string: "https://www.tiktok.com/@\(name)") {
@@ -767,8 +835,17 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
             guard let id = payload["id"] as? String, let call = apiCalls[id] else { return }
             apiCalls[id] = nil
             call.timeout.cancel()
-            call.continuation.resume(returning: APIResponse(status: payload["status"] as? Int ?? 0,
-                                                            body: payload["body"] as? String ?? ""))
+            let signer = payload["signer"] as? String ?? ""
+            let status = payload["status"] as? Int ?? 0
+            let body = payload["body"] as? String ?? ""
+            if signer.isEmpty {
+                LogCenter.err(L("TikTok web : aucun signataire dans la page — l'appel \(status) n'a pas pu être signé (\(body.utf8.count) octets).",
+                                 "TikTok web: no signer in the page — the \(status) call could not be signed (\(body.utf8.count) bytes)."))
+            } else {
+                LogCenter.info(L("TikTok web : appel signé par \(signer) → HTTP \(status), \(body.utf8.count) octets.",
+                                 "TikTok web: call signed by \(signer) → HTTP \(status), \(body.utf8.count) bytes."))
+            }
+            call.continuation.resume(returning: APIResponse(status: status, body: body, signer: signer))
             return
         }
         if payload["kind"] as? String == "route" {
