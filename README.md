@@ -167,7 +167,7 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. X n'
 
 ## Comportement réseau et stockage
 
-- De 1 à 6 médias simultanés (6 par défaut pour X-Fetish, 3 pour les autres sources), remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
+- De 1 à 16 médias simultanés (10 par défaut pour toutes les sources), remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
 - Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
 - Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts en vol. L’alerte indique uniquement la cause (service et code HTTP) et le nombre total de médias conservés dans la collection. Les limites annoncées par le serveur sont mémorisées, mais une relance manuelle efface ces limites et le cache RSS puis retente le réseau ; un refus réel du serveur peut donc se reproduire.
 - Les curseurs des nouveautés et de l’historique restent distincts. Seule une page complètement traitée est validée ; une page interrompue est reprise et les fichiers complets déjà présents sont ignorés. L’ancien historique est reconstruit une fois par collection pour récupérer les posts marqués à tort comme terminés par les versions précédentes.
@@ -198,7 +198,7 @@ Avant de qualifier une release de fonctionnelle sur iPhone : compiler avec succ�
 
 Interface compacte : sélecteur `u/`, `r/`, `RG`, `♥` ou `x/`, nom (ou « Sauvegardés du compte connecté » pour le cœur), bouton démarrer/arrêter, compteur et grille de trois colonnes. Les fichiers déjà présents dans Documents sont chargés au lancement, tous profils confondus. Les images sont réduites pour les miniatures et les vidéos utilisent une image extraite localement. Toucher une miniature ouvre la prévisualisation native avec zoom ou lecture et partage. Aucun téléchargement réseau de miniature.
 
-La limite choisie, de 1 à 6 médias, couvre la résolution, le transfert et l’assemblage. Sans préférence enregistrée, X-Fetish utilise 6 emplacements et les autres sources 3. Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt, une erreur ou un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
+La limite choisie, de 1 à 16 médias, couvre la résolution, le transfert et l’assemblage. Sans préférence enregistrée, toutes les sources utilisent 10 emplacements. Un emplacement se remplit dès sa libération. Les étapes audio et vidéo d’un même média restent séquentielles. Un jeton RedGIFs partagé évite les authentifications anonymes concurrentes. L’arrêt, une erreur ou un HTTP 429 annule les autres transferts. Les fichiers complets restent conservés.
 
 Les tests de concurrence vérifient le plafond de trois, le remplacement avant la fin du transfert le plus lent, l’annulation après erreur et le bouton arrêter.
 
@@ -228,7 +228,7 @@ Références consultées :
 
 ## Réglage de la concurrence
 
-La roue dentée ouvre le réglage de 1 à 6 médias simultanés (6 par défaut pour X-Fetish, 3 pour les autres sources). Un choix explicite reste mémorisé et prioritaire pour toutes les sources. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective. Choisir 1 ou 2 peut réduire la fréquence des 429, sans garantie. La source `tw` utilise en revanche la session WebKit de X, décrite plus haut.
+La roue dentée ouvre le réglage de 1 à 16 médias simultanés (10 par défaut pour toutes les sources). Un choix explicite reste mémorisé et prioritaire pour toutes les sources. Chaque session fixe sa limite au démarrage ; un changement pendant les transferts s’applique au prochain lancement. Le compteur affiche la limite effective. Choisir 1 ou 2 peut réduire la fréquence des 429, sans garantie. La source `tw` utilise en revanche la session WebKit de X, décrite plus haut.
 
 ## Connexion Reddit locale
 

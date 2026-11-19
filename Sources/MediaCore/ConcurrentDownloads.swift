@@ -2,11 +2,11 @@ import Foundation
 
 public enum ConcurrentDownloads {
     /// Défaut relevé : le CDN X (`pbs.twimg.com`, `video.twimg.com`) tolère
-    /// bien plus de trois connexions simultanées, et trois transferts ne
-    /// saturent pas une liaison mobile correcte. Le plafond suit : au-delà,
-    /// X commencerait à limiter les requêtes.
-    public static let defaultLimit = 6
-    public static let maximumLimit = 12
+    /// bien plus de dix connexions simultanées, et les transferts twimg ne
+    /// sont pas comptés dans le budget GraphQL de 50 requêtes / 15 min. Le
+    /// plafond suit la bande passante, pas un quota X.
+    public static let defaultLimit = 10
+    public static let maximumLimit = 16
 
     public static func configuredLimit(_ stored: Int?, isXFetish: Bool = false) -> Int {
         max(1, min(Self.maximumLimit, stored ?? Self.defaultLimit))

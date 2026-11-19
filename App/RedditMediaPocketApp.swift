@@ -863,7 +863,7 @@ private struct DownloadSettings: View {
                     Text(L("Détectée automatiquement au premier lancement. Modifiable ici.", "Detected automatically on first launch. You can change it here."))
                 }
                 Section {
-                    Stepper(value: $model.concurrentLimit, in: 1...6) {
+                    Stepper(value: $model.concurrentLimit, in: 1...ConcurrentDownloads.maximumLimit) {
                         HStack {
                             Text(L("Téléchargements simultanés", "Concurrent downloads"))
                             Spacer()
@@ -871,7 +871,7 @@ private struct DownloadSettings: View {
                         }
                     }
                 } footer: {
-                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 6. Par défaut : 6 pour X-Fetish, 3 pour les autres sources. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 6. Defaults: 6 for X-Fetish, 3 for other sources. Higher values may increase server rate limiting."))
+                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 16. Par défaut : 10 pour toutes les sources. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 16. Defaults: 10 for all sources. Higher values may increase server rate limiting."))
                 }
                 Section {
                     Picker(L("Morceaux par vidéo", "Parts per video"), selection: $model.xFetishSegments) {
