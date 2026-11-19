@@ -63,6 +63,7 @@ private struct KDriveCollectionUploadFlow: View {
     @State private var errorMessage: String?
     @State private var pendingFiles: [URL]?
     @State private var skippedCount = 0
+    @State private var skippedExistingURLs: [URL] = []
 
     /// Dossier parent : celui choisi dans Réglages > Infomaniak kDrive.
     private var parentDirectoryId: String {
@@ -85,7 +86,8 @@ private struct KDriveCollectionUploadFlow: View {
                     driveId: driveId,
                     directoryId: uploadDirectoryId,
                     directoryName: uploadDirectoryName,
-                    skippedCount: skippedCount
+                    skippedCount: skippedCount,
+                    alreadyOnDriveURLs: skippedExistingURLs
                 )
             } else if isPreparing {
                 NavigationStack {
@@ -1007,10 +1009,12 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
     @State private var deleteFailures = 0
-    @State private var alreadyOnDriveURLs: [URL] = []
     @State private var showDuplicateDeleteConfirm = false
     @State private var duplicateDeletedCount = 0
     @State private var duplicateDeleteFailures = 0
+
+    /// Medias locaux deja presents sur le Drive, prêtes à la suppression.
+    let alreadyOnDriveURLs: [URL]
 
     var body: some View {
         NavigationStack {
@@ -1159,6 +1163,16 @@ private struct KDriveContinuousUploadSheet: View {
         } message: {
             Text(L("Les fichiers envoyés avec succès seront supprimés définitivement du stockage de l'app (pas de corbeille). Ils restent bien sûr sur kDrive.", "Successfully uploaded files will be permanently removed from the app storage (no trash). They remain on kDrive."))
         }
+        .confirmationDialog(
+            L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive du téléphone ?", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive from the phone?"),
+            isPresented: $showDuplicateDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(L("Supprimer", "Delete"), role: .destructive) { deleteAlreadyOnDriveFiles() }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Ces médias existent déjà sur le Drive. Les copies locales seront supprimées définitivement (pas de corbeille).", "These media files already exist on the Drive. Local copies will be permanently removed (no trash)."))
+        }
         .errorAlert(finalError)
         .presentationDetents([.medium])
         .interactiveDismissDisabled(uploader.isUploading)
@@ -1219,5 +1233,24 @@ private struct KDriveContinuousUploadSheet: View {
             NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
         }
         LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
+    }
+
+    private func deleteAlreadyOnDriveFiles() {
+        var deleted = 0
+        var failures = 0
+        for url in alreadyOnDriveURLs where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                deleted += 1
+            } catch {
+                failures += 1
+            }
+        }
+        duplicateDeletedCount = deleted
+        duplicateDeleteFailures = failures
+        if deleted > 0 {
+            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+        }
+        LogCenter.info(L("\(deleted) média(s) déjà sur le Drive supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) media file(s) already on the Drive deleted from the device (\(failures) failure(s))."))
     }
 }
