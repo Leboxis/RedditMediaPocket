@@ -337,7 +337,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
         // 4 fichiers en parallèle : avec 4 chunks par fichier
         // et 8 connexions/hôte, on reste sous la limite officielle de 60
-        // req/min (pacing global espacé à 56) et sous le seuil de bridage edge.
+        // req/min (pacing global espacé à 58) et sous le seuil de bridage edge.
         activeLimit = Self.concurrentLimit
 
         activeTask = Task {
@@ -691,7 +691,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
         // 4 chunks en parallèle par fichier, comme Orvian-IOS : avec 8
-        // connexions/hôte et le pacing global espacé (56 req/min), on reste sous
+        // connexions/hôte et le pacing global espacé (58 req/min), on reste sous
         // la limite officielle de 60 req/min et sous le seuil de bridage edge.
         let chunkConcurrency = KDriveUploadPolicy.maxConcurrentChunks
         let maxChunkAttempts = 3
@@ -999,8 +999,8 @@ private struct KDriveContinuousUploadSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Spacer()
-
+                ScrollView {
+                    VStack(spacing: 20) {
                 if finished {
                     Image(systemName: failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.system(size: 54))
@@ -1077,7 +1077,14 @@ private struct KDriveContinuousUploadSheet: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
 
-                    if rateLimit.nextSlotDelay > 0.5 {
+                    if paceInfoSecondsRemaining > 0 {
+                        let eta = paceInfoSecondsRemaining >= 60 ? "\(paceInfoSecondsRemaining / 60) min" : "\(paceInfoSecondsRemaining) s"
+                        Text(L("Reste ≈ \(uploader.totalCount - uploader.completedCount) envoi(s) — ≈ \(eta) au plafond API", "\(uploader.totalCount - uploader.completedCount) upload(s) left — ≈ \(eta) at the API cap"))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if rateLimit.nextSlotDelay > 3 {
                         Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.orange)
@@ -1091,9 +1098,11 @@ private struct KDriveContinuousUploadSheet: View {
                             .truncationMode(.middle)
                             .padding(.horizontal)
                     }
+                    }
+                    }
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
                 }
-
-                Spacer()
 
                 Button {
                     if uploader.isUploading {
@@ -1133,6 +1142,13 @@ private struct KDriveContinuousUploadSheet: View {
         if bytes >= 1_000_000 { return String(format: "%.1f Mo", Double(bytes) / 1_000_000) }
         if bytes >= 1_000 { return String(format: "%.0f Ko", Double(bytes) / 1_000) }
         return "\(bytes) o"
+    }
+
+    /// Durée restante estimée au plafond API (0 masque la ligne aux petits lots).
+    private var paceInfoSecondsRemaining: Int {
+        let remaining = uploader.totalCount - uploader.completedCount
+        guard remaining > 3 else { return 0 }
+        return Int(Double(remaining) * 60 / Double(KDriveRateLimitCenter.pacingLimitPerMinute))
     }
 
     private func startUploadIfNeeded() {

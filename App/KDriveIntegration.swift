@@ -111,7 +111,7 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// Marge de sécurité sous la limite officielle : toutes les requêtes
     /// kDrive (chunks compris) passent par `waitForRequestSlot`, espacées
     /// uniformément, pour ne jamais l'atteindre et éviter les 429.
-    static let pacingLimitPerMinute = 56
+    static let pacingLimitPerMinute = 58
     private init() {}
 
     /// À appeler après chaque réponse kDrive (listing, envoi, test…).
@@ -1113,8 +1113,8 @@ struct KDriveUploadSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 22) {
-                Spacer()
-
+                ScrollView {
+                    VStack(spacing: 22) {
                 if finished {
                     Image(systemName: failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .font(.system(size: 54))
@@ -1150,7 +1150,7 @@ struct KDriveUploadSheet: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
 
-                    if rateLimit.nextSlotDelay > 0.5 {
+                    if rateLimit.nextSlotDelay > 3 {
                         Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.orange)
@@ -1163,9 +1163,11 @@ struct KDriveUploadSheet: View {
                             .truncationMode(.middle)
                             .padding(.horizontal)
                     }
+                    }
+                    }
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
                 }
-
-                Spacer()
 
                 Button {
                     if service.isUploading {
