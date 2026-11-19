@@ -237,9 +237,10 @@ final class TikTokTests: XCTestCase {
         let foldersURL = TikTokAPI.collectionListURL(secUid: "SEC1", cursor: "0")
         let allURL = TikTokAPI.collectItemListURL(secUid: "SEC1", cursor: "7300")
         let oneURL = TikTokAPI.collectionItemListURL(collectionId: "7659011279817935649", cursor: "")
-        XCTAssertEqual(foldersURL.path, "/api/user/collection_list/")
-        XCTAssertEqual(allURL.path, "/api/user/collect/item_list/")
-        XCTAssertEqual(oneURL.path, "/api/collection/item_list/")
+        // `URL.path` retire le slash final : vérifier l'URL complète.
+        XCTAssertTrue(foldersURL.absoluteString.contains("/api/user/collection_list/"))
+        XCTAssertTrue(allURL.absoluteString.contains("/api/user/collect/item_list/"))
+        XCTAssertTrue(oneURL.absoluteString.contains("/api/collection/item_list/"))
         for url in [foldersURL, allURL, oneURL] {
             let items = try query(url)
             XCTAssertEqual(items["device_id"], TikTokAPI.webDeviceID)
