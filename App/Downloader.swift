@@ -2161,7 +2161,7 @@ extension Notification.Name {
                 try await executeDownloads(downloads, &preparedCount)
                 idle = 0
                 if !qualityTally.isEmpty {
-                    let summary = qualityTally.sorted { $0.key < $0.key }
+                    let summary = qualityTally.sorted { $0.key < $1.key }
                         .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
                     LogCenter.info(L("TikTok : variantes vidéo \(summary).", "TikTok: video variants \(summary)."))
                     qualityTally.removeAll()
