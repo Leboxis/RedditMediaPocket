@@ -2182,8 +2182,8 @@ extension Notification.Name {
                              "\(failed) TikTok media unavailable or unsaved.\n\(kept) media files kept.")
             return
         }
-        status = count == 0 ? L("Aucun nouveau m\u00e9dia TikTok accessible", "No new accessible TikTok media")
-                            : L("\(count) m\u00e9dias TikTok t\u00e9l\u00e9charg\u00e9s", "\(count) TikTok media downloaded")
+        status = count == 0 ? L("Aucun nouveau média TikTok accessible", "No new accessible TikTok media")
+                            : L("\(count) médias TikTok téléchargés", "\(count) TikTok media downloaded")
     }
 
     /// Parcours des publications publiques d'un compte Instagram. L'API
