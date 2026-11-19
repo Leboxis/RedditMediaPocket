@@ -2095,17 +2095,27 @@ extension Notification.Name {
         return true
     }
 
-    /// Ouverture de la page des Enregistr\u{00e9}s TikTok : la route directe
-    /// `/saved` renvoie 404 \u{2014} la page vit dans le menu du profil du site
-    /// desktop. La WebView charge donc la page d\u{2019}accueil connect\u{00e9}e (client
-    /// desktop), ouvre le menu du profil, r\u{00e9}colte le lien des Enregistr\u{00e9}s
-    /// dans le DOM (ou le construit depuis le pseudo), puis y navigue.
-    /// Renvoie false si le lien reste introuvable ou si la navigation \u{00e9}choue.
+    /// Ouverture des Enregistres TikTok : pas de route directe sur le site
+    /// desktop. La WebView charge la page d'accueil connectee (client desktop),
+    /// ouvre le menu du profil et recolte son lien `saved`/`favorites` ; a
+    /// defaut, la page profil du compte connecte sert d'entree et son onglet
+    /// Favorites est clique - c'est la que vivent les Enregistres.
+    /// Renvoie false si le lien reste introuvable ou si la navigation echoue.
     private static func openTikTokSavedPage(paginator: TikTokWebPaginator) async -> Bool {
         guard await paginator.start(url: URL(string: "https://www.tiktok.com/")!, desktopUserAgent: true) else { return false }
         guard let saved = await paginator.savedPageURL() else { return false }
         LogCenter.info(L("TikTok web : ouverture \(saved.absoluteString).", "TikTok web: opening \(saved.absoluteString)."))
-        return await paginator.navigate(saved)
+        guard await paginator.navigate(saved) else { return false }
+        let direct = saved.path.contains("saved") || saved.path.contains("favorites") || saved.path.contains("bookmarks")
+        if !direct {
+            if let clicked = await paginator.clickNamed([
+                "Favorites", L("Favoris", "Favorites")]) {
+                LogCenter.info(L("TikTok : onglet \u{ab} \(clicked) \u{bb} du profil ouvert.", "TikTok: profile tab \u{201c}\(clicked)\u{201d} opened."))
+            } else {
+                LogCenter.info(L("TikTok : aucun onglet Favorites visible sur le profil \u{2014} tentative sans lui.", "TikTok: no Favorites tab visible on the profile \u{2014} trying without it."))
+            }
+        }
+        return true
     }
 
     /// Parcours des sauvegardés TikTok du compte connecté (`ts/`) : soit
@@ -2144,6 +2154,12 @@ extension Notification.Name {
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
         if let choice {
             status = L("Ouverture du dossier « \(choice.name) »…", "Opening folder “\(choice.name)”…")
+            // Les dossiers vivent dans le sous-onglet Collections des
+            // Enregistr\u{00e9}s : l'ouvrir avant de chercher le dossier lui-m\u{00eame}.
+            if let clicked2 = await paginator.clickNamed([
+                "Collections", L("Collections", "Collections")]) {
+                LogCenter.info(L("TikTok : onglet \u{ab} \(clicked2) \u{bb} ouvert avant le dossier.", "TikTok: \u{201c}\(clicked2)\u{201d} tab opened before the folder."))
+            }
             guard await paginator.openCollection(name: choice.name) else {
                 throw NetworkError.invalid(L("Dossier « \(choice.name) » introuvable dans la page Sauvegardés : l’interface de TikTok a peut-être changé.", "Folder “\(choice.name)” not found on the Saved page: TikTok’s interface may have changed."))
             }

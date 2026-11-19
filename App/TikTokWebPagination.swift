@@ -120,17 +120,24 @@ import MediaCore
       // sur le site desktop. Le menu est ouvert, puis les ancres contenant
       // `saved`/`bookmarks` sont récoltées avec le pseudo du compte connecté.
       window.__tiktokOpenMenu = function() {
-        var els = document.querySelectorAll('a[href^="/@"], [data-e2e="profile-icon"], [data-e2e="profile-avatar"]');
-        if (!els.length) return false;
-        els[0].click();
-        return true;
+        // Tout lien `@pseudo` du fil ouvre le profil d'un createur : cibler
+        // d'abord l'avatar de la barre superieure, seul chemin vers le menu
+        // du compte connecte.
+        var sels = ['a[data-e2e="profile-icon"]', '[data-e2e="profile-icon"]',
+                    '[data-e2e="profile-avatar"]', '[data-e2e="top-avatar"]',
+                    'header a[href^="/@"]', 'a[href^="/@"][aria-haspopup]'];
+        for (var i = 0; i < sels.length; i++) {
+          var els = document.querySelectorAll(sels[i]);
+          if (els.length) { els[0].click(); return true; }
+        }
+        return false;
       };
       window.__tiktokHarvestSaved = function() {
         var links = [];
         var anchors = document.querySelectorAll('a[href]');
         for (var i = 0; i < anchors.length; i++) {
           var h = String(anchors[i].getAttribute('href') || '');
-          if ((h.indexOf('/saved') !== -1 || h.indexOf('bookmarks') !== -1) && links.indexOf(h) === -1 && links.length < 5) links.push(h);
+          if ((h.indexOf('/saved') !== -1 || h.indexOf('bookmarks') !== -1 || h.indexOf('favorites') !== -1) && links.indexOf(h) === -1 && links.length < 5) links.push(h);
         }
         var user = '';
         var el = document.querySelector('a[href^="/@"]');
@@ -382,24 +389,40 @@ import MediaCore
         }
     }
 
-    /// Adresse de la page Enregistrés : le menu du profil est ouvert, puis le
-    /// premier lien `saved`/`bookmarks` du DOM sert de cible ; à défaut, la
-    /// route `@pseudo/saved` est construite depuis le pseudo du compte.
+    /// Adresse d'ouverture des Enregistres TikTok : le menu du profil est ouvert,
+    /// et le premier lien `saved`/`bookmarks`/`favorites` du DOM sert de cible ;
+    /// a defaut, la page profil du compte connecte est construite depuis le
+    /// pseudo — l'onglet Favorites y sera clique ensuite.
     func savedPageURL() async -> URL? {
         guard let webView else { return nil }
-        webView.evaluateJavaScript("window.__tiktokOpenMenu && window.__tiktokOpenMenu()", completionHandler: nil)
-        try? await Task.sleep(nanoseconds: 1_500_000_000)
-        let harvested: String? = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            webView.evaluateJavaScript("window.__tiktokHarvestSaved && window.__tiktokHarvestSaved()") { result, _ in
-                continuation.resume(returning: result as? String)
+        var payload: [String: Any]?
+        for _ in 0..<3 {
+            _ = (await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+                webView.evaluateJavaScript("window.__tiktokOpenMenu && window.__tiktokOpenMenu()") { opened, _ in
+                    continuation.resume(returning: (opened as? Bool) == true ? "menu" : nil)
+                }
+            } as String?)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            let json: String? = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+                webView.evaluateJavaScript("window.__tiktokHarvestSaved && window.__tiktokHarvestSaved()") { result, _ in
+                    continuation.resume(returning: result as? String)
+                }
+            }
+            if let json, let data = json.data(using: .utf8),
+               let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                payload = parsed
+                if ((parsed["links"] as? [String]) ?? []).isEmpty || ((parsed["user"] as? String) ?? "").isEmpty {
+                    // Le menu met parfois un temps a se dessiner : reesayer.
+                    continue
+                }
+                break
             }
         }
-        guard let json = harvested, let data = json.data(using: .utf8),
-              let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            LogCenter.info(L("TikTok web : la page n'a pas livré de lien Enregistres.", "TikTok web: the page gave up no saved link."))
+        guard let payload,
+              let links = payload["links"] as? [String] else {
+            LogCenter.info(L("TikTok web : le menu du profil n'a livre aucun lien.", "TikTok web: the profile menu gave up no link."))
             return nil
         }
-        let links = (payload["links"] as? [String]) ?? []
         if let name = payload["user"] as? String, !name.isEmpty { pageUsername = name }
         for raw in links {
             let absolute = raw.hasPrefix("http") ? raw : "https://www.tiktok.com" + raw
@@ -409,8 +432,10 @@ import MediaCore
             }
         }
         if let name = (payload["user"] as? String), !name.isEmpty,
-           let url = URL(string: "https://www.tiktok.com/@\(name)/saved") {
-            LogCenter.info(L("TikTok web : lien Enregistres construit depuis le pseudo \(name).", "TikTok web: saved link built from the handle \(name)."))
+           let url = URL(string: "https://www.tiktok.com/@\(name)") {
+            // Les Enregistres n'ont pas de route directe sur le site desktop :
+            // ils vivent dans l'onglet Favorites du profil du compte connecte.
+            LogCenter.info(L("TikTok web : profil \(name) ouvert, onglet Favorites a cliquer.", "TikTok web: profile \(name) opened, Favorites tab to click."))
             return url
         }
         LogCenter.info(L("TikTok web : aucun lien Enregistres visible (\(links.count) lien(s) scrute(s)).", "TikTok web: no visible saved link (\(links.count) link(s) scanned)."))
