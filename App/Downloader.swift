@@ -2145,9 +2145,15 @@ extension Notification.Name {
                         // de la publication (`/@auteur/video/<id>`), pas sur la
                         // racine du site, et l'UA doit être celui du client qui
                         // a obtenu l'URL.
-                        mediaHeadersByMedia[id] = TikTokAPI.mediaHeaders(
-                            referer: TikTokAPI.postPageURL(author: username, postID: post.id),
-                            browserAgent: paginator.pageUserAgent)
+                        // `pageUserAgent` n'existe qu'une fois la WebView
+                        // chargée : les pages lues par la voie desktop n'en
+                        // ont pas, et retombent sur l'UA mobile par défaut.
+                        let pageAgent = paginator?.pageUserAgent
+                        mediaHeadersByMedia[id] = pageAgent.map {
+                            TikTokAPI.mediaHeaders(
+                                referer: TikTokAPI.postPageURL(author: username, postID: post.id),
+                                browserAgent: $0)
+                        } ?? pageMediaHeaders
                         mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
@@ -2230,7 +2236,7 @@ extension Notification.Name {
 
     /// Navigation vers le profil d'un compte déjà identifié, pour y lire le
     /// `secUid` quand la route `passport` ne l'a pas fourni.
-    private static func loadTikTokProfile(_ paginator: TikTokWebPaginator,
+    private static func loadTikTokProfile(paginator: TikTokWebPaginator,
                                           username: String) async -> (username: String, profile: TikTokWeb.Profile)? {
         // Navigation complète imposée : après une navigation interne du site,
         // le script d'hydratation de la page resterait celui de l'accueil.
