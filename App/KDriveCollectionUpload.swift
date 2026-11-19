@@ -61,7 +61,7 @@ private struct KDriveCollectionUploadFlow: View {
     @State private var uploadDirectoryName = ""
     @State private var isPreparing = false
     @State private var errorMessage: String?
-    @State private var pendingFiles: [URL]?
+    @State private var activeLot: KDriveUploadLot?
     @State private var skippedCount = 0
     @State private var skippedExistingURLs: [URL] = []
 
@@ -79,15 +79,11 @@ private struct KDriveCollectionUploadFlow: View {
 
     var body: some View {
         Group {
-            if let uploadDirectoryId, let pendingFiles {
+            if let uploadDirectoryId, let activeLot {
                 KDriveContinuousUploadSheet(
-                    files: pendingFiles,
+                    lot: activeLot,
                     token: token,
-                    driveId: driveId,
-                    directoryId: uploadDirectoryId,
-                    directoryName: uploadDirectoryName,
-                    skippedCount: skippedCount,
-                    alreadyOnDriveURLs: skippedExistingURLs
+                    driveId: driveId
                 )
             } else if isPreparing {
                 NavigationStack {
@@ -143,7 +139,11 @@ private struct KDriveCollectionUploadFlow: View {
     }
 
     private func prepareCollectionFolder() {
-        guard uploadDirectoryId == nil, pendingFiles == nil, !isPreparing else { return }
+        guard uploadDirectoryId == nil, activeLot == nil, !isPreparing else { return }
+        guard !KDriveContinuousUploadController.shared.isUploading else {
+            errorMessage = L("Un envoi kDrive est déjà en cours. Consulte la barre d'état ou attends sa fin.", "A kDrive upload is already in progress. Check the status banner or wait for it to finish.")
+            return
+        }
         isPreparing = true
         errorMessage = nil
 
@@ -220,7 +220,13 @@ private struct KDriveCollectionUploadFlow: View {
                         }
                     }
                 }
-                pendingFiles = filtered
+                activeLot = KDriveUploadLot(
+                    files: filtered,
+                    directoryId: uploadDirectoryId ?? String(folder.id),
+                    directoryName: uploadDirectoryName.isEmpty ? folder.name : uploadDirectoryName,
+                    skippedCount: skippedCount,
+                    alreadyOnDriveURLs: skippedExistingURLs
+                )
                 isPreparing = false
             } catch {
                 uploadDirectoryId = nil
@@ -306,8 +312,20 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
 
 }
 
+/// Lot d'envoi kDrive prêt à démarrer : fichiers filtrés (sans doublons),
+/// dossier cible et médias déjà présents (supprimables localement).
+struct KDriveUploadLot {
+    let id = UUID()
+    let files: [URL]
+    let directoryId: String
+    let directoryName: String
+    let skippedCount: Int
+    let alreadyOnDriveURLs: [URL]
+}
+
 @MainActor
-private final class KDriveContinuousUploadController: ObservableObject {
+final class KDriveContinuousUploadController: ObservableObject {
+    static let shared = KDriveContinuousUploadController()
     static let concurrentLimit = KDriveUploadPolicy.maxConcurrentUploads
 
     @Published var isUploading = false
@@ -323,18 +341,26 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
     @Published private(set) var uploadedFileURLs: [URL] = []
     @Published private(set) var wasCancelled = false
+    @Published private(set) var activeLot: KDriveUploadLot?
+    @Published private(set) var finished = false
+    @Published private(set) var finalError: String?
+    @Published private(set) var successCount = 0
+    @Published private(set) var failedCount = 0
 
     private var activeTask: Task<Void, Never>?
 
     func start(
-        files: [URL],
+        lot: KDriveUploadLot,
         token: String,
-        driveId: String,
-        directoryId: String,
-        completion: @escaping (_ successCount: Int, _ failedCount: Int, _ errorMessage: String?) -> Void
+        driveId: String
     ) {
+        let files = lot.files
+        let directoryId = lot.directoryId
         cancel()
         wasCancelled = false
+        finished = false
+        finalError = nil
+        activeLot = lot
         KDriveUploadSession.shared.reset()
         LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
@@ -451,13 +477,15 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
             if Task.isCancelled {
                 LogCenter.kdrive(L("Envoi kDrive annulé.", "kDrive upload cancelled."))
-                completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
-                progress = files.isEmpty ? 0 : 1
                 if failed > 0 { LogCenter.err(L("Envoi kDrive : \(success) réussis, \(failed) échoués.", "kDrive upload: \(success) ok, \(failed) failed.")) }
                 else { LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files.")) }
-                completion(success, failed, summaryMessage)
             }
+            finished = true
+            finalError = summaryMessage
+            successCount = success
+            failedCount = failed
+            progress = files.isEmpty ? 0 : 1
         }
     }
 
@@ -991,21 +1019,13 @@ private final class KDriveContinuousUploadController: ObservableObject {
 }
 
 private struct KDriveContinuousUploadSheet: View {
-    let files: [URL]
+    let lot: KDriveUploadLot
     let token: String
     let driveId: String
-    let directoryId: String
-    let directoryName: String
-    let skippedCount: Int
 
-    @StateObject private var uploader = KDriveContinuousUploadController()
+    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
     @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
-    @State private var started = false
-    @State private var finished = false
-    @State private var successCount = 0
-    @State private var failedCount = 0
-    @State private var finalError: String?
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
     @State private var deleteFailures = 0
@@ -1013,29 +1033,29 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var duplicateDeletedCount = 0
     @State private var duplicateDeleteFailures = 0
 
-    /// Medias locaux deja presents sur le Drive, prêtes à la suppression.
-    let alreadyOnDriveURLs: [URL]
+    /// Médias locaux déjà présents sur le Drive, prêts à la suppression.
+    var alreadyOnDriveURLs: [URL] { lot.alreadyOnDriveURLs }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
                 ScrollView {
                     VStack(spacing: 20) {
-                if finished {
-                    Image(systemName: uploader.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
+                if uploader.finished {
+                    Image(systemName: uploader.wasCancelled ? "xmark.circle.fill" : (uploader.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
                         .font(.system(size: 54))
-                        .foregroundStyle(uploader.wasCancelled ? .orange : (failedCount == 0 ? .green : .orange))
+                        .foregroundStyle(uploader.wasCancelled ? .orange : (uploader.failedCount == 0 ? .green : .orange))
 
-                    Text(uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
+                    Text(uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (uploader.failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
                         .font(.headline)
 
-                    Text(L("\(successCount) média(s) envoyé(s) vers « \(directoryName) ».", "\(successCount) media file(s) uploaded to “\(directoryName)”."))
+                    Text(L("\(uploader.successCount) média(s) envoyé(s) vers « \(lot.directoryName) ».", "\(uploader.successCount) media file(s) uploaded to “\(lot.directoryName)”."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
 
-                    if skippedCount > 0 {
-                        Text(L("\(skippedCount) déjà présent(s), ignoré(s).", "\(skippedCount) already present, skipped."))
+                    if lot.skippedCount > 0 {
+                        Text(L("\(lot.skippedCount) déjà présent(s), ignoré(s).", "\(lot.skippedCount) already present, skipped."))
                             .font(.subheadline)
                             .foregroundStyle(.green)
                     }
@@ -1092,8 +1112,8 @@ private struct KDriveContinuousUploadSheet: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    if skippedCount > 0 {
-                        Text(L("\(skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(skippedCount) already on the Drive, skipped."))
+                    if lot.skippedCount > 0 {
+                        Text(L("\(lot.skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(lot.skippedCount) already on the Drive, skipped."))
                             .font(.subheadline)
                             .foregroundStyle(.green)
                     }
@@ -1136,19 +1156,27 @@ private struct KDriveContinuousUploadSheet: View {
                 }
 
                 Button {
-                    if uploader.isUploading {
-                        uploader.cancel()
-                    } else {
-                        dismiss()
-                    }
+                    dismiss()
                 } label: {
-                    Text(finished ? L("Fermer", "Close") : L("Annuler", "Cancel"))
+                    Text(uploader.isUploading ? L("Continuer en arrière-plan", "Continue in background") : L("Fermer", "Close"))
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(finished ? .orange : .red)
+                .tint(.orange)
                 .padding(.horizontal)
                 .padding(.bottom)
+
+                if uploader.isUploading {
+                    Button(role: .destructive) {
+                        uploader.cancel()
+                    } label: {
+                        Text(L("Annuler l'envoi", "Cancel upload"))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                }
             }
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
@@ -1173,9 +1201,8 @@ private struct KDriveContinuousUploadSheet: View {
         } message: {
             Text(L("Ces médias existent déjà sur le Drive. Les copies locales seront supprimées définitivement (pas de corbeille).", "These media files already exist on the Drive. Local copies will be permanently removed (no trash)."))
         }
-        .errorAlert(finalError)
+        .errorAlert(uploader.finalError)
         .presentationDetents([.medium])
-        .interactiveDismissDisabled(uploader.isUploading)
         .onAppear { startUploadIfNeeded() }
     }
 
@@ -1194,24 +1221,14 @@ private struct KDriveContinuousUploadSheet: View {
     }
 
     private func startUploadIfNeeded() {
-        guard !started else { return }
-        started = true
-        guard !files.isEmpty else {
-            finished = true
-            return
-        }
-
+        // Livraison en cours ou terminée pour ce lot : on s'attache sans rien
+        // redémarrer (réaffichage depuis le bandeau d'état).
+        guard uploader.activeLot?.id != lot.id else { return }
         uploader.start(
-            files: files,
+            lot: lot,
             token: token,
-            driveId: driveId,
-            directoryId: directoryId
-        ) { success, failed, error in
-            successCount = success
-            failedCount = failed
-            finalError = uploader.wasCancelled ? nil : error
-            finished = true
-        }
+            driveId: driveId
+        )
     }
 
     private func deleteUploadedFiles() {
@@ -1253,4 +1270,36 @@ private struct KDriveContinuousUploadSheet: View {
         }
         LogCenter.info(L("\(deleted) média(s) déjà sur le Drive supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) media file(s) already on the Drive deleted from the device (\(failures) failure(s))."))
     }
+}
+
+/// Bandeau d'état : visible tant qu'un envoi kDrive tourne. Tap = réaffiche
+/// la feuille de progression (l'envoi continue en arrière-plan).
+struct KDriveUploadBanner: View {
+    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
+    @State private var presented = false
+
+    var body: some View {
+        if uploader.isUploading, let lot = uploader.activeLot {
+            Button {
+                presented = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "icloud.and.arrow.up.fill")
+                    Text(L("Envoi kDrive… \(uploader.completedCount)/\(max(1, uploader.totalCount))", "kDrive upload… \(uploader.completedCount)/\(max(1, uploader.totalCount))"))
+                        .font(.caption.monospacedDigit())
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.orange.opacity(0.4)))
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $presented) {
+                KDriveContinuousUploadSheet(lot: lot, token: kDriveToken, driveId: kDriveId)
+            }
+        }
+    }
+
+    @AppStorage("kDriveApiToken") private var kDriveToken = ""
+    @AppStorage("kDriveId") private var kDriveId = ""
 }

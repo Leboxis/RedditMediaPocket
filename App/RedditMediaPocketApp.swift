@@ -58,6 +58,9 @@ struct ContentView: View {
             // Transition l\u{e9}g\u{e8}re entre les options d'une source et celles d'une
             // autre ; aucune animation si R\u{e9}duire les animations est actif.
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.sourceKind)
+            .overlay(alignment: .top) {
+                KDriveUploadBanner().padding(.top, 8)
+            }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
