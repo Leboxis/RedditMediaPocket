@@ -20,7 +20,8 @@ final class XFetishAlbumsTests: XCTestCase {
         XCTAssertEqual(SourceKind.saved.next, .xFetish)
         XCTAssertEqual(SourceKind.xFetish.next, .twitter)
         XCTAssertEqual(SourceKind.twitter.next, .tiktok)
-        XCTAssertEqual(SourceKind.tiktok.next, .instagram)
+        XCTAssertEqual(SourceKind.tiktok.next, .tiktokSaved)
+        XCTAssertEqual(SourceKind.tiktokSaved.next, .instagram)
         XCTAssertEqual(SourceKind.instagram.next, .user)
     }
 
