@@ -91,6 +91,7 @@ private struct KDriveAPIError: Codable {
 }
 
 private struct KDriveUploadOutcome {
+    let fileURL: URL?
     let fileName: String
     let succeeded: Bool
     let errorMessage: String?
@@ -224,6 +225,8 @@ final class KDriveService: ObservableObject {
     @Published var totalFilesCount = 0
     @Published var currentFileName = ""
     @Published var lastError: String?
+    @Published private(set) var uploadedFileURLs: [URL] = []
+    @Published private(set) var wasCancelled = false
 
     private var activeTask: Task<Void, Never>?
 
@@ -569,12 +572,14 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         }
 
         cancelUpload()
+        wasCancelled = false
         isUploading = true
         currentProgress = 0
         currentFileIndex = 0
         totalFilesCount = files.count
         currentFileName = ""
         lastError = nil
+        uploadedFileURLs = []
 
         activeTask = Task {
             var success = 0
@@ -593,10 +598,11 @@ guard (200..<300).contains(httpResponse.statusCode) else {
                     for fileURL in batch {
                         group.addTask {
                             if Task.isCancelled {
-                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
+                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
                             }
                             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                                 return KDriveUploadOutcome(
+                                    fileURL: fileURL,
                                     fileName: fileURL.lastPathComponent,
                                     succeeded: false,
                                     errorMessage: L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
@@ -609,9 +615,9 @@ guard (200..<300).contains(httpResponse.statusCode) else {
                                     driveId: driveId,
                                     directoryId: directoryId
                                 )
-                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
+                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
                             } catch {
-                                return KDriveUploadOutcome(fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
+                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
                             }
                         }
                     }
@@ -632,6 +638,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
                     currentProgress = Double(completed) / Double(max(1, files.count))
                     if outcome.succeeded {
                         success += 1
+                        if let url = outcome.fileURL { uploadedFileURLs.append(url) }
                         LogCenter.kdrive(L("kDrive : envoyé — \(outcome.fileName)", "kDrive: uploaded — \(outcome.fileName)"))
                     } else {
                         failed += 1
@@ -666,6 +673,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
     }
 
     func cancelUpload() {
+        wasCancelled = true
         activeTask?.cancel()
         activeTask = nil
         isUploading = false
@@ -1109,6 +1117,9 @@ struct KDriveUploadSheet: View {
     @State private var successCount = 0
     @State private var failedCount = 0
     @State private var finalError: String?
+    @State private var showDeleteConfirm = false
+    @State private var deletedCount = 0
+    @State private var deleteFailures = 0
 
     var body: some View {
         NavigationStack {
@@ -1116,17 +1127,32 @@ struct KDriveUploadSheet: View {
                 ScrollView {
                     VStack(spacing: 22) {
                 if finished {
-                    Image(systemName: failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Image(systemName: service.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
                         .font(.system(size: 54))
-                        .foregroundStyle(failedCount == 0 ? .green : .orange)
+                        .foregroundStyle(service.wasCancelled ? .orange : (failedCount == 0 ? .green : .orange))
 
-                    Text(failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings"))
+                    Text(service.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
                         .font(.headline)
 
                     Text(L("\(successCount) média(s) envoyé(s) vers « \(directoryName) ».", "\(successCount) media file(s) uploaded to “\(directoryName)”."))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+
+                    if deletedCount > 0 || deleteFailures > 0 {
+                        Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
+                            .font(.subheadline)
+                            .foregroundStyle(deleteFailures > 0 ? .orange : .green)
+                            .multilineTextAlignment(.center)
+                    } else if !service.uploadedFileURLs.isEmpty {
+                        Button {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label(L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    }
                 } else {
                     ProgressView(value: service.currentProgress)
                         .progressViewStyle(.linear)
@@ -1172,8 +1198,9 @@ struct KDriveUploadSheet: View {
                 Button {
                     if service.isUploading {
                         service.cancelUpload()
+                    } else {
+                        dismiss()
                     }
-                    dismiss()
                 } label: {
                     Text(finished ? L("Fermer", "Close") : L("Annuler", "Cancel"))
                         .frame(maxWidth: .infinity)
@@ -1189,6 +1216,16 @@ struct KDriveUploadSheet: View {
         .errorAlert(finalError)
         .presentationDetents([.medium])
         .interactiveDismissDisabled(service.isUploading)
+        .confirmationDialog(
+            L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone ?", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device?"),
+            isPresented: $showDeleteConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(L("Supprimer", "Delete"), role: .destructive) { deleteUploadedFiles() }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Les fichiers envoyés avec succès seront supprimés définitivement du stockage de l'app (pas de corbeille). Ils restent bien sûr sur kDrive.", "Successfully uploaded files will be permanently removed from the app storage (no trash). They remain on kDrive."))
+        }
         .onAppear { startUploadIfNeeded() }
         .task {
             while !finished {
@@ -1209,8 +1246,24 @@ struct KDriveUploadSheet: View {
         service.uploadBatch(files: files, token: token, driveId: driveId, directoryId: directoryId) { success, failed, error in
             successCount = success
             failedCount = failed
-            finalError = error
+            finalError = service.wasCancelled ? nil : error
             finished = true
         }
+    }
+
+    private func deleteUploadedFiles() {
+        var deleted = 0
+        var failures = 0
+        for url in service.uploadedFileURLs where FileManager.default.fileExists(atPath: url.path) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                deleted += 1
+            } catch {
+                failures += 1
+                LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+            }
+        }
+        deletedCount = deleted
+        deleteFailures = failures
     }
 }

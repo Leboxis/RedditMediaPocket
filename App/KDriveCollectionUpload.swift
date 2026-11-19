@@ -312,6 +312,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
     var activeUploadCount: Int { max(startedCount - completedCount, 0) }
     @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
     @Published private(set) var uploadedFileURLs: [URL] = []
+    @Published private(set) var wasCancelled = false
 
     private var activeTask: Task<Void, Never>?
 
@@ -323,6 +324,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         completion: @escaping (_ successCount: Int, _ failedCount: Int, _ errorMessage: String?) -> Void
     ) {
         cancel()
+        wasCancelled = false
         KDriveUploadSession.shared.reset()
         LogCenter.kdrive(L("Envoi kDrive démarré : \(files.count) fichiers.", "kDrive upload started: \(files.count) files."))
         isUploading = true
@@ -450,6 +452,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
     }
 
     func cancel() {
+        wasCancelled = true
         activeTask?.cancel()
         activeTask = nil
         isUploading = false
@@ -995,6 +998,7 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var finalError: String?
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
+    @State private var deleteFailures = 0
 
     var body: some View {
         NavigationStack {
@@ -1002,11 +1006,11 @@ private struct KDriveContinuousUploadSheet: View {
                 ScrollView {
                     VStack(spacing: 20) {
                 if finished {
-                    Image(systemName: failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    Image(systemName: uploader.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
                         .font(.system(size: 54))
-                        .foregroundStyle(failedCount == 0 ? .green : .orange)
+                        .foregroundStyle(uploader.wasCancelled ? .orange : (failedCount == 0 ? .green : .orange))
 
-                    Text(failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings"))
+                    Text(uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
                         .font(.headline)
 
                     Text(L("\(successCount) média(s) envoyé(s) vers « \(directoryName) ».", "\(successCount) media file(s) uploaded to “\(directoryName)”."))
@@ -1020,10 +1024,11 @@ private struct KDriveContinuousUploadSheet: View {
                             .foregroundStyle(.green)
                     }
 
-                    if deletedCount > 0 {
-                        Text(L("\(deletedCount) fichier(s) supprimé(s) du téléphone.", "\(deletedCount) file(s) deleted from the device."))
+                    if deletedCount > 0 || deleteFailures > 0 {
+                        Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
                             .font(.subheadline)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(deleteFailures > 0 ? .orange : .green)
+                            .multilineTextAlignment(.center)
                     } else if !uploader.uploadedFileURLs.isEmpty {
                         Button {
                             showDeleteConfirm = true
@@ -1107,8 +1112,9 @@ private struct KDriveContinuousUploadSheet: View {
                 Button {
                     if uploader.isUploading {
                         uploader.cancel()
+                    } else {
+                        dismiss()
                     }
-                    dismiss()
                 } label: {
                     Text(finished ? L("Fermer", "Close") : L("Annuler", "Cancel"))
                         .frame(maxWidth: .infinity)
@@ -1167,7 +1173,7 @@ private struct KDriveContinuousUploadSheet: View {
         ) { success, failed, error in
             successCount = success
             failedCount = failed
-            finalError = error
+            finalError = uploader.wasCancelled ? nil : error
             finished = true
         }
     }
@@ -1185,6 +1191,7 @@ private struct KDriveContinuousUploadSheet: View {
             }
         }
         deletedCount = deleted
+        deleteFailures = failures
         LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
     }
 }
