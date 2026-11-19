@@ -101,6 +101,7 @@ public enum TikTokAPI {
     public static func desktopItemListURL(secUid: String, cursor: Int) -> URL {
         var components = URLComponents(string: "https://www.tiktok.com/api/post/item_list/")!
         components.queryItems = [
+            URLQueryItem(name: "device_id", value: webDeviceID),
             URLQueryItem(name: "aid", value: "1988"),
             URLQueryItem(name: "count", value: "35"),
             URLQueryItem(name: "secUid", value: secUid),
@@ -122,6 +123,25 @@ public enum TikTokAPI {
         ]
         return components.url!
     }
+
+    /// Identifiant d'appareil web, à la forme attendue (19 chiffres, généré
+    /// par session). TikTok ne le vérifie pas : un nombre aléatoire bien
+    /// formé vaut celui qu'il aurait émis. Son absence, si, se voit — c'est
+    /// la seule différence entre une réponse complète et un 200 à corps vide
+    /// sur les routes paginées (`tt_orcas_res: 1`, aucun message d'erreur) :
+    /// chaque appel ci-dessous le porte pour cette raison.
+    public static let webDeviceID: String = {
+        var generator = SystemRandomNumberGenerator()
+        var digits = String(Int.random(in: 1...9, using: &generator))
+        for _ in 1..<19 { digits += String(Int.random(in: 0...9, using: &generator)) }
+        return digits
+    }()
+
+    /// Paramètres communs aux appels « sauvegardés » du site web, relevés
+    /// sur les requêtes que le client web desktop envoie lui-même :
+    /// `browser_name`/`browser_version` portent les chaînes navigator
+    /// (Mozilla / appVersion tronquée), pas le nom marketing. Le profil est
+    /// francophone pour coller à la session de l'app.
 
     /// En-têtes des requêtes TikTok (page profil et API). Le Referer de la
     /// page profil est exigé par l'API web, et l'UA navigateur par les deux.
@@ -145,6 +165,99 @@ public enum TikTokAPI {
             "Referer": "https://www.tiktok.com/"
         ]
     }
+
+    /// Pseudo d'un compte à partir d'un chemin de page `/@pseudo` (mensonge
+    /// exclu : un chemin, pas une URL complète). `nil` hors profil.
+    public static func usernameFromProfilePath(_ path: String) -> String? {
+        guard let range = path.range(of: "^/@([A-Za-z0-9._]{1,24})", options: .regularExpression) else { return nil }
+        let name = path[path.index(path.startIndex, offsetBy: 2)..<range.upperBound]
+        guard !name.hasSuffix(".") else { return nil }
+        return String(name)
+    }
+
+    private static func savedBaseQuery() -> [URLQueryItem] {
+        // `region` dérive de la session ; la page utilisateur sert le compte
+        // de la même région que l'appelant, une valeur vide reste acceptée.
+        // `msToken` n'est pas construit ici : la page le replace seule.
+        [
+            URLQueryItem(name: "aid", value: "1988"),
+            URLQueryItem(name: "app_language", value: "fr-FR"),
+            URLQueryItem(name: "app_name", value: "tiktok_web"),
+            URLQueryItem(name: "browser_language", value: "fr-FR"),
+            URLQueryItem(name: "browser_name", value: "Mozilla"),
+            URLQueryItem(name: "browser_online", value: "true"),
+            URLQueryItem(name: "browser_platform", value: "Win32"),
+            URLQueryItem(name: "browser_version", value: "5.0 (Windows)"),
+            URLQueryItem(name: "channel", value: "tiktok_web"),
+            URLQueryItem(name: "cookie_enabled", value: "true"),
+            URLQueryItem(name: "device_id", value: webDeviceID),
+            URLQueryItem(name: "device_platform", value: "web_pc"),
+            URLQueryItem(name: "focus_state", value: "true"),
+            URLQueryItem(name: "from_page", value: "user"),
+            URLQueryItem(name: "history_len", value: "4"),
+            URLQueryItem(name: "is_fullscreen", value: "false"),
+            URLQueryItem(name: "is_page_visible", value: "true"),
+            URLQueryItem(name: "language", value: "fr-FR"),
+            URLQueryItem(name: "os", value: "windows"),
+            URLQueryItem(name: "priority_region", value: ""),
+            URLQueryItem(name: "referer", value: ""),
+            URLQueryItem(name: "region", value: "FR"),
+            URLQueryItem(name: "root_referer", value: "https://www.tiktok.com/"),
+            URLQueryItem(name: "screen_height", value: "1080"),
+            URLQueryItem(name: "screen_width", value: "1920"),
+            URLQueryItem(name: "tz_name", value: "Europe/Paris"),
+            URLQueryItem(name: "webcast_language", value: "fr-FR")
+        ]
+    }
+
+    private static func savedURL(_ path: String, extra: [URLQueryItem]) -> URL {
+        var components = URLComponents(string: "https://www.tiktok.com" + path)!
+        components.queryItems = savedBaseQuery() + extra
+        return components.url!
+    }
+
+    /// Liste des dossiers de favoris du compte (`secUid`) : `publicOnly`
+    /// demande aussi les dossiers privés, servis au compte propriétaire seul —
+    /// c'est bien le but, la session est la sienne.
+    public static func collectionListURL(secUid: String, cursor: String, count: Int = savedPageSize) -> URL {
+        savedURL("/api/user/collection_list/", extra: [
+            URLQueryItem(name: "secUid", value: secUid),
+            URLQueryItem(name: "cursor", value: cursor.isEmpty ? "0" : cursor),
+            URLQueryItem(name: "count", value: String(count)),
+            URLQueryItem(name: "coverFormat", value: "2"),
+            URLQueryItem(name: "needPinnedItemIds", value: "true"),
+            URLQueryItem(name: "publicOnly", value: "false")
+        ])
+    }
+
+    /// Toutes les publications enregistrées du compte, dossiers compris :
+    /// demi « enregistrés » de l'onglet Favoris, réservée au propriétaire.
+    public static func collectItemListURL(secUid: String, cursor: String, count: Int = savedPageSize) -> URL {
+        savedURL("/api/user/collect/item_list/", extra: [
+            URLQueryItem(name: "secUid", value: secUid),
+            URLQueryItem(name: "cursor", value: cursor.isEmpty ? "0" : cursor),
+            URLQueryItem(name: "count", value: String(count)),
+            URLQueryItem(name: "coverFormat", value: "2"),
+            URLQueryItem(name: "needPinnedItemIds", value: "true"),
+            URLQueryItem(name: "post_item_list_request_type", value: "0")
+        ])
+    }
+
+    /// Publications d'un seul dossier de favoris, nommé par `collectionId`
+    /// (`sourceType` 113 = dossier d'enregistrés) : la requête nomme le
+    /// dossier, pas une personne.
+    public static func collectionItemListURL(collectionId: String, cursor: String, count: Int = savedPageSize) -> URL {
+        savedURL("/api/collection/item_list/", extra: [
+            URLQueryItem(name: "collectionId", value: collectionId),
+            URLQueryItem(name: "cursor", value: cursor.isEmpty ? "0" : cursor),
+            URLQueryItem(name: "count", value: String(count)),
+            URLQueryItem(name: "sourceType", value: "113")
+        ])
+    }
+
+    /// Taille de page des routes sauvegardés : TikTok plafonne la liste des
+    /// publications à 35.
+    static let savedPageSize = 35
 }
 
 /// Quels hôtes reçoivent les cookies de session TikTok. Les CDN de médias
@@ -348,7 +461,13 @@ public enum TikTokWeb {
               let close = html[open.upperBound...].range(of: "</script>") else {
             throw TikTokError.invalidTimeline
         }
-        let json = String(html[open.upperBound..<close.lowerBound])
+        return try parseProfileData(String(html[open.upperBound..<close.lowerBound]))
+    }
+
+    /// Résout `@pseudo` en `secUid` depuis le JSON du script d'hydratation
+    /// d'une page profil, tel que la page en cours le porte — sert à lire le
+    /// compte connecté dans la WebView sans télécharger le HTML deux fois.
+    public static func parseProfileData(_ json: String) throws -> Profile {
         guard let payload = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let scope = dictionary(payload, "__DEFAULT_SCOPE__"),
               let detail = dictionary(scope, "webapp.user-detail") else {
@@ -370,6 +489,12 @@ public enum TikTokWeb {
     /// pagine comme `item_list` (`hasMore`, `cursor`), avec la liste sous
     /// `collectionList`.
     public static func parseCollectionList(_ data: Data) throws -> [TikTokSavedCollection] {
+        try parseCollectionListPage(data).folders
+    }
+
+    /// La même page, avec son curseur de suite et sa fin annoncée : la liste
+    /// des dossiers peut dépasser une page.
+    public static func parseCollectionListPage(_ data: Data) throws -> (folders: [TikTokSavedCollection], nextCursor: String?, hasMore: Bool) {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw TikTokError.invalidTimeline
         }
@@ -385,7 +510,11 @@ public enum TikTokWeb {
             let count = (text(node, "total")).flatMap { Int($0) } ?? number(node, "total")
             out.append(TikTokSavedCollection(id: id, name: name, itemCount: count))
         }
-        return out
+        let cursor: String?
+        if let value = root["cursor"] as? String { cursor = value.isEmpty ? nil : value }
+        else if let value = root["cursor"] as? NSNumber { cursor = value.stringValue }
+        else { cursor = nil }
+        return (out, raw.isEmpty ? nil : cursor, number(root, "hasMore") != 0)
     }
 
     /// Une page de la liste des publications. Les entrées sans média

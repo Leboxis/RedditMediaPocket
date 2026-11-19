@@ -194,6 +194,104 @@ final class TikTokTests: XCTestCase {
         XCTAssertEqual(TikTokAPI.savedURL().absoluteString, "https://www.tiktok.com/saved")
     }
 
+    /// Le pseudo vient du chemin de page (`/@pseudo`), jamais d'un fil :
+    /// un premier lien `@` d'accueil dsigne un crateur, pas le compte connect.
+    func testUsernameFromProfilePath() {
+        XCTAssertEqual(TikTokAPI.usernameFromProfilePath("/@nasa"), "nasa")
+        XCTAssertEqual(TikTokAPI.usernameFromProfilePath("/@some.name_24"), "some.name_24")
+        XCTAssertEqual(TikTokAPI.usernameFromProfilePath("/@nasa/video/7301"), "nasa")
+        XCTAssertNil(TikTokAPI.usernameFromProfilePath("/foryou"))
+        XCTAssertNil(TikTokAPI.usernameFromProfilePath("/upload"))
+        XCTAssertNil(TikTokAPI.usernameFromProfilePath(""))
+        // Un point final n'existe pas dans un pseudo TikTok.
+        XCTAssertNil(TikTokAPI.usernameFromProfilePath("/@nasa."))
+    }
+
+    /// Forme 19 chiffres attendue par les routes pagines ; son absence
+    /// produit un 200 corps vide silencieux (`tt_orcas_res: 1`).
+    func testWebDeviceIDShape() {
+        XCTAssertEqual(TikTokAPI.webDeviceID.count, 19)
+        XCTAssertTrue(TikTokAPI.webDeviceID.allSatisfy { $0.isNumber })
+    }
+
+    func testDesktopItemListCarriesDeviceID() {
+        let items = URLComponents(url: TikTokAPI.desktopItemListURL(secUid: "SEC1", cursor: 0),
+                                  resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertTrue(items.contains { $0.name == "device_id" && $0.value == TikTokAPI.webDeviceID })
+        XCTAssertTrue(items.contains { $0.name == "secUid" && $0.value == "SEC1" })
+        XCTAssertTrue(items.contains { $0.name == "cursor" && $0.value == "0" })
+        XCTAssertTrue(items.contains { $0.name == "count" && $0.value == "35" })
+    }
+
+    /// Les trois routes terminales des sauvegardes portent les paramtres du
+    /// client web desktop relevs sur la page (aid 1988, device_id) et leurs
+    /// cls propres (secUid, collectionId, sourceType 113 pour un dossier).
+    func testSavedRoutesCarrySignedClientParams() throws {
+        func query(_ url: URL) throws -> [String: String] {
+            var out: [String: String] = [:]
+            for item in URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems! {
+                out[item.name] = item.value
+            }
+            return out
+        }
+        let foldersURL = TikTokAPI.collectionListURL(secUid: "SEC1", cursor: "0")
+        let allURL = TikTokAPI.collectItemListURL(secUid: "SEC1", cursor: "7300")
+        let oneURL = TikTokAPI.collectionItemListURL(collectionId: "7659011279817935649", cursor: "")
+        XCTAssertEqual(foldersURL.path, "/api/user/collection_list/")
+        XCTAssertEqual(allURL.path, "/api/user/collect/item_list/")
+        XCTAssertEqual(oneURL.path, "/api/collection/item_list/")
+        for url in [foldersURL, allURL, oneURL] {
+            let items = try query(url)
+            XCTAssertEqual(items["device_id"], TikTokAPI.webDeviceID)
+            XCTAssertEqual(items["aid"], "1988")
+            XCTAssertEqual(items["app_name"], "tiktok_web")
+            XCTAssertEqual(items["device_platform"], "web_pc")
+            XCTAssertEqual(items["browser_version"], "5.0 (Windows)")
+        }
+        let folders = try query(foldersURL)
+        XCTAssertEqual(folders["secUid"], "SEC1")
+        XCTAssertEqual(folders["cursor"], "0")
+        XCTAssertEqual(folders["count"], "35")
+        XCTAssertEqual(folders["coverFormat"], "2")
+        XCTAssertEqual(folders["needPinnedItemIds"], "true")
+        XCTAssertEqual(folders["publicOnly"], "false")
+        let all = try query(allURL)
+        XCTAssertEqual(all["secUid"], "SEC1")
+        XCTAssertEqual(all["cursor"], "7300")
+        XCTAssertEqual(all["post_item_list_request_type"], "0")
+        let one = try query(oneURL)
+        XCTAssertEqual(one["collectionId"], "7659011279817935649")
+        XCTAssertEqual(one["sourceType"], "113")
+        XCTAssertEqual(one["count"], "35")
+    }
+
+    /// Le JSON d'hydratation de la page profil (lu dans la WebView) sert
+    /// rsoudre le `secUid` du compte connect.
+    func testParseProfileDataReadsHydrationJSON() throws {
+        let payload = #"{"__DEFAULT_SCOPE__":{"webapp.user-detail":{"userInfo":{"user":{"secUid":"SEC2","uniqueId":"nasa"}},"itemList":[]}}}"#
+        let profile = try TikTokWeb.parseProfileData(payload)
+        XCTAssertEqual(profile.secUid, "SEC2")
+        XCTAssertTrue(profile.posts.isEmpty)
+    }
+
+    func testParseProfileDataRejectsEmptyPayload() {
+        XCTAssertThrowsError(try TikTokWeb.parseProfileData("{}")) { error in
+            XCTAssertEqual(error as? TikTokError, .invalidTimeline)
+        }
+    }
+
+    func testParseCollectionListPageReturnsCursorAndEnd() throws {
+        let json = #"{"collectionList":[{"collectionId":"11","name":"A","total":"1"}],"hasMore":true,"cursor":"35"}"#
+        let page = try TikTokWeb.parseCollectionListPage(Data(json.utf8))
+        XCTAssertEqual(page.folders.count, 1)
+        XCTAssertEqual(page.nextCursor, "35")
+        XCTAssertTrue(page.hasMore)
+        let end = try TikTokWeb.parseCollectionListPage(Data(#"{"collectionList":[],"hasMore":false,"cursor":0}"#.utf8))
+        XCTAssertTrue(end.folders.isEmpty)
+        XCTAssertNil(end.nextCursor)
+        XCTAssertFalse(end.hasMore)
+    }
+
     func testParseCollectionListReadsFolders() throws {
         let json = """
         {"collectionList":[{"collectionId":"7659011279817935649","name":"Wanna go to","total":"49","status":1},
