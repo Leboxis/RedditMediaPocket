@@ -80,10 +80,32 @@ final class TikTokTests: XCTestCase {
         let media = TikTokAPI.mediaHeaders()
         XCTAssertEqual(media["Referer"], "https://www.tiktok.com/")
         XCTAssertEqual(media["User-Agent"], TikTokAPI.userAgent)
-        // Les nœuds `*-webapp-prime` refusent (403) un transfert sans
-        // requête média segmentée ni origine de la page.
-        XCTAssertEqual(media["Range"], "bytes=0-")
-        XCTAssertEqual(media["Origin"], "https://www.tiktok.com")
+        // Aligné sur `yt-dlp` : un transfert média est une requête simple.
+        // `Range` et `Origin` n'en font pas partie — `Origin` n'est émis que
+        // sur une requête CORS, et l'ajouter peut faire refuser le nœud.
+        XCTAssertNil(media["Range"])
+        XCTAssertNil(media["Origin"])
+    }
+
+    /// `yt-dlp` pose le `Referer` d'un média sur la page de sa publication,
+    /// pas sur la racine du site. L'auteur inconnu retombe sur `@_`, la forme
+    /// que l'extracteur de référence emploie dans ce cas.
+    func testMediaRefererPointsAtThePostPage() {
+        let named = TikTokAPI.mediaHeaders(referer: TikTokAPI.postPageURL(author: "nasa", postID: "7301"))
+        XCTAssertEqual(named["Referer"], "https://www.tiktok.com/@nasa/video/7301")
+        let anonymous = TikTokAPI.mediaHeaders(referer: TikTokAPI.postPageURL(author: nil, postID: "7301"))
+        XCTAssertEqual(anonymous["Referer"], "https://www.tiktok.com/@_/video/7301")
+    }
+
+    /// `www.tiktok.com/aweme/v1/play/` est mort : il répond une redirection
+    /// vers `/404`, donc du HTML. `yt-dlp` écarte ces formats explicitement
+    /// (issue #11034) ; les garder produisait un `invalid` qui court-circuitait
+    /// le repli WebView.
+    func testDeadPlayHostIsNotAcceptedAsMedia() {
+        XCTAssertFalse(TikTokWeb.isPlayableMediaHost(URL(string: "https://www.tiktok.com/aweme/v1/play/?sig=3")!))
+        XCTAssertTrue(TikTokWeb.isPlayableMediaHost(URL(string: "https://v16-webapp-prime.tiktok.com/video/a.mp4")!))
+        XCTAssertTrue(TikTokWeb.isPlayableMediaHost(URL(string: "https://v19-webapp-prime.tiktok.com/video/a.mp4")!))
+        XCTAssertTrue(TikTokWeb.isPlayableMediaHost(URL(string: "https://p16-sign.tiktokcdn-us.com/img.jpg")!))
     }
 
     /// Chaque entrée de `urlList` est un miroir CDN du même contenu : la
@@ -101,9 +123,12 @@ final class TikTokTests: XCTestCase {
         let media = try XCTUnwrap(page.posts.first?.media.first)
         XCTAssertEqual(media.url.absoluteString,
                        "https://v16-webapp-prime.tiktok.com/video/a.mp4?sig=1")
+        // L'adresse `www.tiktok.com/aweme/v1/play/` est écartée : elle répond
+        // une redirection vers `/404`, donc du HTML. La garder comme miroir ne
+        // produisait qu'un essai mort, et son `invalid` court-circuitait le
+        // repli WebView.
         XCTAssertEqual(media.mirrors.map { $0.absoluteString },
-                       ["https://v19-webapp-prime.tiktok.com/video/a.mp4?sig=2",
-                        "https://www.tiktok.com/aweme/v1/play/?sig=3"])
+                       ["https://v19-webapp-prime.tiktok.com/video/a.mp4?sig=2"])
     }
 
     /// Sans variante `bitrateInfo`, `playAddr` devient l'URL primaire et

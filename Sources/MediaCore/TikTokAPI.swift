@@ -170,28 +170,89 @@ public enum TikTokAPI {
         ]
     }
 
-    /// En-têtes des transferts de médias. Les URL vidéo exigent le Referer de
-    /// tiktok.com (anti-hotlink), l'UA navigateur lié aux cookies, l'Origine de
-    /// la requête web, et un en-tête `Range` : les nœuds CDN
-    /// `*-webapp-prime` servent le média au lecteur navigateur (requête vidéo
-    /// segmentée) et refusent toute demande sans ces en-têtes (HTTP 403).
-    public static func mediaHeaders(browserAgent: String? = nil) -> [String: String] {
+    /// En-têtes des transferts de médias.
+    ///
+    /// Aligné sur ce que fait `yt-dlp` pour ces mêmes URL de CDN : un `Referer`
+    /// du site, l'UA du client qui a obtenu l'URL, et rien d'autre. Les deux
+    /// en-têtes ajoutés auparavant sont retirés :
+    /// - `Origin` n'est émis par un navigateur que sur une requête CORS ; un
+    ///   `<video src>` n'en porte pas, et une valeur inattendue peut être
+    ///   refusée par les nœuds `*-webapp-prime`.
+    /// - `Range: bytes=0-` n'est pas envoyé non plus par les extracteurs de
+    ///   référence, qui téléchargent ces fichiers en requête simple.
+    ///
+    /// `referer` est la page du média quand elle est connue : `yt-dlp` pose
+    /// `Referer` sur l'adresse de la publication (`/@auteur/video/<id>`), pas
+    /// sur la racine du site. La racine reste le repli.
+    public static func mediaHeaders(referer: URL? = nil, browserAgent: String? = nil) -> [String: String] {
         [
             "User-Agent": browserAgent ?? userAgent,
-            "Referer": "https://www.tiktok.com/",
-            "Origin": "https://www.tiktok.com",
-            "Accept": "*/*",
-            "Range": "bytes=0-"
+            "Referer": (referer ?? URL(string: "https://www.tiktok.com/")!).absoluteString,
+            "Accept": "*/*"
         ]
+    }
+
+    /// Adresse de la page d'une publication, utilisée comme `Referer` des
+    /// transferts de son média. `yt-dlp` emploie `@_` quand l'auteur n'est pas
+    /// connu (cas d'un fil de liste) : le CDN ne vérifie que l'hôte, pas
+    /// l'auteur du chemin.
+    public static func postPageURL(author: String?, postID: String) -> URL? {
+        let handle = (author?.isEmpty == false) ? author! : "_"
+        return URL(string: "https://www.tiktok.com/@\(handle)/video/\(postID)")
+    }
+
+    /// Identité du compte connecté, telle que le site la sert lui-même
+    /// (`/passport/web/account/info/`, appelé par la page d'accueil dès
+    /// l'ouverture d'une session). C'est la seule source fiable : le premier
+    /// lien `/@` du DOM désigne un créateur du fil, jamais le compte connecté.
+    public static func accountInfoURL() -> URL {
+        var components = URLComponents(string: "https://www.tiktok.com/passport/web/account/info/")!
+        components.queryItems = [URLQueryItem(name: "aid", value: "1988")]
+        return components.url!
     }
 
     /// Pseudo d'un compte à partir d'un chemin de page `/@pseudo` (mensonge
     /// exclu : un chemin, pas une URL complète). `nil` hors profil.
+    ///
+    /// **Ne pas en tirer le compte connecté** : le premier chemin `/@` d'une
+    /// page de fil désigne un créateur voisin. Réservé aux chemins dont on
+    /// sait qu'ils portent le compte voulu (profil ouvert explicitement) ;
+    /// l'identité du propriétaire se lit par `parseAccountInfo`.
     public static func usernameFromProfilePath(_ path: String) -> String? {
         guard let range = path.range(of: "^/@([A-Za-z0-9._]{1,24})", options: .regularExpression) else { return nil }
         let name = path[path.index(path.startIndex, offsetBy: 2)..<range.upperBound]
         guard !name.hasSuffix(".") else { return nil }
         return String(name)
+    }
+
+    /// Compte connecté lu dans `/passport/web/account/info/` : `username`
+    /// (le pseudo) et `secUid`. Ces réponses enveloppent leurs données dans
+    /// `data` ; le parcours tolère l'enveloppe absente comme les noms
+    /// alternatifs, TikTok renommant ses clés d'une génération à l'autre.
+    ///
+    /// `nil` quand la réponse ne porte pas de compte (session absente : le
+    /// site rend alors `user_id: "0"`), ce qui doit être distingué d'une
+    /// réponse illisible — voir `TikTokAccount.strict`.
+    public static func parseAccountInfo(_ data: Data) -> TikTokAccount? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let body = root["data"] as? [String: Any] ?? root
+        let message = (root["message"] as? String) ?? (root["msg"] as? String) ?? ""
+        func text(_ keys: [String]) -> String? {
+            for key in keys {
+                if let value = body[key] as? String, !value.isEmpty, value != "0" { return value }
+            }
+            return nil
+        }
+        // `user_id` vaut "0" hors session : c'est une absence de compte, pas
+        // un nom valide.
+        guard let username = text(["username", "unique_id", "uniqueId", "display_name"]),
+              username.range(of: "^[A-Za-z0-9._]{1,24}$", options: .regularExpression) != nil,
+              !username.hasSuffix(".") else {
+            if !message.isEmpty { return nil }
+            return nil
+        }
+        let secUid = text(["sec_uid", "secUid", "sec_user_id"])
+        return TikTokAccount(username: username, secUid: secUid ?? "")
     }
 
     private static func savedBaseQuery() -> [URLQueryItem] {
@@ -364,6 +425,18 @@ public enum TikTokWebNavigation {
     static func isOAuthHost(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
         return oauthHosts.contains(host)
+    }
+}
+
+/// Compte connecté résolu par le site lui-même.
+public struct TikTokAccount: Hashable, Sendable {
+    public let username: String
+    /// `secUid` du compte, quand la réponse le porte.
+    public let secUid: String
+
+    public init(username: String, secUid: String = "") {
+        self.username = username
+        self.secUid = secUid
     }
 }
 
@@ -642,7 +715,7 @@ public enum TikTokWeb {
         var out: [TikTokMedia] = []
         for (index, image) in (objects(dictionary(item, "imagePost"), "images") ?? []).enumerated() {
             guard let url = firstURL(dictionary(image, "imageURL"), "urlList"),
-                  isMediaHost(url), seen.insert("i\(index)-\(url.absoluteString)").inserted else { continue }
+                  isPlayableMediaHost(url), seen.insert("i\(index)-\(url.absoluteString)").inserted else { continue }
             out.append(TikTokMedia(id: "\(itemID(item))-\(index + 1)", kind: .image, url: url))
         }
         guard out.isEmpty else { return out }
@@ -668,7 +741,7 @@ public enum TikTokWeb {
                 candidates = [text(variant, "PlayAddr"), text(variant, "playAddr")]
                     .compactMap { $0.flatMap(URL.init(string:)) }
             }
-            guard let url = candidates.first, isMediaHost(url) else { continue }
+            guard let url = candidates.first, isPlayableMediaHost(url) else { continue }
             let gear = text(variant, "GearName") ?? text(variant, "gearName") ?? ""
             // Le nom de variante porte la définition (`adapt_lowest_1080_1`,
             // `adapt_lower_720_1`…) : la définition prime sur le débit — un
@@ -695,10 +768,10 @@ public enum TikTokWeb {
         // miroir si l'hote du premier refuse le transfert.
         var fallback: [URL] = []
         for key in ["playAddr", "downloadAddr"] {
-            if let url = text(video, key).flatMap(URL.init(string:)), isMediaHost(url) {
+            if let url = text(video, key).flatMap(URL.init(string:)), isPlayableMediaHost(url) {
                 fallback.append(url)
             }
-            fallback += allURLs(dictionary(video, key), "urlList").filter { isMediaHost($0) }
+            fallback += allURLs(dictionary(video, key), "urlList").filter { isPlayableMediaHost($0) }
         }
         if let url = fallback.first, seen.insert(url.absoluteString).inserted {
             var mirrors: [URL] = []
@@ -735,6 +808,20 @@ public enum TikTokWeb {
             }
         }
         return out
+    }
+
+    /// Jette les URL de média servies par `www.tiktok.com` lui-même.
+    ///
+    /// La route historique `www.tiktok.com/aweme/v1/play/` n'existe plus : elle
+    /// répond une redirection vers `/404`, donc du HTML. `yt-dlp` filtre
+    /// explicitement ces formats (`_extract_web_formats`,
+    /// « Filter out broken formats », issue #11034) : les conserver ne fait
+    /// qu'ajouter une tentative morte par média, et c'est ce qui masquait le
+    /// repli WebView en produisant un `NetworkError.invalid` au lieu d'un
+    /// refus CDN.
+    public static func isPlayableMediaHost(_ url: URL) -> Bool {
+        guard isMediaHost(url), let host = url.host?.lowercased() else { return false }
+        return host != "www.tiktok.com" && host != "tiktok.com"
     }
 
     /// Seuls les hôtes de publication de TikTok sont acceptés : une URL

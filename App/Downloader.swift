@@ -2141,9 +2141,13 @@ extension Notification.Name {
                         let id = media.storageKey
                         if let quality = media.quality { qualityTally[quality, default: 0] += 1 }
                         mediaOverrides[id] = [.direct(media.url)]
-                        // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
-                        // et l'UA navigateur lié aux cookies.
-                        mediaHeadersByMedia[id] = pageMediaHeaders
+                        // Anti-hotlink : `yt-dlp` pose `Referer` sur l'adresse
+                        // de la publication (`/@auteur/video/<id>`), pas sur la
+                        // racine du site, et l'UA doit être celui du client qui
+                        // a obtenu l'URL.
+                        mediaHeadersByMedia[id] = TikTokAPI.mediaHeaders(
+                            referer: TikTokAPI.postPageURL(author: username, postID: post.id),
+                            browserAgent: paginator.pageUserAgent)
                         mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
@@ -2204,28 +2208,33 @@ extension Notification.Name {
     /// d'interface ni du premier lien `@` d'un fil — celui-là désigne un
     /// créateur du fil, pas le compte connecté.
     private static func resolveTikTokOwnAccount(_ paginator: TikTokWebPaginator) async -> (username: String, profile: TikTokWeb.Profile)? {
-        var name = await paginator.ownUsername()
-        for _ in 0..<3 where name == nil {
-            _ = await paginator.openProfileMenu()
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            name = await paginator.ownUsername()
-        }
-        if name == nil {
-            // Le menu ouvert vit hors `header` : la r\u{00e9}colte du repli
-            // Enregistr\u{00e9}s conna\u{00ee}t aussi le lien profil du compte.
-            if let url = await paginator.savedPageURL(),
-               let harvested = TikTokAPI.usernameFromProfilePath(url.path) {
-                name = harvested
+        // Source primaire : la route `passport`, celle que le site appelle
+        // lui-même. Le DOM n'est qu'un repli — et son premier lien `/@` est un
+        // créateur du fil, pas le compte connecté.
+        guard let account = await paginator.account() else {
+            guard let name = await paginator.ownUsername() else {
+                LogCenter.info(L("TikTok : compte connecté introuvable (passport muet, aucun chemin /@ dans la page).",
+                                 "TikTok: signed-in account not found (passport silent, no /@ path on the page)."))
+                return nil
             }
+            LogCenter.info(L("TikTok : compte \(name) lu dans la page (source de repli, non vérifiée par passport).",
+                             "TikTok: account \(name) read from the page (fallback source, unverified by passport)."))
+            return await loadTikTokProfile(paginator: paginator, username: name)
         }
-        guard let name else {
-            LogCenter.info(L("TikTok : compte connect\u{00e9} introuvable dans la page (aucun chemin /@, ni en-t\u{00ea}te, ni menu).",
-                             "TikTok: signed-in account not found on the page (no /@ path, header or menu)."))
-            return nil
+        if !account.secUid.isEmpty {
+            // Le `secUid` vient de la même réponse : inutile d'ouvrir le profil.
+            return (account.username, TikTokWeb.Profile(secUid: account.secUid, posts: []))
         }
+        return await loadTikTokProfile(paginator: paginator, username: account.username)
+    }
+
+    /// Navigation vers le profil d'un compte déjà identifié, pour y lire le
+    /// `secUid` quand la route `passport` ne l'a pas fourni.
+    private static func loadTikTokProfile(_ paginator: TikTokWebPaginator,
+                                          username: String) async -> (username: String, profile: TikTokWeb.Profile)? {
         // Navigation complète imposée : après une navigation interne du site,
         // le script d'hydratation de la page resterait celui de l'accueil.
-        guard await paginator.navigate(TikTokAPI.profileURL(username: name)) else {
+        guard await paginator.navigate(TikTokAPI.profileURL(username: username)) else {
             LogCenter.info(L("TikTok : navigation vers le profil du compte connect\u{00e9} \u{00e9}chou\u{00e9}e.",
                              "TikTok: navigation to the signed-in account profile failed."))
             return nil
@@ -2237,7 +2246,7 @@ extension Notification.Name {
                              "TikTok: the profile page hydration did not deliver the secUid."))
             return nil
         }
-        return (name, profile)
+        return (username, profile)
     }
 
     /// Fil paginé des sauvegardés par appels API signés dans la page TikTok :
@@ -2492,7 +2501,11 @@ extension Notification.Name {
                         let id = media.storageKey
                         if let quality = media.quality { qualityTally[quality, default: 0] += 1 }
                         mediaOverrides[id] = [.direct(media.url)]
-                        mediaHeadersByMedia[id] = pageMediaHeaders
+                        // Même règle que pour `tt/` : `Referer` de la
+                        // publication, UA du client qui a servi la liste.
+                        mediaHeadersByMedia[id] = TikTokAPI.mediaHeaders(
+                            referer: TikTokAPI.postPageURL(author: tikTokSavedAccount, postID: post.id),
+                            browserAgent: paginator.pageUserAgent)
                         mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
@@ -3279,6 +3292,28 @@ extension Notification.Name {
         tikTokCDNRefusals += 1
     }
 
+    /// Code de refus à retenir pour un média TikTok en échec, ou `nil` quand
+    /// l'erreur ne relève pas des replis TikTok (source étrangère, annulation,
+    /// quota).
+    ///
+    /// Deux formes comptent : un refus HTTP franc (`NetworkError.refused`,
+    /// 400/401/403) et une réponse qui n'est pas un média
+    /// (`NetworkError.invalid`) — c'est le cas d'une URL `www.tiktok.com/…`
+    /// morte qui répond du HTML, et celui d'un nœud qui sert une page d'erreur
+    /// avec un code 200. Sans cette seconde forme, le repli WebView n'était
+    /// jamais atteint.
+    private static func tikTokRefusalCode(_ error: Error, media url: URL) -> Int? {
+        // Hote non TikTok : la question ne se pose pas (Reddit, RedGIFs…).
+        guard TikTokWeb.isMediaHost(url) else { return nil }
+        if DownloadFailurePolicy.isCancellation(error) { return nil }
+        if case NetworkError.limited = error { return nil }
+        if case NetworkError.refused(let code) = error {
+            return (code == 400 || code == 401 || code == 403) ? code : nil
+        }
+        if case NetworkError.invalid = error { return 403 }
+        return nil
+    }
+
     /// Ajoute un média en échec au journal persistant. L'échec était muet :
     /// compté « ignoré » puis oublié, et le média marqué vu n'était jamais
     /// réévalué. Le journal le garde visible et retentable en un geste.
@@ -3576,7 +3611,15 @@ extension Notification.Name {
                 let saved = try await network.download(url, headers: headers)
                 tikTokCDNRefusals = 0
                 return saved
-            } catch NetworkError.refused(let code) where code == 400 || code == 401 || code == 403 {
+            } catch {
+                // Toute défaillance d'un média TikTok passe par les replis. Le
+                // refus CDN (403) n'est pas le seul cas : une URL morte
+                // (`www.tiktok.com/aweme/v1/play/` répond du HTML) échoue en
+                // `NetworkError.invalid`, et ce cas sortait auparavant de ce
+                // `catch` sans jamais tenter la WebView — c'est précisément ce
+                // qui masquait le repli dans le journal. Les sources autres que
+                // TikTok gardent leur erreur d'origine.
+                guard let code = Self.tikTokRefusalCode(error, media: url) else { throw error }
                 // Miroirs CDN : chaque adresse de `urlList` sert le même
                 // contenu ; un nœud refuse parfois là où le suivant passe.
                 for mirror in mirrors where mirror != url {
@@ -3585,7 +3628,7 @@ extension Notification.Name {
                         let saved = try await network.download(mirror, headers: headers)
                         tikTokCDNRefusals = 0
                         return saved
-                    } catch NetworkError.refused { continue }
+                    } catch { continue }
                 }
                 // Repli TikTok : le CDN refuse le client URLSession mais sert
                 // la même URL au vrai navigateur — d'abord le fetch de la page,

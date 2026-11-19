@@ -525,12 +525,45 @@ import MediaCore
         return true
     }
 
-    /// Pseudo du compte connecté vu par la page : chemin `/@pseudo` ou
-    /// ancrage profil de l'en-tête. `nil` quand la page n'en expose aucun.
+    /// Pseudo du compte connecté vu par la page (`/@pseudo` ou ancrage profil
+    /// de l'en-tête). `nil` quand la page n'en expose aucun.
+    ///
+    /// **Indice, pas preuve** : sur le fil « Pour toi », le premier lien `/@`
+    /// de l'en-tête désigne un créateur voisin. Ne jamais en faire le nom
+    /// d'une collection TikTok — voir `account()`.
     func ownUsername() async -> String? {
         guard let value = await evaluateString("window.__tiktokMe ? window.__tiktokMe() : ''"),
               !value.isEmpty else { return nil }
         return value
+    }
+
+    /// Compte réellement connecté, demandé au site (`/passport/web/account/info/`).
+    ///
+    /// C'est la source que la page appelle elle-même dès qu'une session est
+    /// ouverte : elle répond le pseudo et le `secUid` du propriétaire, et
+    /// `user_id: "0"` quand personne n'est connecté. Le grattage du DOM ne
+    /// peut pas la remplacer — c'est lui qui a nommé une collection d'après un
+    /// inconnu du fil.
+    ///
+    /// `nil` si l'appel n'aboutit pas ; un appel réussi sans compte renvoie un
+    /// résultat vide à interpréter par l'appelant (`signedFetch` distingue les
+    /// deux dans le journal).
+    func account() async -> TikTokAccount? {
+        guard let response = await signedFetch(TikTokAPI.accountInfoURL()),
+              response.status == 200, !response.body.isEmpty,
+              let data = response.body.data(using: .utf8) else {
+            LogCenter.info(L("TikTok web : compte connecté non résolu (appel passport absent ou refusé).",
+                             "TikTok web: signed-in account unresolved (passport call missing or refused)."))
+            return nil
+        }
+        guard let account = TikTokAPI.parseAccountInfo(data) else {
+            LogCenter.info(L("TikTok web : le site ne nomme aucun compte connecté (session absente ?).",
+                             "TikTok web: the site names no signed-in account (session missing?)."))
+            return nil
+        }
+        pageUsername = account.username
+        LogCenter.info(L("TikTok web : compte connecté \(account.username).", "TikTok web: signed-in account \(account.username)."))
+        return account
     }
 
     /// JSON d'hydratation de la page courante : sur une page profil chargée
@@ -646,7 +679,11 @@ import MediaCore
             LogCenter.info(L("TikTok web : le menu du profil n'a livre aucun lien.", "TikTok web: the profile menu gave up no link."))
             return nil
         }
-        if let name = payload["user"] as? String, !name.isEmpty { pageUsername = name }
+        // `payload["user"]` n'est **jamais** repris ici : `__tiktokHarvestSaved`
+        // lit le premier lien `/@` de l'en-tête, qui désigne un créateur du fil
+        // et non le compte connecté. C'est cette valeur qui a fait apparaître
+        // une collection `ts/<inconnu>`. Le compte se demande à
+        // `account()` (route `passport`), seul juge.
         for raw in links {
             let absolute = raw.hasPrefix("http") ? raw : "https://www.tiktok.com" + raw
             guard let url = URL(string: absolute), url.host?.hasSuffix("tiktok.com") == true else { continue }
@@ -661,14 +698,17 @@ import MediaCore
             LogCenter.info(L("TikTok web : lien Enregistres trouve \(absolute).", "TikTok web: saved link found \(absolute)."))
             return url
         }
-        if let name = (payload["user"] as? String), !name.isEmpty,
+        // Repli : le profil du compte **vérifié**. Sans ce nom, aucune cible
+        // n'est proposée — mieux vaut ne rien ouvrir que parcourir le profil
+        // d'un inconnu.
+        if let name = pageUsername, !name.isEmpty,
            let url = URL(string: "https://www.tiktok.com/@\(name)") {
             // Les Enregistres n'ont pas de route directe sur le site desktop :
             // ils vivent dans l'onglet Favorites du profil du compte connecte.
             LogCenter.info(L("TikTok web : profil \(name) ouvert, onglet Favorites a cliquer.", "TikTok web: profile \(name) opened, Favorites tab to click."))
             return url
         }
-        LogCenter.info(L("TikTok web : aucun lien Enregistres visible (\(links.count) lien(s) scrute(s)).", "TikTok web: no visible saved link (\(links.count) link(s) scanned)."))
+        LogCenter.info(L("TikTok web : aucun lien Enregistres visible et aucun compte vérifié (\(links.count) lien(s) scrute(s)).", "TikTok web: no visible saved link and no verified account (\(links.count) link(s) scanned)."))
         return nil
     }
 
