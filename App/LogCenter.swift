@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import MediaCore
+import UIKit
 
 enum LogLevel: String, CaseIterable, Identifiable {
     case info, reseau, kdrive, erreur
@@ -118,13 +119,11 @@ struct LogEntry: Identifiable, Equatable {
         }
     }
 
-    /// Fichier d'export : par onglet (`level`) ou tout l'historique si nil,
+    /// Texte d'export : par onglet (`level`) ou tout l'historique si nil,
     /// restreint à la recherche courante si fournie. Léger, partageable.
-    func exportFile(level: LogLevel? = nil, search: String = "") -> URL {
+    func exportText(level: LogLevel? = nil, search: String = "") -> String {
         let scope: String
         if let level { scope = level.rawValue } else { scope = L("tout", "all") }
-        let stamp = Int(Date().timeIntervalSince1970)
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pocket-logs-\(scope)-\(stamp).txt")
         var text = "RedditMediaPocket logs (\(scope)) — \(Date())\n"
         let needle = search.trimmingCharacters(in: .whitespaces)
         if !needle.isEmpty {
@@ -136,7 +135,22 @@ struct LogEntry: Identifiable, Equatable {
             if !needle.isEmpty, !e.message.localizedCaseInsensitiveContains(needle) { continue }
             text += "\(formatter.string(from: e.date)) [\(e.level.rawValue)] \(e.message)\n"
         }
-        try? text.write(to: tmp, atomically: true, encoding: .utf8)
+        return text
+    }
+
+    /// Copie du journal dans le presse-papiers : les applications qui n'acceptent
+    /// pas les fichiers n'ont besoin que du texte.
+    func copyToPasteboard(level: LogLevel? = nil, search: String = "") {
+        UIPasteboard.general.string = exportText(level: level, search: search)
+    }
+
+    /// Fichier d'export : même contenu que la copie, matérialisé en .txt.
+    func exportFile(level: LogLevel? = nil, search: String = "") -> URL {
+        let scope: String
+        if let level { scope = level.rawValue } else { scope = L("tout", "all") }
+        let stamp = Int(Date().timeIntervalSince1970)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("pocket-logs-\(scope)-\(stamp).txt")
+        try? exportText(level: level, search: search).write(to: tmp, atomically: true, encoding: .utf8)
         return tmp
     }
 
@@ -191,6 +205,7 @@ struct LogsView: View {
     @State private var level: LogLevel?
     @State private var search = ""
     @State private var exportURL: URL?
+    @State private var copied = false
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -234,6 +249,19 @@ struct LogsView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Menu {
+                        Button {
+                            logs.copyToPasteboard(level: level, search: search)
+                            copied = true
+                        } label: {
+                            Label(L("Copier l'onglet courant", "Copy current tab"), systemImage: "doc.on.doc")
+                        }
+                        Button {
+                            logs.copyToPasteboard()
+                            copied = true
+                        } label: {
+                            Label(L("Copier tout", "Copy everything"), systemImage: "doc.on.doc.fill")
+                        }
+                        Divider()
                         Button(L("Exporter l'onglet courant", "Export current tab")) {
                             exportURL = logs.exportFile(level: level, search: search)
                         }
@@ -242,7 +270,14 @@ struct LogsView: View {
                             exportURL = logs.exportFile()
                         }
                     } label: {
-                        Image(systemName: "square.and.arrow.up")
+                        Image(systemName: copied ? "checkmark" : "square.and.arrow.up")
+                    }
+                    .onChange(of: copied) { _ in
+                        guard copied else { return }
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            copied = false
+                        }
                     }
                     .accessibilityLabel(L("Exporter les logs", "Export logs"))
                 }
