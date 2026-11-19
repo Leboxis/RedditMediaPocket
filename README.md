@@ -1,6 +1,6 @@
 # Reddit Media Pocket — prototype iPhone
 
-Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish), `tw` (médias publics d'un compte X), `tt` (médias publics d'un compte TikTok) et `ig` (médias publics d'un compte Instagram). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
+Application SwiftUI en français et en anglais, destinée à LiveContainer (iOS 26+). Le bouton de source parcourt `u/` (profil Reddit), `r/` (subreddit), `RG` (compte RedGifs), `♥` (sauvegardés Reddit), `x/` (albums et vidéos d'un profil X-Fetish), `tw` (médias publics d'un compte X), `tt` (médias publics d'un compte TikTok), `ts` (sauvegardés TikTok du compte connecté : toutes les publications enregistrées ou un dossier de favoris choisi) et `ig` (médias publics d'un compte Instagram). On saisit le nom correspondant, sauf pour `♥` qui sélectionne automatiquement le compte Reddit connecté et `ts` qui utilise la session TikTok des Réglages. Le bouton télécharger lance la récupération des médias. Les flux publics restent accessibles sans compte, sans API JSON Reddit.
 
 ## Liens et sélections
 

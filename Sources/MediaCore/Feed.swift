@@ -52,6 +52,9 @@ public enum FeedSource: Hashable, Sendable {
     case redgifsGif(String)
     case twitterUser(String)
     case tiktokUser(String)
+    /// Sauvegardés TikTok du compte connecté (`ts/pseudo`) : publications
+    /// enregistrées et dossiers de favoris, par la session WebKit.
+    case tiktokSaved(String)
     case instagramUser(String)
     /// Posts Reddit isolés, désignés par leur adresse et non par un flux.
     /// Une sélection ne parcourt aucun catalogue : seuls ces posts sont lus.
@@ -81,6 +84,11 @@ public enum FeedSource: Hashable, Sendable {
         }
         if lower.hasPrefix("tt/") {
             return try .tiktokUser(TikTokAPI.username(trimmed))
+        }
+        if lower.hasPrefix("ts/") {
+            let raw = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { throw TikTokError.invalidUsername }
+            return .tiktokSaved(raw)
         }
         if lower.contains("tiktok.com/") {
             // Une vidéo isolée n'est pas un compte : refuser explicitement
@@ -191,6 +199,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
         case .tiktokUser(let name): return "tt/\(name)"
+        case .tiktokSaved(let name): return "ts/\(name)"
         case .instagramUser(let name): return "ig/\(name)"
         // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
         // subreddit nommé « posts » partageraient identifiant et dossier.
@@ -219,6 +228,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
         case .tiktokUser(let name): return "tk.\(name)"
+        case .tiktokSaved(let name): return "ts.\(name)"
         case .instagramUser(let name): return "ig.\(name)"
         case .redditPosts: return "reddit.posts"
         }
@@ -284,6 +294,10 @@ public enum FeedSource: Hashable, Sendable {
             // parcours réel pagine par la WebView de `TikTokWebPaginator`
             // avec les cookies de session, jamais par cette URL seule.
             return TikTokAPI.profileURL(username: name)
+        case .tiktokSaved:
+            // Parcours par la WebView de `TikTokWebPaginator` sur la session
+            // connectée : cette URL ne sert qu'à l'affichage.
+            return TikTokAPI.savedURL()
         case .instagramUser(let name):
             // Point d'entrée anonyme : la page publique du profil, qui porte
             // les jetons de l'appel GraphQL du parcours.

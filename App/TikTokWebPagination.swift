@@ -71,7 +71,30 @@ import MediaCore
         handler({ kind: 'body', url: url, status: status, body: text || '' });
       };
       var isItemList = function(url) {
-        return typeof url === 'string' && url.indexOf('/item_list') !== -1;
+        return typeof url === 'string'
+          && (url.indexOf('/item_list') !== -1 || url.indexOf('/collection_list') !== -1);
+      };
+      // Ouvre un dossier de favoris de la page Sauvegardés par son nom :
+      // imite le clic d'un lecteur, la page signe et charge elle-même le fil
+      // `/api/collection/item_list` du dossier.
+      window.__tiktokOpenCollection = function(name) {
+        var els = document.querySelectorAll('a, button, [role="button"], [data-e2e], div, span');
+        var exact = null;
+        var loose = null;
+        for (var i = 0; i < els.length; i++) {
+          var t = (els[i].textContent || '').trim();
+          if (t.length === 0 || t.length > 100) continue;
+          if (t === name) { exact = els[i]; break; }
+          if (!loose && t.indexOf(name) !== -1) loose = els[i];
+        }
+        var target = exact || loose;
+        if (!target) {
+          handler({ kind: 'route', url: '/__collection_not_found__' });
+          return false;
+        }
+        target.click();
+        handler({ kind: 'route', url: '/__collection_opened__' });
+        return true;
       };
       // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
       // les requêtes hors navigateur (403), mais depuis la page le TLS, les
@@ -185,8 +208,13 @@ import MediaCore
     """#
 
     private var webView: WKWebView?
-    private var pending: [String] = []
+    /// Corps capturés non encore consommés, avec la route servi : la page
+    /// Sauvegardés mélange `collection_list` et `item_list`, chaque consommateur
+    /// n'attend que sa route.
+    private var pendingBodies: [(url: String, body: String)] = []
     private var waiting: CheckedContinuation<String?, Never>?
+    /// Route attendue par le consommateur en attente (ex. `/item_list`).
+    private var waitingRoute: String?
     private var timeoutTask: Task<Void, Never>?
     private var loadContinuation: CheckedContinuation<Bool, Never>?
     private var watchdog: Task<Void, Never>?
@@ -210,6 +238,10 @@ import MediaCore
     /// le spoof iPhone de `TikTokAPI.userAgent`.
     private(set) var pageUserAgent: String?
 
+    /// Pseudo du compte connecté lu dans la page (`/@pseudo`) : sert de nom à
+    /// la collection `ts/…`. Par défaut `saved` si la page ne l'expose pas.
+    private(set) var pageUsername: String?
+
     /// La page a-t-elle répondu à chaque appel `item_list` par un corps vide ?
     /// Un corps vide (HTTP 200, 0 octet) n'est pas une fin de fil — TikTok
     /// annonce alors `hasMore: false` en JSON — mais un refus discret, typique
@@ -221,6 +253,13 @@ import MediaCore
     /// Charge la page profil dans la WebView cachée. Retourne false si la
     /// page n'a pas pu être chargée (réseau, garde de 30 s).
     func start(username: String) async -> Bool {
+        await start(url: TikTokAPI.profileURL(username: username))
+    }
+
+    /// Charge une page tiktok.com (profil ou Sauvegardés) dans la WebView
+    /// cachée, sur la session connectée. Retourne false en échec de
+    /// chargement (réseau, garde de 30 s).
+    func start(url: URL) async -> Bool {
         close()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = TikTokSession.shared.store
@@ -253,7 +292,7 @@ import MediaCore
                 guard let self else { return }
                 self.finishLoad(false)
             }
-            view.load(URLRequest(url: TikTokAPI.profileURL(username: username)))
+            view.load(URLRequest(url: url))
         }
         guard loaded else { return false }
         // Laisse TikTok hydrater la page avant le premier défilement.
@@ -261,15 +300,34 @@ import MediaCore
         return true
     }
 
-    /// Corps JSON de la page `item_list` suivante, signée par le JavaScript de
-    /// TikTok. `nil` quand la page ne charge plus rien : fin du fil atteinte.
+    /// Ouvre un dossier de favoris de la page Sauvegardés en imitant le clic
+    /// d'un lecteur. Retourne false si aucun élément portant ce nom n'a été
+    /// trouvé : le diagnostic dans le journal dit lequel des deux cas.
+    func openCollection(name: String) async -> Bool {
+        guard let webView else { return false }
+        let literal = name.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            webView.evaluateJavaScript("window.__tiktokOpenCollection && window.__tiktokOpenCollection('\(literal)')") { result, _ in
+                continuation.resume(returning: result as? Bool ?? false)
+            }
+        }
+    }
+
+    /// Corps JSON suivant d'une route signée par le JavaScript de TikTok
+    /// (`/item_list` par défaut, `/collection_list` pour les dossiers).
+    /// `nil` quand la page ne charge plus rien : fin du fil atteinte.
     /// Pendant l'attente, le défilement est relancé toutes les 4 s : un seul
     /// appel à `scrollTo` ne déclenche pas toujours le chargement paresseux.
-    func nextPage() async -> Data? {
+    func nextPage(matching route: String = "/item_list") async -> Data? {
         guard webView != nil else { return nil }
-        if !pending.isEmpty { return Data(pending.removeFirst().utf8) }
+        if let index = pendingBodies.firstIndex(where: { $0.url.contains(route) }) {
+            let entry = pendingBodies.remove(at: index)
+            return Data(entry.body.utf8)
+        }
         let body: String? = await withCheckedContinuation { continuation in
             waiting = continuation
+            waitingRoute = route
             timeoutTask = Task { [weak self] in
                 var waited = 0
                 while waited < 20 {
@@ -288,6 +346,7 @@ import MediaCore
         }
         timeoutTask?.cancel()
         timeoutTask = nil
+        waitingRoute = nil
         return body.flatMap { Data($0.utf8) }
     }
 
@@ -322,6 +381,8 @@ import MediaCore
             waiting.resume(returning: nil)
             self.waiting = nil
         }
+        waitingRoute = nil
+        pendingBodies.removeAll()
         if let loadContinuation {
             loadContinuation.resume(returning: false)
             self.loadContinuation = nil
@@ -366,6 +427,15 @@ extension TikTokWebPaginator: WKNavigationDelegate {
         webView.evaluateJavaScript("navigator.userAgent",
                                    completionHandler: { [weak self] result, _ in
             self?.pageUserAgent = result as? String
+        })
+        // Pseudo du compte connecté, premier lien `@pseudo` de la page : il
+        // nomme la collection `ts/…`. Vide si la page n'en expose aucun.
+        webView.evaluateJavaScript("(function(){var a=document.querySelector('a[href*=\"/@\"]');var m=a?String(a.getAttribute('href')).match(/@([A-Za-z0-9._]{1,24})/):null;return m?m[1]:'';})();",
+                                   completionHandler: { [weak self] result, _ in
+            if let name = result as? String, !name.isEmpty {
+                self?.pageUsername = name
+                LogCenter.info(L("TikTok web : compte connecté \(name).", "TikTok web: signed-in account \(name)."))
+            }
         })
     }
 
@@ -415,6 +485,22 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
         }
         guard let body = payload["body"] as? String else { return }
         let status = payload["status"] as? Int ?? 0
+        guard let url = payload["url"] as? String else { return }
+        if url.contains("/collection_list") {
+            LogCenter.info(L("TikTok web : collection_list HTTP \(status), \(body.utf8.count) octets.",
+                             "TikTok web: collection_list HTTP \(status), \(body.utf8.count) bytes."))
+            guard !body.isEmpty else { return }
+            if let waiting, let route = waitingRoute, url.contains(route) {
+                waiting.resume(returning: body)
+                self.waiting = nil
+                waitingRoute = nil
+                timeoutTask?.cancel()
+                timeoutTask = nil
+            } else {
+                pendingBodies.append((url, body))
+            }
+            return
+        }
         // Chaque réponse item_list se voit, même vide : un 200 à 0 octet est
         // le refus discret de TikTok, pas un échec de capture.
         itemListResponses += 1
@@ -422,13 +508,19 @@ extension TikTokWebPaginator: WKScriptMessageHandler {
         LogCenter.info(L("TikTok web : item_list HTTP \(status), \(body.utf8.count) octets.",
                          "TikTok web: item_list HTTP \(status), \(body.utf8.count) bytes."))
         guard !body.isEmpty else { return }
-        if let waiting {
+        if let waiting, let route = waitingRoute, url.contains(route) {
+            waiting.resume(returning: body)
+            self.waiting = nil
+            waitingRoute = nil
+            timeoutTask?.cancel()
+            timeoutTask = nil
+        } else if let waiting, waitingRoute == nil {
             waiting.resume(returning: body)
             self.waiting = nil
             timeoutTask?.cancel()
             timeoutTask = nil
         } else {
-            pending.append(body)
+            pendingBodies.append((url, body))
         }
     }
 }

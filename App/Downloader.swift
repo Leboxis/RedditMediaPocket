@@ -15,6 +15,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Compte TikTok (`tt/pseudo`) : session WebKit distincte, parcours paginé
     /// de l'API interne `api/post/item_list`.
     var isTikTok = false
+    /// Sauvegardés TikTok du compte connecté (`ts/pseudo`) : session WebKit
+    /// exigée, dossiers de favoris et publications enregistrées.
+    var isTikTokSaved = false
     /// Compte Instagram (`ig/pseudo`) : profil public anonyme via l'API web
     /// `api/v1`, parcours paginé par `feed/user/<id>`.
     var isInstagram = false
@@ -31,6 +34,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo` ou
     /// `r/posts`.
     var id: String {
+        if isTikTokSaved { return "ts/\(name)" }
         if isTikTok { return "tt/\(name)" }
         if isInstagram { return "ig/\(name)" }
         if isTwitter { return "tw/\(name)" }
@@ -47,6 +51,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// `redgifs.…`, `tw.…` et `tk.…` sont interdits dans les pseudos : aucune
     /// collection existante ne peut entrer en collision.
     var folderName: String {
+        if isTikTokSaved { return "ts.\(name)" }
         if isTikTok { return "tk.\(name)" }
         if isInstagram { return "ig.\(name)" }
         if isTwitter { return "tw.\(name)" }
@@ -60,9 +65,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isTikTokSaved: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
@@ -70,6 +75,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
         self.isTikTok = isTikTok
+        self.isTikTokSaved = isTikTokSaved
         self.isInstagram = isInstagram
         self.isRedGifsTag = isRedGifsTag
         self.isRedGifsGif = isRedGifsGif
@@ -86,6 +92,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
         isTikTok = try container.decodeIfPresent(Bool.self, forKey: .isTikTok) ?? false
+        isTikTokSaved = try container.decodeIfPresent(Bool.self, forKey: .isTikTokSaved) ?? false
         isInstagram = try container.decodeIfPresent(Bool.self, forKey: .isInstagram) ?? false
         isRedGifsTag = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsTag) ?? false
         isRedGifsGif = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsGif) ?? false
@@ -109,13 +116,30 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
         case .tiktokUser(let name): self.init(name: name, isTikTok: true)
+        case .tiktokSaved(let name): self.init(name: name, isTikTokSaved: true)
         case .instagramUser(let name): self.init(name: name, isInstagram: true)
         case .redditPosts: self.init(name: "posts", isRedditPosts: true)
         }
     }
 }
 
+extension Notification.Name {
+    /// Fichiers supprimés du téléphone après un envoi kDrive : la galerie
+    /// relit la collection active pour actualiser ses compteurs.
+    static let rmpFilesDeletedLocally = Notification.Name("rmpFilesDeletedLocally")
+}
+
 @MainActor final class Downloader: ObservableObject {
+    /// Observateur des suppressions locales (feuilles d'envoi kDrive).
+    private var filesDeletedObserver: NSObjectProtocol?
+    /// Sauvegardés TikTok : état du sélecteur de dossiers de favoris.
+    /// `tikTokSavedChoice` est `nil` pour « toutes les publications
+    /// enregistrées ».
+    @Published var tikTokSavedChoice: TikTokSavedCollection?
+    @Published private(set) var tikTokSavedCollections: [TikTokSavedCollection] = []
+    @Published private(set) var tikTokSavedLoading = false
+    @Published var tikTokSavedListError: String?
+    var tikTokSavedAccount: String?
     @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
     @Published var collections: [UserCollection] = []
     @Published var activeUser: String?
@@ -385,7 +409,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
     /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
     var resolvedSource: FeedSource? {
-        if sourceKind == "saved" { return nil }
+        if sourceKind == "saved" || sourceKind == "ts" { return nil }
         // `tw` accepte `@pseudo` et une adresse `x.com/pseudo` collée telle
         // quelle ; le préfixe ne doit pas être ajouté dans ces cas.
         if sourceKind == "tw" {
@@ -424,6 +448,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Vrai quand la source effective exige une session du service concerné.
     var needsSession: Bool {
         if sourceKind == "saved" { return true }
+        if sourceKind == "ts" { return true }
         if let source = resolvedSource {
             switch source {
             case .saved, .twitterUser, .tiktokUser: return true
@@ -495,6 +520,13 @@ struct UserCollection: Codable, Identifiable, Equatable {
         loadCollections()
         migrateFolders()
         Self.cleanupStalePreviewTemps()
+        // Fichiers supprimés du téléphone (envoi kDrive) : le compte de
+        // médias de la collection active et la galerie sont relus aussitôt.
+        filesDeletedObserver = NotificationCenter.default.addObserver(
+            forName: .rmpFilesDeletedLocally, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reload()
+        }
         // Compteurs « nouveautés » du passage précédent : relus une fois pour
         // que les pastilles les affichent dès l'ouverture, sans attendre un
         // premier parcours.
@@ -541,6 +573,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
+        else if collection.isTikTokSaved { sourceKind = "ts" }
         else if collection.isTikTok { sourceKind = "tt" }
         else if collection.isInstagram { sourceKind = "ig" }
         else if collection.isXFetish { sourceKind = "x" }
@@ -588,6 +621,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
                 case .tiktokUser(let name): sourceKind = "tt"; username = name
+                case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
                 case .instagramUser(let name): sourceKind = "ig"; username = name
                 case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
                 }
@@ -635,6 +669,10 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 collections.append(UserCollection(name: handle, isTwitter: true))
             } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTikTok: true))
+            } else if folder.hasPrefix("ts."), !folder.dropFirst(3).isEmpty {
+                // Sauvegardés TikTok du compte connecté : le nom est libre
+                // (par défaut `saved` si la page n'exposait pas le pseudo).
+                collections.append(UserCollection(name: String(folder.dropFirst(3)), isTikTokSaved: true))
             } else if folder.hasPrefix("ig."), let handle = try? InstagramAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isInstagram: true))
             } else {
@@ -679,6 +717,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
             case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
             case .tiktokUser(let name): sourceKind = "tt"; username = name
+            case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
             case .instagramUser(let name): sourceKind = "ig"; username = name
             case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
             }
@@ -867,7 +906,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
         sessionLimit = max(1, min(ConcurrentDownloads.maximumLimit, concurrentLimit))
         sessionSegments = XFetishRangeDownload.segmentCount(xFetishSegments)
         errorMessage = nil
-        let target = sourceKind == "saved" ? "saved/" : "\(sourceKind)/\(username)"
+        let target = sourceKind == "saved" ? "saved/"
+            : sourceKind == "ts" ? "ts/\(tikTokSavedAccount ?? "")"
+            : "\(sourceKind)/\(username)"
         let started = Date()
         LogCenter.info(L("Démarrage : \(target), \(sessionLimit) transferts simultanés.", "Starting: \(target), \(sessionLimit) simultaneous transfers."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
@@ -939,6 +980,46 @@ struct UserCollection: Codable, Identifiable, Equatable {
         let body = try await network.data(source.feedURL())
         try Task.checkCancellation()
         return try FeedParser.parse(body)
+    }
+
+    /// Charge la page Sauvegardés du compte connecté et la liste de ses
+    /// dossiers de favoris (`/api/user/collection_list`, signé par la page),
+    /// pour le sélecteur avant téléchargement. Une page muette n'est pas une
+    /// erreur : le choix « toutes les publications enregistrées » reste
+    /// proposé, et le parcours expliquera en journal ce qu'il aura vu.
+    func loadTikTokSavedCollections() async {
+        guard !tikTokSavedLoading else { return }
+        tikTokSavedLoading = true
+        tikTokSavedListError = nil
+        guard await TikTokSession.shared.hasSession else {
+            tikTokSavedLoading = false
+            tikTokSavedListError = TikTokError.loginRequired.localizedDescription
+            return
+        }
+        let paginator = TikTokWebPaginator()
+        defer { paginator.close() }
+        guard await paginator.start(url: TikTokAPI.savedURL()) else {
+            tikTokSavedLoading = false
+            return
+        }
+        if let name = paginator.pageUsername { tikTokSavedAccount = name }
+        var collections: [TikTokSavedCollection] = []
+        // Jusqu'à 3 réponses `collection_list` : le sélecteur propose au plus
+        // une centaine de dossiers, et la page les charge par 35.
+        for _ in 0..<3 {
+            if Task.isCancelled { break }
+            guard let data = await paginator.nextPage(matching: "/collection_list") else { break }
+            guard let page = try? TikTokWeb.parseCollectionList(data) else { break }
+            let known = Set(collections.map({ $0.id }))
+            collections += page.filter { !known.contains($0.id) }
+        }
+        if !collections.isEmpty {
+            LogCenter.info(L("TikTok : \(collections.count) dossier(s) de favoris détecté(s).", "TikTok: \(collections.count) favorites folder(s) detected."))
+        } else {
+            LogCenter.info(L("TikTok : aucun dossier de favoris détecté sur la page Sauvegardés.", "TikTok: no favorites folder detected on the Saved page."))
+        }
+        tikTokSavedCollections = collections
+        tikTokSavedLoading = false
     }
 
     func previewSavedPosts() async throws -> [Post] {
@@ -1050,7 +1131,12 @@ struct UserCollection: Codable, Identifiable, Equatable {
     private func run() async throws {
         let source: FeedSource
         let privateFeed: SavedFeed?
-        if sourceKind == "saved" {
+        if sourceKind == "ts" {
+            status = L("Ouverture des sauvegardés TikTok du compte connecté…", "Opening the TikTok saved posts of the signed-in account…")
+            let account = (tikTokSavedAccount ?? "").isEmpty ? "saved" : tikTokSavedAccount!
+            source = .tiktokSaved(account)
+            privateFeed = nil
+        } else if sourceKind == "saved" {
             status = L("Recherche des sauvegardés du compte connecté…", "Finding saved posts for the signed-in account…")
             let feed = try await network.savedFeed()
             try Task.checkCancellation()
@@ -1121,6 +1207,20 @@ struct UserCollection: Codable, Identifiable, Equatable {
                 scanIncomplete = true
                 status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
             }
+            return
+        }
+        // Sauvegardés TikTok : publications enregistrées du compte connecté
+        // ou d'un dossier de favoris choisi, via la page Sauvegardés signée
+        // par le JavaScript de TikTok. Chemin séparé, comme tt/.
+        if case .tiktokSaved = source {
+            var seenMedia = Set<Media>()
+            var usedFilenames = Set<String>()
+            var preparedCount = 0
+            try await runTikTokSaved(canonical: canonical, folder: folder,
+                                     choice: tikTokSavedChoice,
+                                     seenMedia: &seenMedia,
+                                     usedFilenames: &usedFilenames,
+                                     preparedCount: &preparedCount)
             return
         }
         // Comptes TikTok : publications authentifiées, reprise au dernier lot
@@ -1975,6 +2075,115 @@ struct UserCollection: Codable, Identifiable, Equatable {
         status = count == 0 ? L("Aucun nouveau média TikTok accessible", "No new accessible TikTok media")
                             : L("\(count) médias TikTok téléchargés", "\(count) TikTok media downloaded")
         return true
+    }
+
+    /// Parcours des sauvegardés TikTok du compte connecté (`ts/`) : soit
+    /// toutes les publications enregistrées, soit un dossier de favoris choisi
+    /// dans le sélecteur. La page Sauvegardés charge et signe elle-même
+    /// `collection_list` (dossiers) et `collect/item_list` /
+    /// `collection/item_list` (publications) : les corps capturés par le
+    /// paginateur sont des fils `itemList`/`hasMore`/`cursor` identiques à
+    /// ceux des profils, lus par le même parseur.
+    private func runTikTokSaved(canonical: String, folder: URL,
+                                choice: TikTokSavedCollection?,
+                                seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                                preparedCount: inout Int) async throws {
+        guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
+        // Clés déjà sur disque : dédoublonnage par clé média, comme tt/.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
+        })
+        var scanned = Set<String>()
+        var scannedPages = 0
+        var idle = 0
+        var qualityTally: [String: Int] = [:]
+        let paginator = TikTokWebPaginator()
+        defer {
+            paginator.close()
+            tikTokWebFetch = nil
+        }
+        status = L("Ouverture de la page Sauvegardés TikTok…", "Opening the TikTok Saved page…")
+        guard await paginator.start(url: TikTokAPI.savedURL()) else {
+            throw NetworkError.invalid(L("Page Sauvegardés TikTok injoignable : réseau ou garde de temps.", "TikTok Saved page unreachable: network or timeout."))
+        }
+        if let name = paginator.pageUsername { tikTokSavedAccount = name }
+        if let choice {
+            status = L("Ouverture du dossier « \(choice.name) »…", "Opening folder “\(choice.name)”…")
+            guard await paginator.openCollection(name: choice.name) else {
+                throw NetworkError.invalid(L("Dossier « \(choice.name) » introuvable dans la page Sauvegardés : l’interface de TikTok a peut-être changé.", "Folder “\(choice.name)” not found on the Saved page: TikTok’s interface may have changed."))
+            }
+            LogCenter.info(L("TikTok : dossier « \(choice.name) » ouvert.", "TikTok: folder “\(choice.name)” opened."))
+        }
+        for _ in 0..<100 {
+            try Task.checkCancellation()
+            scannedPages += 1
+            status = L("Recherche des sauvegardés TikTok… page \(scannedPages)", "Searching TikTok saved posts… page \(scannedPages)")
+            guard let data = await paginator.nextPage() else {
+                if paginator.sawOnlyEmptyItemLists { throw TikTokError.verificationRequired }
+                if scannedPages == 1 {
+                    LogCenter.info(L("TikTok : la page Sauvegardés n’a chargé aucune publication ; ouvre la session TikTok dans les Réglages, vérifie que le compte a des publications enregistrées.", "TikTok: the Saved page loaded no posts; open the TikTok session in Settings, check that the account has saved posts."))
+                }
+                break
+            }
+            let page = try TikTokWeb.parseItemList(data)
+            let pageMediaHeaders = TikTokAPI.mediaHeaders(browserAgent: paginator.pageUserAgent)
+            LogCenter.info(L("TikTok : page \(scannedPages), \(page.posts.count) sauvegardé(s) avec média.", "TikTok: page \(scannedPages), \(page.posts.count) saved posts with media."))
+            var fresh: [TikTokPost] = []
+            for post in page.posts where scanned.insert(post.id).inserted {
+                let missing = post.media.filter { !savedIDs.contains($0.storageKey) }
+                guard !missing.isEmpty else { continue }
+                fresh.append(TikTokPost(id: post.id, text: post.text, publishedAt: post.publishedAt, media: missing))
+            }
+            if fresh.isEmpty {
+                idle += 1
+            } else {
+                var mediaOverrides: [String: [Media]] = [:]
+                var mediaHeadersByMedia: [String: [String: String]] = [:]
+                var mediaExtensions: [String: String] = [:]
+                var posts: [Post] = []
+                for post in fresh {
+                    for media in post.media {
+                        let id = media.storageKey
+                        if let quality = media.quality { qualityTally[quality, default: 0] += 1 }
+                        mediaOverrides[id] = [.direct(media.url)]
+                        mediaHeadersByMedia[id] = pageMediaHeaders
+                        if media.kind == .video { mediaExtensions[id] = "mp4" }
+                        posts.append(Post(id: id, title: post.text, html: "",
+                                          publishedAt: post.publishedAt,
+                                          link: "https://www.tiktok.com/"))
+                    }
+                }
+                let downloads = try await prepareDownloads(posts, folder: folder,
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+                    author: canonical, mediaOverrides: mediaOverrides,
+                    mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
+                beginTransferUnit(total: downloads.count)
+                try await executeDownloads(downloads, &preparedCount)
+                idle = 0
+                if !qualityTally.isEmpty {
+                    let summary = qualityTally.sorted { $0.key < $0.key }
+                        .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
+                    LogCenter.info(L("TikTok : variantes vidéo \(summary).", "TikTok: video variants \(summary)."))
+                    qualityTally.removeAll()
+                }
+            }
+            try Task.checkCancellation()
+            if idle >= 2 || !page.hasMore { break }
+        }
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        LogCenter.info(L("TikTok : \(scannedPages) page(s) de sauvegardés, \(preparedCount) médias préparés.", "TikTok: \(scannedPages) saved-posts page(s), \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("\(failed) médias TikTok inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                             "\(failed) TikTok media unavailable or unsaved.\n\(kept) media files kept.")
+            return
+        }
+        status = count == 0 ? L("Aucun nouveau m\u00e9dia TikTok accessible", "No new accessible TikTok media")
+                            : L("\(count) m\u00e9dias TikTok t\u00e9l\u00e9charg\u00e9s", "\(count) TikTok media downloaded")
     }
 
     /// Parcours des publications publiques d'un compte Instagram. L'API

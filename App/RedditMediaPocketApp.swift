@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var settingsPresented = false
     @State private var savedPostsPresented = false
     @State private var followingPresented = false
+    @State private var tikTokSavedPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
     @State private var filtersPresented = false
@@ -70,6 +71,13 @@ struct ContentView: View {
                 SavedPostsView(model: model) { _ in
                     savedPostsPresented = false
                     model.sourceKind = "saved"
+                    model.start()
+                }
+            }
+            .sheet(isPresented: $tikTokSavedPresented) {
+                TikTokSavedPicker(model: model) { choice in
+                    tikTokSavedPresented = false
+                    model.tikTokSavedChoice = choice
                     model.start()
                 }
             }
@@ -180,6 +188,7 @@ struct ContentView: View {
 
     private var cannotStart: Bool {
         guard !model.running else { return false }
+        if model.sourceKind == "ts" { return !tikTokSession.hasSession || tikTokSession.clearing }
         if model.sourceKind == "saved" { return !redditSession.hasSession || redditSession.clearing }
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         // Les trois sessions sont distinctes : X et TikTok ne se connectent
@@ -252,7 +261,13 @@ struct ContentView: View {
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.horizontal, 18).padding(.bottom, 10)
-        } else if !isTwitterInput && !isTikTokInput && model.needsSession && !redditSession.hasSession {
+        } else if model.sourceKind == "ts" && !tikTokSession.hasSession {
+            Label(L("Sauvegardés TikTok : connecte-toi à TikTok dans les Réglages. Sans session, impossible de lire les publications enregistrées du compte.", "TikTok saved: sign in to TikTok in Settings. Without a session, the account's saved posts cannot be read."),
+                  systemImage: "person.crop.circle.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 18).padding(.bottom, 10)
+        } else if !isTwitterInput && !isTikTokInput && model.sourceKind != "ts" && model.needsSession && !redditSession.hasSession {
             Label(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."), systemImage: "person.crop.circle.badge.questionmark")
                 .font(.caption).foregroundStyle(.orange).lineLimit(3).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -616,6 +631,12 @@ struct ContentView: View {
     private func start() {
         guard !model.running else { return }
         editing = false
+        // Sauvegardés TikTok : choisir d'abord entre toutes les publications
+        // enregistrées et un dossier de favoris du compte connecté.
+        if model.sourceKind == "ts" {
+            tikTokSavedPresented = true
+            return
+        }
         model.start()
     }
 }
@@ -638,6 +659,7 @@ private struct SourceKindToggle: View {
         if current == "x" { return "x/" }
         if current == "tw" { return "tw" }
         if current == "tt" { return "tt" }
+        if current == "ts" { return "ts" }
         if current == "ig" { return "ig" }
         return "u/"
     }
@@ -648,6 +670,7 @@ private struct SourceKindToggle: View {
         if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
         if current == "tw" { return L("compte X", "X account") }
         if current == "tt" { return L("compte TikTok", "TikTok account") }
+        if current == "ts" { return L("sauvegardés TikTok", "TikTok saved") }
         if current == "ig" { return L("compte Instagram", "Instagram account") }
         return L("profil", "profile")
     }
@@ -824,5 +847,76 @@ private struct DownloadSettings: View {
             }
         }
         .tint(.orange)
+    }
+}
+
+/// Choix des sauvegardés TikTok : toutes les publications enregistrées du
+/// compte connecté, ou un dossier de favoris détecté sur la page
+/// Sauvegardés (`collection_list`, signé par TikTok). La liste peut être
+/// vide : TikTok ne la charge pas toujours sans interaction, et le choix
+/// « toutes les publications enregistrées » reste proposé — le parcours
+/// expliquera en journal ce que la page aura réellement servi.
+struct TikTokSavedPicker: View {
+    @ObservedObject var model: Downloader
+    let onChoose: (TikTokSavedCollection?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var loaded = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        onChoose(nil)
+                    } label: {
+                        Label(L("Toutes les publications enregistrées", "All saved posts"),
+                              systemImage: "square.grid.2x2")
+                    }
+                }
+                if !model.tikTokSavedCollections.isEmpty {
+                    Section(L("Dossiers de favoris", "Favorites folders")) {
+                        ForEach(model.tikTokSavedCollections) { folder in
+                            Button {
+                                onChoose(folder)
+                            } label: {
+                                HStack {
+                                    Label(folder.name, systemImage: "folder")
+                                    Spacer()
+                                    Text(verbatim: "\(folder.itemCount)")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                if let error = model.tikTokSavedListError {
+                    Section {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
+            .navigationTitle(L("Sauvegardés TikTok", "TikTok saved"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(L("Annuler", "Cancel")) { dismiss() }
+                }
+            }
+            .overlay {
+                if model.tikTokSavedLoading {
+                    ProgressView(L("Recherche des dossiers de favoris…", "Looking for favorites folders…"))
+                        .padding()
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            .task {
+                guard !loaded else { return }
+                loaded = true
+                await model.loadTikTokSavedCollections()
+            }
+        }
     }
 }

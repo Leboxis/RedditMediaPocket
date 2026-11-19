@@ -85,6 +85,14 @@ public enum TikTokAPI {
         URL(string: "https://www.tiktok.com/@\(username)")!
     }
 
+    /// Page des sauvegardés du compte connecté : dossiers de favoris
+    /// (`/api/user/collection_list`) puis publications enregistrées
+    /// (`/api/user/collect/item_list`), tous deux servisés signés par le
+    /// JavaScript de la page — mêmes contraintes que `item_list`.
+    public static func savedURL() -> URL {
+        URL(string: "https://www.tiktok.com/saved")!
+    }
+
     /// Route paginée « desktop » de la liste des publications : contexte
     /// Chrome Windows minimal, sans `msToken` en paramètre (les scrapeurs
     /// actifs s'en passent, et un msToken périmé est une cause plausible du
@@ -300,8 +308,20 @@ public struct TikTokMediaPage: Sendable {
     }
 }
 
+/// Dossier de favoris TikTok (« collection ») du compte connecté : un nom
+/// et son identifiant stable servi par `/api/user/collection_list`.
+public struct TikTokSavedCollection: Hashable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let itemCount: Int
+
+    public init(id: String, name: String, itemCount: Int) {
+        self.id = id; self.name = name; self.itemCount = itemCount
+    }
+}
+
 /// Lecteur des pages TikTok : HTML du profil (données `__UNIVERSAL_DATA_
-/// FOR_REHYDRATION__`) et réponses `api/post/item_list`.
+/// FOR_REHYDRATION__`) et réponses `api/…/item_list`.
 ///
 /// Le format est un graphe profondément imbriqué dont les niveaux changent
 /// quand TikTok ajuste son front. Le parcours est volontairement tolérant : un
@@ -342,6 +362,30 @@ public enum TikTokWeb {
         }
         let posts = posts(from: objects(detail, "itemList") ?? [])
         return Profile(secUid: secUid, posts: posts)
+    }
+
+    /// Une page de la liste des dossiers de favoris du compte connecté
+    /// (`/api/user/collection_list`). Les nœuds bruts portent `collectionId`,
+    /// `name` et `total` (chaîne ou nombre selon le front) ; l'enveloppe
+    /// pagine comme `item_list` (`hasMore`, `cursor`), avec la liste sous
+    /// `collectionList`.
+    public static func parseCollectionList(_ data: Data) throws -> [TikTokSavedCollection] {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw TikTokError.invalidTimeline
+        }
+        let raw = objects(root, "collectionList") ?? objects(root, "collections") ?? []
+        var out: [TikTokSavedCollection] = []
+        var seen = Set<String>()
+        for node in raw {
+            let id = text(node, "collectionId")
+                ?? text(node, "collection_id")
+                ?? ((node["collectionId"] as? NSNumber)?.stringValue)
+            guard let id, !id.isEmpty, seen.insert(id).inserted else { continue }
+            let name = text(node, "name") ?? id
+            let count = (text(node, "total")).flatMap { Int($0) } ?? number(node, "total")
+            out.append(TikTokSavedCollection(id: id, name: name, itemCount: count))
+        }
+        return out
     }
 
     /// Une page de la liste des publications. Les entrées sans média

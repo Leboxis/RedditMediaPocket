@@ -1192,6 +1192,10 @@ private struct KDriveContinuousUploadSheet: View {
         }
         deletedCount = deleted
         deleteFailures = failures
+        if deleted > 0 {
+            // La galerie et les compteurs relisent la collection active.
+            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+        }
         LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
     }
 }

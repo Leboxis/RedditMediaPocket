@@ -1265,5 +1265,9 @@ struct KDriveUploadSheet: View {
         }
         deletedCount = deleted
         deleteFailures = failures
+        if deleted > 0 {
+            // La galerie et les compteurs relisent la collection active.
+            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+        }
     }
 }

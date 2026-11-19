@@ -65,8 +65,10 @@ final class TikTokTests: XCTestCase {
 
     func testSourceKindCycleReachesTikTok() {
         XCTAssertEqual(SourceKind.twitter.next, .tiktok)
-        XCTAssertEqual(SourceKind.tiktok.next, .instagram)
+        XCTAssertEqual(SourceKind.tiktok.next, .tiktokSaved)
+        XCTAssertEqual(SourceKind.tiktokSaved.next, .instagram)
         XCTAssertEqual(SourceKind.tiktok.rawValue, "tt")
+        XCTAssertEqual(SourceKind.tiktokSaved.rawValue, "ts")
     }
 
     // MARK: - URLs
@@ -181,5 +183,29 @@ final class TikTokTests: XCTestCase {
         XCTAssertNil(FilenamePolicy.tikTokMediaID(inFileName: "Titre - xfv-12-3.mp4"))
         // Un fragment de titre ne doit pas être accepté comme clé.
         XCTAssertNil(FilenamePolicy.tikTokMediaID(inFileName: "tkv-abc.mp4"))
+    }
+
+    // MARK: - Sauvegardés TikTok (ts/)
+
+    func testSavedSourceParsing() throws {
+        XCTAssertEqual(try FeedSource.parse("ts/nasa"), .tiktokSaved("nasa"))
+        XCTAssertEqual(FeedSource.tiktokSaved("nasa").id, "ts/nasa")
+        XCTAssertEqual(FeedSource.tiktokSaved("nasa").folderName, "ts.nasa")
+        XCTAssertEqual(TikTokAPI.savedURL().absoluteString, "https://www.tiktok.com/saved")
+    }
+
+    func testParseCollectionListReadsFolders() throws {
+        let json = """
+        {"collectionList":[{"collectionId":"7659011279817935649","name":"Wanna go to","total":"49","status":1},
+                           {"collectionId":"7659011279817935650","name":"Recipes","total":3}],
+         "hasMore":false,"cursor":0}
+        """
+        let folders = try TikTokWeb.parseCollectionList(Data(json.utf8))
+        XCTAssertEqual(folders.count, 2)
+        XCTAssertEqual(folders[0].id, "7659011279817935649")
+        XCTAssertEqual(folders[0].name, "Wanna go to")
+        XCTAssertEqual(folders[0].itemCount, 49)
+        XCTAssertEqual(folders[1].name, "Recipes")
+        XCTAssertEqual(folders[1].itemCount, 3)
     }
 }
