@@ -28,6 +28,7 @@ struct ContentView: View {
     @State private var savedPostsPresented = false
     @State private var followingPresented = false
     @State private var tikTokSavedPresented = false
+    @State private var sourceGridPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
     @State private var filtersPresented = false
@@ -37,6 +38,7 @@ struct ContentView: View {
     @State private var savingToGallery = false
     @State private var gallerySaveMessage: String?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
@@ -44,9 +46,8 @@ struct ContentView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 inputRow
-                sortRow
-                xFetishRow
-                savedHintRow
+                optionsRow
+                sourceHintRow
                 userChipsRow
                 metricsRow
                 transferBarRow
@@ -54,6 +55,9 @@ struct ContentView: View {
                 incompleteBanner
                 gallerySection
             }
+            // Transition l\u{e9}g\u{e8}re entre les options d'une source et celles d'une
+            // autre ; aucune animation si R\u{e9}duire les animations est actif.
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.sourceKind)
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
@@ -74,12 +78,23 @@ struct ContentView: View {
                     model.start()
                 }
             }
+            .sheet(isPresented: $sourceGridPresented) {
+                SourceGridSheet(model: model) {
+                    sourceGridPresented = false
+                }
+            }
             .sheet(isPresented: $tikTokSavedPresented) {
-                TikTokSavedPicker(model: model) { choice in
+                TikTokSavedPicker(model: model,
+                                 onChoose: { choice in
                     tikTokSavedPresented = false
                     model.tikTokSavedChoice = choice
                     model.start()
-                }
+                }, onAccount: { name in
+                    tikTokSavedPresented = false
+                    model.sourceKind = "tt"
+                    model.username = name
+                    model.start()
+                })
             }
             .sheet(isPresented: $followingPresented) {
                 FollowingView(model: model) { username in
@@ -144,8 +159,10 @@ struct ContentView: View {
 
     private var inputRow: some View {
         HStack(spacing: 12) {
-            SourceKindToggle(kind: $model.sourceKind)
-                .disabled(model.running)
+            SourceKindButton(kind: SourceKind(rawValue: model.sourceKind) ?? .user) {
+                guard !model.running else { return }
+                sourceGridPresented = true
+            }
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
@@ -208,7 +225,11 @@ struct ContentView: View {
         return false
     }
 
-    @ViewBuilder private var sortRow: some View {
+    /// Options de la source sélectionnée : une seule rangée, dont le contenu
+    /// ne montre que ce qui concerne la source en cours. Le remplacement
+    /// s'anime avec le changement de source (hauteur + opacité, 200 ms), sauf
+    /// si Réduire les animations est actif.
+    @ViewBuilder private var optionsRow: some View {
         if isSubredditInput {
             Picker(L("Tri du subreddit", "Subreddit sort"), selection: $model.subSort) {
                 Text(L("Nouveaux", "New")).tag("new")
@@ -219,11 +240,7 @@ struct ContentView: View {
             .disabled(model.running)
             .padding(.horizontal, 16).padding(.bottom, 10)
             .accessibilityLabel(L("Tri du subreddit", "Subreddit sort"))
-        }
-    }
-
-    @ViewBuilder private var xFetishRow: some View {
-        if isXFetishInput {
+        } else if isXFetishInput {
             Picker(L("Médias X-Fetish", "X-Fetish media"), selection: $model.xFetishMediaKind) {
                 Text(L("Images", "Images")).tag(XFetishMediaKind.images)
                 Text(L("Vidéos", "Videos")).tag(XFetishMediaKind.videos)
@@ -233,6 +250,12 @@ struct ContentView: View {
             .disabled(model.running)
             .padding(.horizontal, 16).padding(.bottom, 10)
             .accessibilityLabel(L("Médias X-Fetish", "X-Fetish media"))
+        } else if model.sourceKind == "ts" {
+            Label(L("Les dossiers de favoris TikTok sont proposés au lancement.", "TikTok favorites folders are offered when starting."),
+                  systemImage: "folder.badge.clock")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 18).padding(.bottom, 10)
         }
     }
 
@@ -248,7 +271,7 @@ struct ContentView: View {
         return model.resolvedSource == nil && model.sourceKind == "tt"
     }
 
-    @ViewBuilder private var savedHintRow: some View {
+    @ViewBuilder private var sourceHintRow: some View {
         if isTwitterInput && !xSession.hasSession {
             Label(L("Compte X : connecte-toi à X dans les Réglages. Sans session, X ne publie aucun média.", "X account: sign in to X in Settings. Without a session, X publishes no media."),
                   systemImage: "person.crop.circle.badge.questionmark")
@@ -641,58 +664,175 @@ struct ContentView: View {
     }
 }
 
-/// Bouton commutateur de source : une touche = la pastille pivote (demi-flip),
-/// la face suivante apparaît, la pastille se referme.
-/// Cycle u/ → r/ → RG → ♥ → x/ → tw → tt.
-private struct SourceKindToggle: View {
-    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    @Binding var kind: String
-    @State private var halfFlip = false
+/// Source : face, libellé parlé et session requise — partagés par la
+/// pastille et la feuille-grille. Les deux entrées TikTok sont
+/// volontairement différenciées : compte public (`tt`, icône note de
+/// musique) et sauvegardés du compte connecté (`ts`, icône marque-page),
+/// avec des micro-libellés distincts.
+private enum SourceSelection {
+    static let order: [SourceKind] = [.user, .subreddit, .redGifs, .saved,
+                                      .xFetish, .twitter, .tiktok, .tiktokSaved, .instagram]
 
-    private func next(_ current: String) -> String {
-        SourceKind(rawValue: current)?.next.rawValue ?? SourceKind.user.rawValue
+    static func face(_ kind: SourceKind) -> String {
+        switch kind {
+        case .user: return "u/"
+        case .subreddit: return "r/"
+        case .redGifs: return "RG"
+        case .saved: return "\u{2665}"
+        case .xFetish: return "x/"
+        case .twitter: return "tw"
+        case .tiktok: return "tt"
+        case .tiktokSaved: return "ts"
+        case .instagram: return "ig"
+        }
     }
-    private func face(_ current: String) -> String {
-        if current == "r" { return "r/" }
-        if current == "rg" { return "RG" }
-        if current == "saved" { return "♥" }
-        if current == "x" { return "x/" }
-        if current == "tw" { return "tw" }
-        if current == "tt" { return "tt" }
-        if current == "ts" { return "ts" }
-        if current == "ig" { return "ig" }
-        return "u/"
+
+    static func icon(_ kind: SourceKind) -> String {
+        switch kind {
+        case .user: return "person.crop.circle"
+        case .subreddit: return "bubble.left.and.bubble.right"
+        case .redGifs: return "film"
+        case .saved: return "heart.fill"
+        case .xFetish: return "flame"
+        case .twitter: return "at"
+        case .tiktok: return "music.note"
+        case .tiktokSaved: return "bookmark.fill"
+        case .instagram: return "camera"
+        }
     }
-    private func spoken(_ current: String) -> String {
-        if current == "r" { return "subreddit" }
-        if current == "rg" { return "RedGifs" }
-        if current == "saved" { return L("sauvegardés", "saved") }
-        if current == "x" { return L("profil X-Fetish", "X-Fetish profile") }
-        if current == "tw" { return L("compte X", "X account") }
-        if current == "tt" { return L("compte TikTok", "TikTok account") }
-        if current == "ts" { return L("sauvegardés TikTok", "TikTok saved") }
-        if current == "ig" { return L("compte Instagram", "Instagram account") }
-        return L("profil", "profile")
+
+    static func spoken(_ kind: SourceKind) -> String {
+        switch kind {
+        case .user: return L("profil Reddit", "Reddit profile")
+        case .subreddit: return "subreddit"
+        case .redGifs: return "RedGifs"
+        case .saved: return L("sauvegard\u{e9}s Reddit", "Reddit saved")
+        case .xFetish: return L("profil X-Fetish", "X-Fetish profile")
+        case .twitter: return L("compte X", "X account")
+        case .tiktok: return L("compte TikTok", "TikTok account")
+        case .tiktokSaved: return L("sauvegard\u{e9}s TikTok \u{2014} compte, collections ou tout le sauvegard\u{e9}", "TikTok saved \u{2014} account, collections or all saved posts")
+        case .instagram: return L("compte Instagram", "Instagram account")
+        }
     }
+
+    /// Haptique l\u{e9}ger de s\u{e9}lection : signal utile, sans vibration envahissante.
+    static func haptic() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+}
+
+/// Pastille compacte de la source en cours : un appui ouvre la feuille-grille
+/// de toutes les sources. Remplace l'ancien bouton \u{e0} cycle, o\u{f9} la bonne
+/// source pouvait exiger jusqu'\u{e0} huit appuis.
+private struct SourceKindButton: View {
+    let kind: SourceKind
+    let open: () -> Void
 
     var body: some View {
         Button {
-            guard !halfFlip else { return }
-            withAnimation(.easeInOut(duration: 0.16)) { halfFlip = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-                kind = next(kind)
-                withAnimation(.easeInOut(duration: 0.16)) { halfFlip = false }
-            }
+            SourceSelection.haptic()
+            open()
         } label: {
-            Text(face(kind))
+            Text(SourceSelection.face(kind))
                 .font(.system(size: 17, weight: .semibold))
                 .frame(width: 52, height: 48)
                 .foregroundStyle(.orange)
                 .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
-        .rotation3DEffect(.degrees(halfFlip ? 90 : 0), axis: (x: 0, y: 1, z: 0))
-        .accessibilityLabel(L("Source : \(spoken(kind)). Touchez pour changer.", "Source: \(spoken(kind)). Tap to change."))
+        .accessibilityLabel(L("Source : \(SourceSelection.spoken(kind)). Touchez pour choisir parmi toutes les sources.", "Source: \(SourceSelection.spoken(kind)). Tap to choose among all sources."))
+    }
+}
+
+/// Feuille-grille des sources : neuf choix d\u{e9}couvrables d'un coup d'\u{158}il, un
+/// appui pour choisir. Le point orange signale une session manquante pour la
+/// source ; les deux entr\u{e9}es TikTok y sont visuellement diff\u{e9}renci\u{e9}es
+/// (`tt` compte public, `ts` sauvegard\u{e9}s du compte connect\u{e9}).
+private struct SourceGridSheet: View {
+    @ObservedObject var model: Downloader
+    @ObservedObject private var reddit = RedditSession.shared
+    @ObservedObject private var xSession = XSession.shared
+    @ObservedObject private var tikTokSession = TikTokSession.shared
+    let onPick: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private func sessionMissing(_ kind: SourceKind) -> Bool {
+        switch kind {
+        case .saved: return !reddit.hasSession
+        case .twitter: return !xSession.hasSession
+        case .tiktok, .tiktokSaved: return !tikTokSession.hasSession
+        default: return false
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 14) {
+                Text(L("T\u{e9}l\u{e9}charger depuis\u{2026}", "Download from\u{2026}"))
+                    .font(.subheadline.weight(.semibold))
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    ForEach(SourceSelection.order, id: \.rawValue) { kind in
+                        SourceGridCard(kind: kind,
+                                       isCurrent: model.sourceKind == kind.rawValue,
+                                       sessionMissing: sessionMissing(kind)) {
+                            SourceSelection.haptic()
+                            model.sourceKind = kind.rawValue
+                            onPick()
+                        }
+                    }
+                }
+                Label(L("Point orange : connexion requise dans les R\u{e9}glages.", "Orange dot: sign-in required in Settings."),
+                      systemImage: "circle.fill")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(16)
+        }
+        .presentationDetents([.height(420)])
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button(L("Fermer", "Close")) { dismiss() }
+            }
+        }
+    }
+}
+
+private struct SourceGridCard: View {
+    let kind: SourceKind
+    let isCurrent: Bool
+    let sessionMissing: Bool
+    let pick: () -> Void
+
+    var body: some View {
+        Button(action: pick) {
+            VStack(spacing: 6) {
+                HStack(spacing: 4) {
+                    Image(systemName: SourceSelection.icon(kind))
+                        .font(.system(size: 20, weight: .semibold))
+                    if sessionMissing {
+                        Circle().fill(.orange).frame(width: 7, height: 7)
+                            .offset(x: 4, y: -6)
+                            .accessibilityLabel(L("Connexion requise", "Sign-in required"))
+                    }
+                }
+                Text(SourceSelection.face(kind))
+                    .font(.system(size: 15, weight: .semibold))
+                Text(SourceSelection.spoken(kind))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(height: 30)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .foregroundStyle(isCurrent ? .orange : .primary)
+            .background(isCurrent ? Color.orange.opacity(0.12) : Color(uiColor: .secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(SourceSelection.spoken(kind))
+        .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 }
 
@@ -858,23 +998,38 @@ private struct DownloadSettings: View {
 /// expliquera en journal ce que la page aura réellement servi.
 struct TikTokSavedPicker: View {
     @ObservedObject var model: Downloader
+    /// Trois cibles diff\u{e9}renci\u{e9}es, affich\u{e9}es en sections distinctes :
+    /// tout le sauvegard\u{e9} du compte connect\u{e9}, un dossier de favoris
+    /// (collection), ou un compte TikTok public pr\u{e9}cis.
     let onChoose: (TikTokSavedCollection?) -> Void
+    let onAccount: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var loaded = false
+    @State private var accountName = ""
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
+                    Label(L("Toutes les publications enregistr\u{e9}es du compte connect\u{e9}", "All saved posts of the signed-in account"),
+                          systemImage: "square.grid.2x2")
+                        .font(.subheadline)
                     Button {
                         onChoose(nil)
                     } label: {
-                        Label(L("Toutes les publications enregistrées", "All saved posts"),
-                              systemImage: "square.grid.2x2")
+                        Label(L("Tout t\u{e9}l\u{e9}charger", "Download all"),
+                              systemImage: "arrow.down.circle.fill")
                     }
+                } header: {
+                    Text(L("Sauvegard\u{e9}s globaux", "Global saved posts"))
                 }
-                if !model.tikTokSavedCollections.isEmpty {
-                    Section(L("Dossiers de favoris", "Favorites folders")) {
+                Section {
+                    if model.tikTokSavedCollections.isEmpty {
+                        Label(L("Aucun dossier d\u{e9}t\u{e9}ct\u{e9} pour l\u{2019}instant. TikTok ne les charge pas toujours sans interaction : rel\u{e8}ve la feuille pour r\u{e9}essayer.", "No folder detected so far. TikTok does not always load them without interaction: pull to refresh and retry."),
+                              systemImage: "questionmark.folder")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
                         ForEach(model.tikTokSavedCollections) { folder in
                             Button {
                                 onChoose(folder)
@@ -889,6 +1044,29 @@ struct TikTokSavedPicker: View {
                             }
                         }
                     }
+                } header: {
+                    Text(L("Collections (dossiers de favoris)", "Collections (favorites folders)"))
+                }
+                Section {
+                    Label(L("M\u{e9}dias publics d\u{2019}un compte TikTok pr\u{e9}cis, sans lien avec les sauvegard\u{e9}s.", "Public media of a specific TikTok account, unrelated to saved posts."),
+                          systemImage: "music.note")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        TextField(L("compte TikTok", "TikTok account"), text: $accountName)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Button {
+                            if let name = try? TikTokAPI.username(accountName), !name.isEmpty {
+                                onAccount(name)
+                            }
+                        } label: {
+                            Image(systemName: "arrow.down.circle.fill")
+                        }
+                        .disabled(accountName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } header: {
+                    Text(L("Un compte pr\u{e9}cis (comme tt)", "A specific account (like tt)"))
                 }
                 if let error = model.tikTokSavedListError {
                     Section {
@@ -898,16 +1076,22 @@ struct TikTokSavedPicker: View {
                     }
                 }
             }
-            .navigationTitle(L("Sauvegardés TikTok", "TikTok saved"))
+            .navigationTitle(L("TikTok \u{2014} quoi t\u{e9}l\u{e9}charger ?", "TikTok \u{2014} what to download?"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(L("Annuler", "Cancel")) { dismiss() }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(L("Actualiser", "Refresh")) {
+                        Task { await model.loadTikTokSavedCollections() }
+                    }
+                    .disabled(model.tikTokSavedLoading)
+                }
             }
             .overlay {
                 if model.tikTokSavedLoading {
-                    ProgressView(L("Recherche des dossiers de favoris…", "Looking for favorites folders…"))
+                    ProgressView(L("Recherche des collections et des sauvegard\u{e9}s\u{2026}", "Looking for collections and saved posts\u{2026}"))
                         .padding()
                         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 }
@@ -915,6 +1099,9 @@ struct TikTokSavedPicker: View {
             .task {
                 guard !loaded else { return }
                 loaded = true
+                await model.loadTikTokSavedCollections()
+            }
+            .refreshable {
                 await model.loadTikTokSavedCollections()
             }
         }
