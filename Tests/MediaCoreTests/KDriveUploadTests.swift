@@ -19,16 +19,16 @@ final class KDriveUploadTests: XCTestCase {
 
     // MARK: - Plan de découpage
 
-    func testChunkPlanUses32MiBChunks() {
+    func testChunkPlanUses250MBChunks() {
         let plan = KDriveUploadPolicy.chunkPlan(fileSize: 271 * 1024 * 1024)
-        XCTAssertEqual(plan.chunkSize, 32 * 1024 * 1024)
-        XCTAssertEqual(plan.totalChunks, 9) // 271 / 32 = 8.47 -> 9
+        XCTAssertEqual(plan.chunkSize, 250_000_000)
+        XCTAssertEqual(plan.totalChunks, 2) // 271 Mio / 250 Mo = 1.14 -> 2
     }
 
     func testChunkPlanExactMultipleAndSingleChunk() {
-        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 32 * 1024 * 1024).totalChunks, 1)
-        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 64 * 1024 * 1024).totalChunks, 2)
-        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 32 * 1024 * 1024 + 1).totalChunks, 2)
+        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 250_000_000).totalChunks, 1)
+        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 2 * 250_000_000).totalChunks, 2)
+        XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 250_000_000 + 1).totalChunks, 2)
         XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 1).totalChunks, 1)
         XCTAssertEqual(KDriveUploadPolicy.chunkPlan(fileSize: 0).totalChunks, 1)
     }

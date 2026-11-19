@@ -600,7 +600,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
 
     /// Envoi chunké (fichiers >= 95 Mio), identique à Orvian-IOS : ouverture
     /// d'une session kDrive (`conflict=rename`, `last_modified_at`), chunks de
-    /// 32 Mio envoyés 4 par 4 avec hash SHA256 sur l'hôte `upload_url` de
+    /// 250 Mo envoyés 4 par 4 avec hash SHA256 sur l'hôte `upload_url` de
     /// confiance, chacun relancé individuellement (3 tentatives, backoff),
     /// puis `finish` qui assemble le fichier. En cas d'échec, la session est
     /// supprimée côté serveur (DELETE).
@@ -612,7 +612,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
         driveId cleanDriveId: String,
         directoryId cleanDirectoryId: String
     ) async throws {
-        // Plan de chunks façon Orvian-IOS : 32 Mio par chunk, augmenté si le
+        // Plan de chunks : 250 Mo par chunk, augmenté si le
         // fichier dépasse la limite de 10 000 chunks par session.
         let plan = KDriveUploadPolicy.chunkPlan(fileSize: fileSize)
         let chunkSize = plan.chunkSize

@@ -7,8 +7,9 @@ import Foundation
 public enum KDriveUploadPolicy {
     /// Seuil direct/session : 95 Mio, marge sous les 100 Mo officiels.
     public static let directUploadLimit: Int64 = 95 * 1024 * 1024
-    /// Taille de chunk des sessions (32 Mio), comme Orvian-IOS.
-    public static let chunkSize: Int64 = 32 * 1024 * 1024
+    /// Taille de chunk des sessions (250 Mo) — réduit nettement le nombre de
+    /// requêtes chunk par rapport à l'ancien 32 Mio (limite API 60 req/min).
+    public static let chunkSize: Int64 = 250 * 1000 * 1000
     /// Chunks envoyés en parallèle par fichier.
     public static let maxConcurrentChunks = 4
     /// Fichiers uploadés en parallèle.
@@ -24,7 +25,7 @@ public enum KDriveUploadPolicy {
         fileSize >= directUploadLimit
     }
 
-    /// Plan de découpage : chunks de 32 Mio, augmentés si le fichier dépasse
+    /// Plan de découpage : chunks de 250 Mo, augmentés si le fichier dépasse
     /// la limite de 10 000 chunks par session (taille de chunk plafonnée à
     /// 1 Gio, max par requête chunk selon l'API).
     public static func chunkPlan(fileSize: Int64) -> (chunkSize: Int64, totalChunks: Int) {
