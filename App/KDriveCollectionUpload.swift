@@ -210,6 +210,14 @@ private struct KDriveCollectionUploadFlow: View {
                 if filtered.isEmpty {
                     LogCenter.kdrive(L("kDrive : rien à envoyer, tous les médias sont déjà présents.", "kDrive: nothing to upload, all media already present."))
                 }
+                skippedExistingURLs = files.filter { localURL in
+                    let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: localURL.lastPathComponent)
+                    return !filtered.contains { $0 == localURL } && candidates.contains { candidate in
+                        remoteNames.contains { remote in
+                            FilenamePolicy.kDriveNameMatch(remote, candidate)
+                        }
+                    }
+                }
                 pendingFiles = filtered
                 isPreparing = false
             } catch {
@@ -999,6 +1007,10 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
     @State private var deleteFailures = 0
+    @State private var alreadyOnDriveURLs: [URL] = []
+    @State private var showDuplicateDeleteConfirm = false
+    @State private var duplicateDeletedCount = 0
+    @State private var duplicateDeleteFailures = 0
 
     var body: some View {
         NavigationStack {
@@ -1034,6 +1046,16 @@ private struct KDriveContinuousUploadSheet: View {
                             showDeleteConfirm = true
                         } label: {
                             Label(L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    }
+
+                    if !alreadyOnDriveURLs.isEmpty {
+                        Button {
+                            showDuplicateDeleteConfirm = true
+                        } label: {
+                            Label(L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive"), systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
                         .tint(.red)
