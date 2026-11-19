@@ -293,6 +293,33 @@ final class TikTokTests: XCTestCase {
         XCTAssertFalse(end.hasMore)
     }
 
+    /// Le front déplace les clés de `collection_list` à chaque génération :
+    /// nœuds à `id` seule, dossiers enveloppés dans un objet `collection`,
+    /// enveloppe renommée (recherche structurelle), voire tableau nu — et
+    /// jamais une liste de publications prise pour des dossiers.
+    func testParseCollectionListReadsAlternativeShapes() throws {
+        let idOnly = #"{"collectionList":[{"id":"7685","name":"Voyages","itemCount":12}],"hasMore":false,"cursor":"35"}"#
+        let pageA = try TikTokWeb.parseCollectionListPage(Data(idOnly.utf8))
+        XCTAssertEqual(pageA.folders.map { $0.id }, ["7685"])
+        XCTAssertEqual(pageA.folders[0].name, "Voyages")
+        XCTAssertEqual(pageA.folders[0].itemCount, 12)
+
+        let wrapped = #"[{"collection":{"id":"42","name":"Cuisine","total":"3"}}]"#
+        let pageB = try TikTokWeb.parseCollectionListPage(Data(wrapped.utf8))
+        XCTAssertEqual(pageB.folders.map { $0.id }, ["42"])
+        XCTAssertEqual(pageB.folders[0].itemCount, 3)
+        XCTAssertFalse(pageB.hasMore)
+
+        let mined = #"{"data":{"extra":1,"list":[{"id":"99","title":"Privé","total":2}]}}"#
+        let pageC = try TikTokWeb.parseCollectionListPage(Data(mined.utf8))
+        XCTAssertEqual(pageC.folders.map { $0.id }, ["99"])
+        XCTAssertEqual(pageC.folders[0].name, "Privé")
+
+        let posts = #"{"itemList":[{"id":"7301","desc":"Une vidéo","video":{"playAddr":"https://v/x.mp4"}}]}"#
+        let pageD = try TikTokWeb.parseCollectionListPage(Data(posts.utf8))
+        XCTAssertTrue(pageD.folders.isEmpty)
+    }
+
     func testParseCollectionListReadsFolders() throws {
         let json = """
         {"collectionList":[{"collectionId":"7659011279817935649","name":"Wanna go to","total":"49","status":1},

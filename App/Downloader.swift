@@ -1001,13 +1001,19 @@ extension Notification.Name {
         // Voie d\u{00e9}terministe : accueil desktop charg\u{00e9} sur la session, compte
         // connect\u{00e9} r\u{00e9}solu dans la page, puis appels `collection_list` sign\u{00e9}s
         // par le JavaScript de TikTok \u{2014} plus de grattage du DOM.
-        if await paginator.start(url: TikTokWebNavigation.loginURL, desktopUserAgent: true),
-           let account = await Self.resolveTikTokOwnAccount(paginator) {
+        if await paginator.start(url: TikTokWebNavigation.loginURL, desktopUserAgent: true) {
+            guard let account = await Self.resolveTikTokOwnAccount(paginator) else {
+                LogCenter.info(L("TikTok : voie sign\u{00e9}e des dossiers abandonn\u{00e9}e (compte non r\u{00e9}solu) \u{2014} repli.",
+                                 "TikTok: signed folder route abandoned (account unresolved) \u{2014} falling back."))
+                await Self.openTikTokSavedCollectionsFallback(paginator)
+                return
+            }
             if (tikTokSavedAccount ?? "").isEmpty { tikTokSavedAccount = account.username }
             var collections: [TikTokSavedCollection] = []
             var seen = Set<String>()
             var cursor = ""
             var pages = 0
+            var lastCollectionListBody = ""
             while pages < 20 {
                 if Task.isCancelled { break }
                 guard let response = await paginator.signedFetch(
@@ -1017,6 +1023,7 @@ extension Notification.Name {
                       let pageData = response.body.data(using: .utf8),
                       let page = try? TikTokWeb.parseCollectionListPage(pageData) else { break }
                 pages += 1
+                lastCollectionListBody = response.body
                 for folder in page.folders where seen.insert(folder.id).inserted {
                     collections.append(folder)
                 }
@@ -1030,11 +1037,20 @@ extension Notification.Name {
                 tikTokSavedLoading = false
                 return
             }
+            if !lastCollectionListBody.isEmpty {
+                LogCenter.info(L("TikTok : r\u{00e9}ponse collection_list lue mais aucun dossier extrait \u{2014} \(Self.savedResponseDiagnostics(Data(lastCollectionListBody.utf8))).",
+                                 "TikTok: collection_list response read but no folder extracted \u{2014} \(Self.savedResponseDiagnostics(Data(lastCollectionListBody.utf8)))."))
+            }
             LogCenter.info(L("TikTok : voie directe des dossiers refus\u{00e9}e (r\u{00e9}ponse sans liste) \u{2014} repli sur la page Sauvegard\u{00e9}s.",
                              "TikTok: direct folder route refused (no list in response) \u{2014} falling back to the Saved page."))
         }
-        // Repli : page Sauvegard\u{00e9}s ouverte par le lien du menu profil,
-        // r\u{00e9}ponses `collection_list` captur\u{00e9}es pendant la navigation du site.
+        await Self.openTikTokSavedCollectionsFallback(paginator)
+    }
+
+    /// Repli de la liste des dossiers : la page Sauvegard\u{e9}s pilote elle-m\u{00ea}me
+    /// la pagination du site, et les r\u{00e9}ponses `collection_list` qu'elle
+    /// provoque sont captur\u{00e9}es pendant la navigation.
+    private func openTikTokSavedCollectionsFallback(_ paginator: TikTokWebPaginator) async {
         guard await Self.openTikTokSavedPage(paginator: paginator) else {
             tikTokSavedLoading = false
             tikTokSavedListError = NetworkError.invalid(L(
@@ -1047,34 +1063,61 @@ extension Notification.Name {
         }
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
         var collections: [TikTokSavedCollection] = []
-        // Jusqu'à quelques réponses `collection_list` (pages de 35). Si la
+        // Jusqu'\u{00e0} quelques r\u{00e9}ponses `collection_list` (pages de 35). Si la
         // page reste muette, l'onglet Favorites/Collections est ouvert par un
-        // clic simulé avant une dernière attente — jamais de spinner sans
-        // fin : chaque attente est bornée par le paginateur.
+        // clic simul\u{00e9} avant une derni\u{00e8}re attente \u{2014} jamais de spinner sans
+        // fin : chaque attente est born\u{00e9}e par le paginateur.
         var data = await paginator.nextPage(matching: "/collection_list")
         if data == nil {
             let clicked = await paginator.clickNamed([
                 "Favorites", "Collections", "All favorites",
                 L("Favoris", "Favorites"), L("Collections", "Collections")])
             if let clicked {
-                LogCenter.info(L("TikTok : onglet « \(clicked) » ouvert pour chercher les collections.", "TikTok: \u{201c}\(clicked)\u{201d} tab opened to look for collections."))
+                LogCenter.info(L("TikTok : onglet \u{ab} \(clicked) \u{bb} ouvert pour chercher les collections.", "TikTok: \u{201c}\(clicked)\u{201d} tab opened to look for collections."))
             }
             data = await paginator.nextPage(matching: "/collection_list")
         }
         while data != nil {
             if Task.isCancelled { break }
-            guard let page = try? TikTokWeb.parseCollectionList(data!) else { break }
+            guard let page = try? TikTokWeb.parseCollectionListPage(data!) else {
+                LogCenter.info(L("TikTok : r\u{e9}ponse collection_list non exploitable \u{2014} \(Self.savedResponseDiagnostics(data!)).",
+                                 "TikTok: unusable collection_list response \u{2014} \(Self.savedResponseDiagnostics(data!))."))
+                break
+            }
             let known = Set(collections.map({ $0.id }))
-            collections += page.filter { !known.contains($0.id) }
+            collections += page.folders.filter { !known.contains($0.id) }
+            if !page.hasMore { break }
             data = await paginator.nextPage(matching: "/collection_list")
         }
         if !collections.isEmpty {
-            LogCenter.info(L("TikTok : \(collections.count) dossier(s) de favoris détecté(s).", "TikTok: \(collections.count) favorites folder(s) detected."))
+            LogCenter.info(L("TikTok : \(collections.count) dossier(s) de favoris d\u{00e9}tect\u{00e9}(s).", "TikTok: \(collections.count) favorites folder(s) detected."))
         } else {
-            LogCenter.info(L("TikTok : aucun dossier de favoris détecté sur la page Sauvegardés.", "TikTok: no favorites folder detected on the Saved page."))
+            LogCenter.info(L("TikTok : aucun dossier de favoris d\u{00e9}tect\u{00e9} sur la page Sauvegard\u{00e9}s.", "TikTok: no favorites folder detected on the Saved page."))
         }
         tikTokSavedCollections = collections
         tikTokSavedLoading = false
+    }
+
+    /// Diagnostic d'une r\u{00e9}ponse `collection_list` que le parseur n'a pas
+    /// exploit\u{00e9}e : cl\u{00e9}s de l'enveloppe et du premier objet du premier
+    /// tableau \u{2014} de quoi nommer la g\u{00e9}n\u{00e9}ration du front qui r\u{00e9}pond, sans
+    /// jeter de valeurs priv\u{00e9}es dans le journal.
+    private static func savedResponseDiagnostics(_ body: Data) -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: body) else {
+            return "corps non JSON (\(body.count) octets)"
+        }
+        var description = ""
+        if let dict = json as? [String: Any] {
+            description += "cl\u{e9}s enveloppe [\(dict.keys.sorted().joined(separator: ", "))]"
+            for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
+                if let array = value as? [[String: Any]], let first = array.first {
+                    description += " ; tableau \(key) (\(array.count) objets, cl\u{e9}s n\u{0153}ud [\(first.keys.sorted().joined(separator: ", "))])"
+                }
+            }
+        } else if let array = json as? [[String: Any]], let first = array.first {
+            description = "tableau nu de \(array.count) objets, cl\u{e9}s [\(first.keys.sorted().joined(separator: ", "))]"
+        }
+        return description.isEmpty ? "structure JSON non reconnue (\(body.count) octets)" : description
     }
 
     func previewSavedPosts() async throws -> [Post] {
@@ -2146,13 +2189,33 @@ extension Notification.Name {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             name = await paginator.ownUsername()
         }
-        guard let name else { return nil }
+        if name == nil {
+            // Le menu ouvert vit hors `header` : la r\u{00e9}colte du repli
+            // Enregistr\u{00e9}s conna\u{00ee}t aussi le lien profil du compte.
+            if let url = await paginator.savedPageURL(),
+               let harvested = TikTokAPI.usernameFromProfilePath(url.path) {
+                name = harvested
+            }
+        }
+        guard let name else {
+            LogCenter.info(L("TikTok : compte connect\u{00e9} introuvable dans la page (aucun chemin /@, ni en-t\u{00ea}te, ni menu).",
+                             "TikTok: signed-in account not found on the page (no /@ path, header or menu)."))
+            return nil
+        }
         // Navigation complète imposée : après une navigation interne du site,
         // le script d'hydratation de la page resterait celui de l'accueil.
-        guard await paginator.navigate(TikTokAPI.profileURL(username: name)) else { return nil }
+        guard await paginator.navigate(TikTokAPI.profileURL(username: name)) else {
+            LogCenter.info(L("TikTok : navigation vers le profil du compte connect\u{00e9} \u{00e9}chou\u{00e9}e.",
+                             "TikTok: navigation to the signed-in account profile failed."))
+            return nil
+        }
         guard let json = await paginator.profileJSON(),
               let profile = try? TikTokWeb.parseProfileData(json),
-              !profile.secUid.isEmpty else { return nil }
+              !profile.secUid.isEmpty else {
+            LogCenter.info(L("TikTok : l'hydratation de la page profil n'a pas livr\u{00e9} le secUid.",
+                             "TikTok: the profile page hydration did not deliver the secUid."))
+            return nil
+        }
         return (name, profile)
     }
 

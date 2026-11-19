@@ -487,7 +487,9 @@ public enum TikTokWeb {
     /// (`/api/user/collection_list`). Les nœuds bruts portent `collectionId`,
     /// `name` et `total` (chaîne ou nombre selon le front) ; l'enveloppe
     /// pagine comme `item_list` (`hasMore`, `cursor`), avec la liste sous
-    /// `collectionList`.
+    /// `collectionList`. Le front déplace ces clés à chaque génération, donc
+    /// la lecture est étendue aux nœuds à `id`, aux dossiers enveloppés dans
+    /// un objet `collection` et, à défaut, à une recherche structurelle.
     public static func parseCollectionList(_ data: Data) throws -> [TikTokSavedCollection] {
         try parseCollectionListPage(data).folders
     }
@@ -495,26 +497,85 @@ public enum TikTokWeb {
     /// La même page, avec son curseur de suite et sa fin annoncée : la liste
     /// des dossiers peut dépasser une page.
     public static func parseCollectionListPage(_ data: Data) throws -> (folders: [TikTokSavedCollection], nextCursor: String?, hasMore: Bool) {
-        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else {
+            throw TikTokError.invalidTimeline
+        }
+        // Réponse en tableau nu : les nœuds sont les dossiers eux-mêmes, sans
+        // enveloppe de pagination.
+        if let array = json as? [[String: Any]] {
+            let folders = Self.dedupeFolders(array.compactMap { Self.folder(from: $0, requireName: false) })
+            return (folders, nil, false)
+        }
+        guard let root = json as? [String: Any] else {
             throw TikTokError.invalidTimeline
         }
         let raw = objects(root, "collectionList") ?? objects(root, "collections") ?? []
-        var out: [TikTokSavedCollection] = []
-        var seen = Set<String>()
-        for node in raw {
-            let id = text(node, "collectionId")
-                ?? text(node, "collection_id")
-                ?? ((node["collectionId"] as? NSNumber)?.stringValue)
-            guard let id, !id.isEmpty, seen.insert(id).inserted else { continue }
-            let name = text(node, "name") ?? id
-            let count = (text(node, "total")).flatMap { Int($0) } ?? number(node, "total")
-            out.append(TikTokSavedCollection(id: id, name: name, itemCount: count))
+        var out = Self.dedupeFolders(raw.compactMap { Self.folder(from: $0, requireName: false) })
+        if out.isEmpty {
+            // Enveloppe renommée par ce build du site : chercher
+            // structurellement le tableau de dossiers dans le JSON.
+            out = Self.dedupeFolders(Self.mineFolders(in: root, depth: 0))
         }
         let cursor: String?
         if let value = root["cursor"] as? String { cursor = value.isEmpty ? nil : value }
         else if let value = root["cursor"] as? NSNumber { cursor = value.stringValue }
         else { cursor = nil }
-        return (out, raw.isEmpty ? nil : cursor, number(root, "hasMore") != 0)
+        let sawList = !raw.isEmpty || !out.isEmpty
+        return (out, sawList ? cursor : nil, number(root, "hasMore") != 0)
+    }
+
+    /// Un dossier vu par le front : identifiant et total sous plusieurs noms
+    /// selon la génération du site, nom parfois réduit à un titre, nœud
+    /// parfois enveloppé dans un objet `collection`. `requireName` évite de
+    /// prendre pour dossier un objet qui n'a qu'un identifiant (ex. une
+    /// publication, qui porte `desc`/`video` et jamais de nom).
+    private static func folder(from node: [String: Any], requireName: Bool) -> TikTokSavedCollection? {
+        guard node["video"] == nil, node["desc"] == nil else { return nil }
+        let inner = node["collection"] as? [String: Any] ?? node
+        let id = text(inner, "collectionId")
+            ?? text(inner, "collection_id")
+            ?? text(inner, "id")
+            ?? ((inner["collectionId"] as? NSNumber)?.stringValue)
+        guard let id, !id.isEmpty else { return nil }
+        let name = text(inner, "name") ?? text(inner, "title")
+            ?? text(node, "name") ?? text(node, "title")
+        if requireName, name == nil || name == id { return nil }
+        var count: Int?
+        for key in ["total", "itemCount", "item_count"] {
+            if let asText = text(inner, key), let value = Int(asText) { count = value; break }
+            if let value = inner[key] as? NSNumber { count = value.intValue; break }
+        }
+        return TikTokSavedCollection(id: id, name: name ?? id, itemCount: count ?? 0)
+    }
+
+    /// Recherche structurelle : premier tableau d'objets qui ressemblent à
+    /// des dossiers (identifiant + nom, aucune clé de publication). Profondeur
+    /// bornée — une page `collection_list` n'entasse jamais son JSON en
+    /// profondeur.
+    private static func mineFolders(in node: Any, depth: Int) -> [TikTokSavedCollection] {
+        guard depth < 5 else { return [] }
+        if let array = node as? [[String: Any]] {
+            let folders = array.compactMap { Self.folder(from: $0, requireName: true) }
+            if !folders.isEmpty { return folders }
+        }
+        if let dict = node as? [String: Any] {
+            for key in dict.keys.sorted() {
+                let found = Self.mineFolders(in: dict[key] ?? NSNull(), depth: depth + 1)
+                if !found.isEmpty { return found }
+            }
+        }
+        if let array = node as? [Any] {
+            for element in array {
+                let found = Self.mineFolders(in: element, depth: depth + 1)
+                if !found.isEmpty { return found }
+            }
+        }
+        return []
+    }
+
+    private static func dedupeFolders(_ candidates: [TikTokSavedCollection]) -> [TikTokSavedCollection] {
+        var seen = Set<String>()
+        return candidates.filter { seen.insert($0.id).inserted }
     }
 
     /// Une page de la liste des publications. Les entrées sans média

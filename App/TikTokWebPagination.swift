@@ -140,10 +140,16 @@ import MediaCore
           if ((h.indexOf('/saved') !== -1 || h.indexOf('bookmarks') !== -1 || h.indexOf('favorites') !== -1) && links.indexOf(h) === -1 && links.length < 5) links.push(h);
         }
         var user = '';
-        var el = document.querySelector('a[href^="/@"]');
-        if (el) {
-          var m = String(el.getAttribute('href')).match(/@([A-Za-z0-9._]{1,24})/);
-          if (m) user = m[1];
+        var sels = ['header a[href^="/@"]',
+                    '[data-e2e="profile-popup"] a[href^="/@"]',
+                    'div[role="menu"] a[href^="/@"]',
+                    'div[role="dialog"] a[href^="/@"]'];
+        for (var i = 0; i < sels.length; i++) {
+          var el = document.querySelector(sels[i]);
+          if (el) {
+            var m = String(el.getAttribute('href') || '').match(/^\/@([A-Za-z0-9._]{1,24})/);
+            if (m) { user = m[1]; break; }
+          }
         }
         return JSON.stringify({ user: user, links: links });
       };
@@ -153,10 +159,18 @@ import MediaCore
       window.__tiktokMe = function() {
         var m = String(location.pathname).match(/^\/@([A-Za-z0-9._]{1,24})\/?$/);
         if (m) return m[1];
-        var el = document.querySelector('header a[href^="/@"]');
-        if (el) {
-          var h = String(el.getAttribute('href') || '').match(/^\/@([A-Za-z0-9._]{1,24})/);
-          if (h) return h[1];
+        // L'avatar de l'en-tete n'est pas toujours une ancre : le menu ouvert
+        // (popup hors `header`) porte le lien profil du compte connecte.
+        var sels = ['header a[href^="/@"]',
+                    '[data-e2e="profile-popup"] a[href^="/@"]',
+                    'div[role="menu"] a[href^="/@"]',
+                    'div[role="dialog"] a[href^="/@"]'];
+        for (var i = 0; i < sels.length; i++) {
+          var el = document.querySelector(sels[i]);
+          if (el) {
+            var h = String(el.getAttribute('href') || '').match(/^\/@([A-Za-z0-9._]{1,24})/);
+            if (h) return h[1];
+          }
         }
         return '';
       };
