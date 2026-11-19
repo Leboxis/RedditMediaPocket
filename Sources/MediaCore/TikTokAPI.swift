@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TikTokError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported, verificationRequired
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported, verificationRequired, cdnRefused
 
     public var errorDescription: String? {
         switch self {
@@ -23,6 +23,8 @@ public enum TikTokError: LocalizedError {
             return L("Les vidéos TikTok isolées ne sont pas prises en charge. Colle l'adresse du compte : les médias de ses publications seront parcourus.", "Single TikTok videos are not supported. Paste the account address instead: the media of its posts will be scanned.")
         case .verificationRequired:
             return L("TikTok exige une vérification avant de servir ce profil : ouvre la session TikTok dans les Réglages, visite tiktok.com dans la fenêtre affichée, complète la vérification (captcha) si elle apparaît, puis relance le parcours.", "TikTok requires a verification before serving this profile: open the TikTok session in Settings, browse tiktok.com in the shown window, complete the captcha if one appears, then run again.")
+        case .cdnRefused:
+            return L("Le CDN TikTok refuse tous les transferts (HTTP 403). Ouvre la session TikTok dans les Réglages, rejoue la page jusqu'à la disparition du captcha, puis relance : les URL durent quelques heures, une session fraîche les régénère.", "The TikTok CDN refuses every transfer (HTTP 403). Open the TikTok session in Settings, browse until the captcha clears, then relaunch: URLs last a few hours, a fresh session reissues them.")
         }
     }
 }
@@ -158,11 +160,17 @@ public enum TikTokAPI {
     }
 
     /// En-têtes des transferts de médias. Les URL vidéo exigent le Referer de
-    /// tiktok.com (anti-hotlink) et l'UA navigateur lié aux cookies.
+    /// tiktok.com (anti-hotlink), l'UA navigateur lié aux cookies, l'Origine de
+    /// la requête web, et un en-tête `Range` : les nœuds CDN
+    /// `*-webapp-prime` servent le média au lecteur navigateur (requête vidéo
+    /// segmentée) et refusent toute demande sans ces en-têtes (HTTP 403).
     public static func mediaHeaders(browserAgent: String? = nil) -> [String: String] {
         [
             "User-Agent": browserAgent ?? userAgent,
-            "Referer": "https://www.tiktok.com/"
+            "Referer": "https://www.tiktok.com/",
+            "Origin": "https://www.tiktok.com",
+            "Accept": "*/*",
+            "Range": "bytes=0-"
         ]
     }
 
@@ -371,13 +379,16 @@ public struct TikTokMedia: Hashable, Sendable {
     public let id: String
     public let kind: Kind
     public let url: URL
+    /// Miroirs de la même variante (`urlList` secondaires, autre qualité de
+    /// secours) : le CDN refuse parfois le premier hôte et sert le suivant.
+    public let mirrors: [URL]
     /// Variante d'encodage choisie (`GearName` + débit), pour le diagnostic.
     /// `nil` pour les images ; une vidéo sans variante annoncée est étiquetée
     /// du champ de repli utilisé.
     public let quality: String?
 
-    public init(id: String, kind: Kind, url: URL, quality: String? = nil) {
-        self.id = id; self.kind = kind; self.url = url; self.quality = quality
+    public init(id: String, kind: Kind, url: URL, mirrors: [URL] = [], quality: String? = nil) {
+        self.id = id; self.kind = kind; self.url = url; self.mirrors = mirrors; self.quality = quality
     }
 }
 
@@ -631,6 +642,7 @@ public enum TikTokWeb {
         // élevé est la meilleure définition disponible. La casse des clés
         // varie selon la version du front : toutes les graphies sont essayées.
         var bestURL: URL?
+        var bestMirrors: [URL] = []
         var bestLabel: String?
         var bestBitrate = 0
         var bestHeight = 0
@@ -639,10 +651,13 @@ public enum TikTokWeb {
         for variant in variants {
             let bitrate = max(number(variant, "Bitrate"), number(variant, "bitrate"))
             let playNode = dictionary(variant, "PlayAddr") ?? dictionary(variant, "playAddr")
-            let url = firstURL(playNode, "urlList") ?? firstURL(playNode, "UrlList")
-                ?? text(variant, "PlayAddr").flatMap(URL.init(string:))
-                ?? text(variant, "playAddr").flatMap(URL.init(string:))
-            guard let url, isMediaHost(url) else { continue }
+            var candidates = allURLs(playNode, "urlList")
+            if candidates.isEmpty { candidates = allURLs(playNode, "UrlList") }
+            if candidates.isEmpty {
+                candidates = [text(variant, "PlayAddr"), text(variant, "playAddr")]
+                    .compactMap { $0.flatMap(URL.init(string:)) }
+            }
+            guard let url = candidates.first, isMediaHost(url) else { continue }
             let gear = text(variant, "GearName") ?? text(variant, "gearName") ?? ""
             // Le nom de variante porte la définition (`adapt_lowest_1080_1`,
             // `adapt_lower_720_1`…) : la définition prime sur le débit — un
@@ -655,17 +670,29 @@ public enum TikTokWeb {
             bestHeight = height
             bestBitrate = bitrate
             bestURL = url
+            // Miroirs de la variante retenue : chaque adresse de `urlList` est
+            // le meme contenu sur un autre noeud CDN (`v16-`, `v19-`...) ; les
+            // secondaires passent souvent quand la premiere est defendue.
+            bestMirrors = candidates.filter { $0 != url }
             bestLabel = "\(gear) (\(bitrate / 1000) kbps)"
         }
         if let url = bestURL, seen.insert(url.absoluteString).inserted {
-            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, quality: bestLabel))
+            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, mirrors: bestMirrors, quality: bestLabel))
             return out
         }
+        // Repli `playAddr`/`downloadAddr` simples : l'autre champ sert de
+        // miroir si l'hote du premier refuse le transfert.
+        var fallback: [URL] = []
         for key in ["playAddr", "downloadAddr"] {
-            guard let raw = text(video, key), let url = URL(string: raw),
-                  isMediaHost(url), seen.insert(url.absoluteString).inserted else { continue }
-            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, quality: "\(key) (standard)"))
-            break
+            if let url = text(video, key).flatMap(URL.init(string:)), isMediaHost(url) {
+                fallback.append(url)
+            }
+            fallback += allURLs(dictionary(video, key), "urlList").filter { isMediaHost($0) }
+        }
+        if let url = fallback.first, seen.insert(url.absoluteString).inserted {
+            var mirrors: [URL] = []
+            for mirror in fallback.filter({ $0 != url }) where !mirrors.contains(mirror) { mirrors.append(mirror) }
+            out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, mirrors: mirrors, quality: "playAddr (standard)"))
         }
         return out
     }
@@ -674,25 +701,34 @@ public enum TikTokWeb {
         text(item, "id") ?? text(item, "aweme_id") ?? ""
     }
 
-    /// Première URL https d'une liste `urlList`, déséchappée au besoin : le
-    /// JSON de TikTok sérialise parfois `/` en `\u002F`, que `URL(string:)`
-    /// refuse tel quel.
+    /// Première URL https d'une liste `urlList` — voir `allURLs`.
     static func firstURL(_ node: [String: Any]?, _ key: String) -> URL? {
-        guard let list = node?[key] as? [Any] else { return nil }
+        allURLs(node, key).first
+    }
+
+    /// Toutes les URL https d'une liste `urlList`, déséchappées au besoin : le
+    /// JSON de TikTok sérialise parfois `/` en `\u002F`, que `URL(string:)`
+    /// refuse tel quel. Chaque entrée est un miroir CDN du même média.
+    static func allURLs(_ node: [String: Any]?, _ key: String) -> [URL] {
+        guard let list = node?[key] as? [Any] else { return [] }
+        var out: [URL] = []
         for entry in list {
             guard let raw = entry as? String, !raw.isEmpty else { continue }
             let unescaped = raw
                 .replacingOccurrences(of: "\\u002F", with: "/")
                 .replacingOccurrences(of: "\\u0026", with: "&")
-            if let url = URL(string: unescaped), url.scheme?.lowercased() == "https" { return url }
-            if let url = URL(string: unescaped.replacingOccurrences(of: "http://", with: "https://")) { return url }
+            if let url = URL(string: unescaped), url.scheme?.lowercased() == "https" {
+                out.append(url)
+            } else if let url = URL(string: unescaped.replacingOccurrences(of: "http://", with: "https://")) {
+                out.append(url)
+            }
         }
-        return nil
+        return out
     }
 
     /// Seuls les hôtes de publication de TikTok sont acceptés : une URL
     /// d'hôte tiers dans la réponse ne doit pas être téléchargée.
-    static func isMediaHost(_ url: URL) -> Bool {
+    public static func isMediaHost(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "https", let host = url.host?.lowercased() else { return false }
         return host == "tiktok.com" || host.hasSuffix(".tiktok.com")
             || host.hasSuffix(".tiktokcdn.com") || host.hasSuffix(".tiktokcdn-us.com")

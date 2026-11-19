@@ -1224,6 +1224,9 @@ extension Notification.Name {
         let postLink: String?
         let headers: [String: String]?
         var xFetishVideo: XFetishVideos.Video? = nil
+        /// Miroirs CDN d'un média TikTok : essayés dans l'ordre quand
+        /// l'adresse primaire est refusée (HTTP 403).
+        var mirrors: [URL] = []
     }
 
     private func run() async throws {
@@ -1978,6 +1981,15 @@ extension Notification.Name {
     /// requête du vrai client navigateur. `nil` hors parcours TikTok.
     private var tikTokWebFetch: ((URL) async -> Data?)?
 
+    /// Refus consécutifs (HTTP 403) du CDN TikTok après toute la chaîne de
+    /// repli : quatre médias refusés d'affilée signifient que la session qui a
+    /// obtenu les URL n'est plus acceptée — aucun des suivants ne passera,
+    /// alors le lot est interrompu au lieu de tirer 200 requêtes vouées au 403.
+    private var tikTokCDNRefusals = 0
+
+    /// Seuil d'interruption d'un lot TikTok sur refus CDN consécutifs.
+    private static let tikTokCDNRefusalLimit = 4
+
     /// Parcours des publications d'un compte TikTok.
     ///
     /// Le curseur est conservé uniquement pendant un parcours incomplet.
@@ -2110,6 +2122,7 @@ extension Notification.Name {
             } else {
                 var mediaOverrides: [String: [Media]] = [:]
                 var mediaHeadersByMedia: [String: [String: String]] = [:]
+                var mediaMirrorsByMedia: [String: [URL]] = [:]
                 var mediaExtensions: [String: String] = [:]
                 var posts: [Post] = []
                 for post in fresh {
@@ -2125,6 +2138,7 @@ extension Notification.Name {
                         // Anti-hotlink : le CDN vidéo exige le Referer tiktok.com
                         // et l'UA navigateur lié aux cookies.
                         mediaHeadersByMedia[id] = pageMediaHeaders
+                        mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
@@ -2134,7 +2148,8 @@ extension Notification.Name {
                 let downloads = try await prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                     author: canonical, mediaOverrides: mediaOverrides,
-                    mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
+                    mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
+                    mediaExtensions: mediaExtensions)
                 // La barre suit la page : TikTok n'annonce aucun total global
                 // et le parcours en découvre en continu, donc une unité de
                 // nombre connu est la seule progression exacte possible.
@@ -2443,6 +2458,7 @@ extension Notification.Name {
             } else {
                 var mediaOverrides: [String: [Media]] = [:]
                 var mediaHeadersByMedia: [String: [String: String]] = [:]
+                var mediaMirrorsByMedia: [String: [URL]] = [:]
                 var mediaExtensions: [String: String] = [:]
                 var posts: [Post] = []
                 for post in fresh {
@@ -2451,6 +2467,7 @@ extension Notification.Name {
                         if let quality = media.quality { qualityTally[quality, default: 0] += 1 }
                         mediaOverrides[id] = [.direct(media.url)]
                         mediaHeadersByMedia[id] = pageMediaHeaders
+                        mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
                         posts.append(Post(id: id, title: post.text, html: "",
                                           publishedAt: post.publishedAt,
@@ -2460,7 +2477,8 @@ extension Notification.Name {
                 let downloads = try await prepareDownloads(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                     author: canonical, mediaOverrides: mediaOverrides,
-                    mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
+                    mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
+                    mediaExtensions: mediaExtensions)
                 beginTransferUnit(total: downloads.count)
                 try await executeDownloads(downloads, &preparedCount)
                 idle = 0
@@ -3041,6 +3059,7 @@ extension Notification.Name {
                                    author: String = "",
                                    mediaOverrides: [String: [Media]] = [:],
                                    mediaHeaders: [String: [String: String]] = [:],
+                                   mediaMirrors: [String: [URL]] = [:],
                                    mediaExtensions: [String: String] = [:],
                                    xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
@@ -3142,7 +3161,12 @@ extension Notification.Name {
                     renamedExisting = true
                 } else {
                     let postLink = BinaryMetadata.postLink(postID: post.id, link: post.link)
-                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink, headers: mediaHeaders[item.key], xFetishVideo: xFetishVideos[post.id]))
+                    // Les parcours qui surchargent les médias (TikTok,
+                    // Instagram) cléfient leurs tables par l'identifiant de
+                    // publication, qui est ici l'identifiant de post : la
+                    // recherche par URL ne trouvait rien et les en-têtes
+                    // anti-hotlink (UA, Referer) n'étaient jamais attachés.
+                    downloads.append(Download(media: item, destination: destination, postDate: post.publishedAt, author: author, postLink: postLink, headers: mediaHeaders[post.id], xFetishVideo: xFetishVideos[post.id], mirrors: mediaMirrors[post.id] ?? []))
                 }
             }
         }
@@ -3206,6 +3230,12 @@ extension Notification.Name {
                 failed += 1
                 LogCenter.info(L("Média inaccessible, ignoré : \(item.destination.lastPathComponent).", "Inaccessible media, skipped: \(item.destination.lastPathComponent)."))
                 recordFailure(item)
+                // Une rafale de refus CDN veut dire session morte : lever
+                // l'erreur arrête le lot avant 200 requêtes vouées au 403.
+                if tikTokCDNRefusals >= Self.tikTokCDNRefusalLimit {
+                    tikTokCDNRefusals = 0
+                    throw TikTokError.cdnRefused
+                }
             }
         } catch {
             if !Task.isCancelled && !DownloadFailurePolicy.isCancellation(error) {
@@ -3213,6 +3243,14 @@ extension Notification.Name {
             }
             throw error
         }
+    }
+
+    /// Un refus CDN ne compte vers la garde du lot que pendant un parcours
+    /// TikTok (`webFetch` branché) : l'échec d'une autre source dans un autre
+    /// contexte n'interrompt pas un lot TikTok.
+    private func tikTokCatchCDNRefusal() {
+        guard tikTokWebFetch != nil else { return }
+        tikTokCDNRefusals += 1
     }
 
     /// Ajoute un média en échec au journal persistant. L'échec était muet :
@@ -3314,7 +3352,8 @@ extension Notification.Name {
                     })
             })
         } else {
-            temporary = try await resolveAndDownload(item.media, headers: item.headers)
+            temporary = try await resolveAndDownload(item.media, headers: item.headers,
+                                                      mirrors: item.mirrors)
         }
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
@@ -3502,23 +3541,38 @@ extension Notification.Name {
             return try await self.network.download(candidate.url, headers: RedgifsAPI.headers(id: id))
         }
     }
-    private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil) async throws -> URL {
+    private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil,
+                                     mirrors: [URL] = []) async throws -> URL {
         switch media {
         case .direct(let url):
             LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
             do {
-                return try await network.download(url, headers: headers)
+                let saved = try await network.download(url, headers: headers)
+                tikTokCDNRefusals = 0
+                return saved
             } catch NetworkError.refused(let code) where code == 400 || code == 401 || code == 403 {
+                // Miroirs CDN : chaque adresse de `urlList` sert le même
+                // contenu ; un nœud refuse parfois là où le suivant passe.
+                for mirror in mirrors where mirror != url {
+                    LogCenter.net(L("TikTok : miroir \(mirror.host ?? "CDN")…", "TikTok: mirror \(mirror.host ?? "CDN")…"))
+                    do {
+                        let saved = try await network.download(mirror, headers: headers)
+                        tikTokCDNRefusals = 0
+                        return saved
+                    } catch NetworkError.refused { continue }
+                }
                 // Repli TikTok : le CDN refuse le client URLSession mais sert
                 // la même URL au vrai navigateur — la page la rapatrie.
                 guard let webFetch = tikTokWebFetch else { throw NetworkError.refused(code) }
                 LogCenter.net(L("TikTok : direct refusé (HTTP \(code)), essai depuis la page TikTok…",
                                "TikTok: direct refused (HTTP \(code)), trying from the TikTok page…"))
                 guard let data = await webFetch(url), !data.isEmpty else {
+                    tikTokCatchCDNRefusal()
                     throw NetworkError.refused(code)
                 }
                 let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 try data.write(to: temporary)
+                tikTokCDNRefusals = 0
                 return temporary
             }
         case .redgifs(let id):

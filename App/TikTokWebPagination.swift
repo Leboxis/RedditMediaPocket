@@ -229,8 +229,12 @@ import MediaCore
       // cookies et les en-têtes sont ceux du vrai client. Le corps part par
       // morceaux base64 vers le natif, sans altérer la page.
       window.__tiktokDownload = function(url, id) {
+        // `Range` + `credentials` : les noeuds `*-webapp-prime` refusent la
+        // requete media sans segment demande ni cookies `.tiktok.com`
+        // (`Sec-Fetch-Dest: empty` sinon, HTTP 403 garanti).
         var attempt = function(withCredentials) {
-          fetch(url, { method: 'GET', credentials: withCredentials ? 'include' : 'omit' }).then(function(r) {
+          fetch(url, { method: 'GET', credentials: withCredentials ? 'include' : 'omit',
+                       headers: { 'Range': 'bytes=0-' } }).then(function(r) {
             if (!r.ok) {
               if (withCredentials) return attempt(false);
               handler({ kind: 'media', id: id, failed: true, status: r.status });

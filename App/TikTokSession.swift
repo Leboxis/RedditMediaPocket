@@ -83,9 +83,11 @@ import MediaCore
                  "TikTok session detected · API access unverified")
     }
 
-    /// En-tête `Cookie` pour les requêtes API et les pages tiktok.com. Les CDN
-    /// de médias en sont exclus par `TikTokCookiePolicy` : leurs URL sont
-    /// publiques et ne recevront jamais le jeton de session.
+    /// En-tête `Cookie` pour les requêtes API, les pages tiktok.com et les
+    /// CDN de médias (`*.tiktok.com`, inclus par `TikTokCookiePolicy`) : les
+    /// nœuds `*-webapp-prime` lient chaque URL au cookie `tt_chain_token` posé
+    /// dans ce magasin WebKit ; sans cookie prêté à URLSession, transfert
+    /// refusé (HTTP 403).
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, TikTokCookiePolicy.allows(url) else { return nil }
         let cookies = await allCookies()

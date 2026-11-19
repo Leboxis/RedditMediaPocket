@@ -80,6 +80,48 @@ final class TikTokTests: XCTestCase {
         let media = TikTokAPI.mediaHeaders()
         XCTAssertEqual(media["Referer"], "https://www.tiktok.com/")
         XCTAssertEqual(media["User-Agent"], TikTokAPI.userAgent)
+        // Les nœuds `*-webapp-prime` refusent (403) un transfert sans
+        // requête média segmentée ni origine de la page.
+        XCTAssertEqual(media["Range"], "bytes=0-")
+        XCTAssertEqual(media["Origin"], "https://www.tiktok.com")
+    }
+
+    /// Chaque entrée de `urlList` est un miroir CDN du même contenu : la
+    /// première devient l'URL primaire, les suivantes des secours — un 403
+    /// du nœud `v16-` ne doit pas condamner le transfert si `v19-` passe.
+    func testParseItemListCollectsAllCDNMirrors() throws {
+        let json = #"""
+        {"itemList":[{"id":"7301","desc":"","video":{"bitrateInfo":[
+          {"Bitrate":2445819,"GearName":"adapt_lower_720_1",
+           "PlayAddr":{"urlList":["https://v16-webapp-prime.tiktok.com/video/a.mp4?sig=1",
+                                  "https://v19-webapp-prime.tiktok.com/video/a.mp4?sig=2",
+                                  "https://www.tiktok.com/aweme/v1/play/?sig=3"]}}}]}],"hasMore":0}
+        """#
+        let page = try TikTokWeb.parseItemList(Data(json.utf8))
+        let media = try XCTUnwrap(page.posts.first?.media.first)
+        XCTAssertEqual(media.url.absoluteString,
+                       "https://v16-webapp-prime.tiktok.com/video/a.mp4?sig=1")
+        XCTAssertEqual(media.mirrors.map { $0.absoluteString },
+                       ["https://v19-webapp-prime.tiktok.com/video/a.mp4?sig=2",
+                        "https://www.tiktok.com/aweme/v1/play/?sig=3"])
+    }
+
+    /// Sans variante `bitrateInfo`, `playAddr` devient l'URL primaire et
+    /// `downloadAddr` son miroir, jamais un second média.
+    func testParseItemListUsesDownloadAddrAsMirror() throws {
+        let json = #"""
+        {"itemList":[{"id":"7301","desc":"","video":{
+          "playAddr":"https://v16-webapp-prime.tiktok.com/video/a.mp4",
+          "downloadAddr":"https://v19-webapp-prime.tiktok.com/video/a.mp4?watermark=1"}}],"hasMore":0}
+        """#
+        let page = try TikTokWeb.parseItemList(Data(json.utf8))
+        let post = try XCTUnwrap(page.posts.first)
+        XCTAssertEqual(post.media.count, 1)
+        let media = try XCTUnwrap(post.media.first)
+        XCTAssertEqual(media.url.absoluteString,
+                       "https://v16-webapp-prime.tiktok.com/video/a.mp4")
+        XCTAssertEqual(media.mirrors.map { $0.absoluteString },
+                       ["https://v19-webapp-prime.tiktok.com/video/a.mp4?watermark=1"])
     }
 
     // MARK: - Profil
