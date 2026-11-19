@@ -2266,6 +2266,12 @@ extension Notification.Name {
     private final class TikTokSignedSavedFeed {
         private let paginator: TikTokWebPaginator
         private let makeURL: (String) -> URL
+        /// Forme minimale du même appel (paramètres exacts de `yt-dlp`),
+        /// seulement pour un dossier : `collect/item_list` n'en a pas besoin.
+        private let minimalURL: ((String) -> URL)?
+        /// Dossier visé, pour le diagnostic.
+        private let collectionID: String?
+        private var triedMinimal = false
         private var cursor = ""
         private var hasMore = true
         private var pending: Data?
@@ -2274,9 +2280,13 @@ extension Notification.Name {
         init(paginator: TikTokWebPaginator, secUid: String? = nil, collectionId: String? = nil) {
             self.paginator = paginator
             if let collectionId {
+                self.collectionID = collectionId
                 makeURL = { TikTokAPI.collectionItemListURL(collectionId: collectionId, cursor: $0) }
+                minimalURL = { TikTokAPI.minimalCollectionItemListURL(collectionId: collectionId, cursor: $0) }
             } else {
+                self.collectionID = nil
                 makeURL = { TikTokAPI.collectItemListURL(secUid: secUid ?? "", cursor: $0) }
+                minimalURL = nil
             }
         }
 
@@ -2328,10 +2338,53 @@ extension Notification.Name {
                 hasMore = false
                 return nil
             }
+            // Dossier vide : la requête de contexte complet est acceptée mais
+            // répond une liste vide (235 octets constatés, pour un dossier
+            // rempli). La forme minimale de `yt-dlp` est tentée une fois — la
+            // seule différence est le jeu de paramètres.
+            if page.posts.isEmpty, pagesServed == 0 {
+                LogCenter.info(L("TikTok : dossier \(collectionID ?? "-") sans publication — corps reçu : \(Self.peek(data))",
+                                 "TikTok: folder \(collectionID ?? "-") has no post — body received: \(Self.peek(data))"))
+                if !triedMinimal, let minimalURL {
+                    triedMinimal = true
+                    LogCenter.info(L("TikTok : nouvel essai avec la requête minimale (aid, collectionId, count, cursor, sourceType).",
+                                     "TikTok: retrying with the minimal query (aid, collectionId, count, cursor, sourceType)."))
+                    if let alt = await load(minimalURL(cursor)) {
+                        if alt.page.posts.isEmpty {
+                            LogCenter.info(L("TikTok : la requête minimale répond aussi une liste vide.",
+                                             "TikTok: the minimal query also returns an empty list."))
+                        } else {
+                            LogCenter.info(L("TikTok : la requête minimale a livré \(alt.page.posts.count) publication(s).",
+                                             "TikTok: the minimal query delivered \(alt.page.posts.count) post(s)."))
+                            pagesServed += 1
+                            cursor = alt.page.nextCursor ?? ""
+                            hasMore = alt.page.hasMore && !cursor.isEmpty
+                            return alt.data
+                        }
+                    }
+                }
+            }
             pagesServed += 1
             cursor = page.nextCursor ?? ""
             hasMore = page.hasMore && !cursor.isEmpty
             return data
+        }
+
+        /// Appel signé et analyse d'une page, sans toucher au curseur.
+        private func load(_ url: URL) async -> (page: TikTokMediaPage, data: Data)? {
+            guard let response = await paginator.signedFetch(url),
+                  response.status == 200, !response.body.isEmpty,
+                  let data = response.body.data(using: .utf8),
+                  let page = try? TikTokWeb.parseItemList(data) else { return nil }
+            return (page, data)
+        }
+
+        /// Début du corps reçu, borné : un dossier vide tient en quelques
+        /// dizaines d'octets, et le journal n'a pas à porter davantage. Aucun
+        /// secret n'y figure — c'est la liste des publications du compte.
+        private static func peek(_ data: Data, limit: Int = 240) -> String {
+            let text = String(decoding: data.prefix(limit), as: UTF8.self)
+            return data.count > limit ? text + "…" : text
         }
     }
 

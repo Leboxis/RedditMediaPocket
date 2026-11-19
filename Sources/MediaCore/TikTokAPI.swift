@@ -335,6 +335,26 @@ public enum TikTokAPI {
         ])
     }
 
+    /// Même point d'entrée, avec la requête **minimale** qu'emploie `yt-dlp`
+    /// (`TikTokCollectionIE._build_web_query`) : cinq paramètres, pas un de
+    /// plus. Le contexte complet de `savedBaseQuery` est accepté par
+    /// `collection_list` mais renvoie une liste vide sur cette route : un
+    /// dossier réellement rempli répondait `{"itemList":[]}` en 235 octets.
+    /// La forme de référence est donc tentée en second recours.
+    public static func minimalCollectionItemListURL(collectionId: String,
+                                                    cursor: String,
+                                                    count: Int = 30) -> URL {
+        var components = URLComponents(string: "https://www.tiktok.com/api/collection/item_list/")!
+        components.queryItems = [
+            URLQueryItem(name: "aid", value: "1988"),
+            URLQueryItem(name: "collectionId", value: collectionId),
+            URLQueryItem(name: "count", value: String(count)),
+            URLQueryItem(name: "cursor", value: cursor.isEmpty ? "0" : cursor),
+            URLQueryItem(name: "sourceType", value: "113")
+        ]
+        return components.url!
+    }
+
     /// Taille de page des routes sauvegardés : TikTok plafonne la liste des
     /// publications à 35.
     public static let savedPageSize = 35
@@ -627,10 +647,12 @@ public enum TikTokWeb {
     private static func folder(from node: [String: Any], requireName: Bool) -> TikTokSavedCollection? {
         guard node["video"] == nil, node["desc"] == nil else { return nil }
         let inner = node["collection"] as? [String: Any] ?? node
-        let id = text(inner, "collectionId")
-            ?? text(inner, "collection_id")
-            ?? text(inner, "id")
-            ?? ((inner["collectionId"] as? NSNumber)?.stringValue)
+        // Chaque clé est lue dans ses deux représentations avant de passer à
+        // la suivante. L'ordre précédent (chaîne `collectionId`, chaîne
+        // `collection_id`, chaîne `id`, **puis** nombre `collectionId`) faisait
+        // gagner un `id` textuel sur un `collectionId` numérique, et la route
+        // `/api/collection/item_list/` répondait alors une liste vide.
+        let id = identifier(inner, ["collectionId", "collection_id", "id"])
         guard let id, !id.isEmpty else { return nil }
         let name = text(inner, "name") ?? text(inner, "title")
             ?? text(node, "name") ?? text(node, "title")
@@ -641,6 +663,16 @@ public enum TikTokWeb {
             if let value = inner[key] as? NSNumber { count = value.intValue; break }
         }
         return TikTokSavedCollection(id: id, name: name ?? id, itemCount: count ?? 0)
+    }
+
+    /// Première clé présente, chaîne ou nombre — les identifiants TikTok
+    /// arrivent dans les deux formes selon la génération du front.
+    private static func identifier(_ node: [String: Any], _ keys: [String]) -> String? {
+        for key in keys {
+            if let value = node[key] as? String, !value.isEmpty { return value }
+            if let value = node[key] as? NSNumber { return value.stringValue }
+        }
+        return nil
     }
 
     /// Recherche structurelle : premier tableau d'objets qui ressemblent à

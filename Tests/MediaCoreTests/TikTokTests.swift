@@ -387,8 +387,7 @@ final class TikTokTests: XCTestCase {
         XCTAssertTrue(pageD.folders.isEmpty)
     }
 
-    func testParseCollectionListReadsFolders() throws {
-        let json = """
+    func testParseCollectionListReadsFolders() throws {        let json = """
         {"collectionList":[{"collectionId":"7659011279817935649","name":"Wanna go to","total":"49","status":1},
                            {"collectionId":"7659011279817935650","name":"Recipes","total":3}],
          "hasMore":false,"cursor":0}
@@ -400,5 +399,40 @@ final class TikTokTests: XCTestCase {
         XCTAssertEqual(folders[0].itemCount, 49)
         XCTAssertEqual(folders[1].name, "Recipes")
         XCTAssertEqual(folders[1].itemCount, 3)
+    }
+
+    /// L'identifiant d'un dossier doit être lu dans ses deux représentations,
+    /// clé par clé. L'ancien ordre (chaînes `collectionId`, `collection_id`,
+    /// `id`, **puis** nombre `collectionId`) laissait gagner un `id` textuel
+    /// sur un `collectionId` numérique : la route
+    /// `/api/collection/item_list/` recevait alors un faux identifiant et
+    /// répondait une liste vide (235 octets constatés sur un dossier rempli).
+    func testFolderIDPrefersNumericCollectionIDOverStringID() throws {
+        // Entier JSON sans point : lu en Int64 par Foundation (il tient sous
+        // 2^53), donc `NSNumber.stringValue` rend le chiffre exact.
+        let json = #"""
+        {"collectionList":[{"collectionId":7659011279817936,"id":"pas-un-dossier","name":"Shoes","total":12}]}
+        """#
+        let folders = try TikTokWeb.parseCollectionList(Data(json.utf8))
+        XCTAssertEqual(folders.count, 1)
+        XCTAssertEqual(folders[0].id, "7659011279817936")
+        XCTAssertEqual(folders[0].name, "Shoes")
+    }
+
+    /// La forme minimale de `yt-dlp` ne porte que cinq paramètres. Le contexte
+    /// complet est accepté par `collection_list` mais renvoie une liste vide
+    /// sur cette route : c'est le second recours, donc il ne doit contenir
+    /// aucun paramètre supplémentaire.
+    func testMinimalCollectionURLMatchesReferenceQuery() {
+        let url = TikTokAPI.minimalCollectionItemListURL(collectionId: "7659011279817935649", cursor: "")
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.count, 5)
+        XCTAssertEqual(items.first { $0.name == "collectionId" }?.value, "7659011279817935649")
+        XCTAssertEqual(items.first { $0.name == "cursor" }?.value, "0")
+        XCTAssertEqual(items.first { $0.name == "sourceType" }?.value, "113")
+        XCTAssertEqual(items.first { $0.name == "aid" }?.value, "1988")
+        XCTAssertEqual(url.host, "www.tiktok.com")
+        // `URL.path` retire le slash final : l'adresse complète le porte.
+        XCTAssertTrue(url.absoluteString.hasPrefix("https://www.tiktok.com/api/collection/item_list/?"))
     }
 }
