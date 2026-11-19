@@ -116,6 +116,30 @@ import MediaCore
         handler({ kind: 'route', url: '/__no_named_element__' });
         return '';
       };
+      // Rèle le lien de la page Enregistrés : il vit dans le menu du profil
+      // sur le site desktop. Le menu est ouvert, puis les ancres contenant
+      // `saved`/`bookmarks` sont récoltées avec le pseudo du compte connecté.
+      window.__tiktokOpenMenu = function() {
+        var els = document.querySelectorAll('a[href^="/@"], [data-e2e="profile-icon"], [data-e2e="profile-avatar"]');
+        if (!els.length) return false;
+        els[0].click();
+        return true;
+      };
+      window.__tiktokHarvestSaved = function() {
+        var links = [];
+        var anchors = document.querySelectorAll('a[href]');
+        for (var i = 0; i < anchors.length; i++) {
+          var h = String(anchors[i].getAttribute('href') || '');
+          if ((h.indexOf('/saved') !== -1 || h.indexOf('bookmarks') !== -1) && links.indexOf(h) === -1 && links.length < 5) links.push(h);
+        }
+        var user = '';
+        var el = document.querySelector('a[href^="/@"]');
+        if (el) {
+          var m = String(el.getAttribute('href')).match(/@([A-Za-z0-9._]{1,24})/);
+          if (m) user = m[1];
+        }
+        return JSON.stringify({ user: user, links: links });
+      };
       // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
       // les requêtes hors navigateur (403), mais depuis la page le TLS, les
       // cookies et les en-têtes sont ceux du vrai client. Le corps part par
@@ -341,8 +365,58 @@ import MediaCore
         }
     }
 
-    /// Corps JSON suivant d'une route signée par le JavaScript de TikTok
-    /// (`/item_list` par défaut, `/collection_list` pour les dossiers).
+    /// Navigue la WebView vers une autre page tiktok.com dans la même session.
+    /// Même garde de 30 s que le chargement initial ; les corps capturés de
+    /// la page précédente sont jetés pour ne pas polluer le nouveau fil.
+    func navigate(_ url: URL) async -> Bool {
+        guard let view = webView else { return false }
+        pendingBodies.removeAll()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            loadContinuation = continuation
+            watchdog = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self else { return }
+                self.finishLoad(false)
+            }
+            view.load(URLRequest(url: url))
+        }
+    }
+
+    /// Adresse de la page Enregistrés : le menu du profil est ouvert, puis le
+    /// premier lien `saved`/`bookmarks` du DOM sert de cible ; à défaut, la
+    /// route `@pseudo/saved` est construite depuis le pseudo du compte.
+    func savedPageURL() async -> URL? {
+        guard let webView else { return nil }
+        webView.evaluateJavaScript("window.__tiktokOpenMenu && window.__tiktokOpenMenu()", completionHandler: nil)
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let harvested: String? = await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            webView.evaluateJavaScript("window.__tiktokHarvestSaved && window.__tiktokHarvestSaved()") { result, _ in
+                continuation.resume(returning: result as? String)
+            }
+        }
+        guard let json = harvested, let data = json.data(using: .utf8),
+              let payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            LogCenter.info(L("TikTok web : la page n'a pas livré de lien Enregistres.", "TikTok web: the page gave up no saved link."))
+            return nil
+        }
+        let links = (payload["links"] as? [String]) ?? []
+        if let name = payload["user"] as? String, !name.isEmpty { pageUsername = name }
+        for raw in links {
+            let absolute = raw.hasPrefix("http") ? raw : "https://www.tiktok.com" + raw
+            if let url = URL(string: absolute), url.host?.hasSuffix("tiktok.com") == true {
+                LogCenter.info(L("TikTok web : lien Enregistres trouve \(absolute).", "TikTok web: saved link found \(absolute)."))
+                return url
+            }
+        }
+        if let name = (payload["user"] as? String), !name.isEmpty,
+           let url = URL(string: "https://www.tiktok.com/@\(name)/saved") {
+            LogCenter.info(L("TikTok web : lien Enregistres construit depuis le pseudo \(name).", "TikTok web: saved link built from the handle \(name)."))
+            return url
+        }
+        LogCenter.info(L("TikTok web : aucun lien Enregistres visible (\(links.count) lien(s) scrute(s)).", "TikTok web: no visible saved link (\(links.count) link(s) scanned)."))
+        return nil
+    }
+
     /// Clique le premier élément de la page portant l'un des noms donnés
     /// (insensible à la casse) : sert à ouvrir l'onglet Favorites/Collections
     /// de la page Sauvegardés, qui ne charge pas toujours `collection_list`

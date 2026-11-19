@@ -998,8 +998,14 @@ extension Notification.Name {
         }
         let paginator = TikTokWebPaginator()
         defer { paginator.close() }
-        guard await paginator.start(url: TikTokAPI.savedURL(), desktopUserAgent: true) else {
+        guard await Self.openTikTokSavedPage(paginator: paginator) else {
             tikTokSavedLoading = false
+            tikTokSavedListError = NetworkError.invalid(L(
+                "Page Sauvegard\u{00e9}s TikTok injoignable depuis le menu du profil : consulte le journal (lignes \u{ab} TikTok web : \u{bb}).",
+                "TikTok Saved page unreachable from the profile menu: check the log (\u{201c}TikTok web:\u{201d} lines).")).localizedDescription
+            LogCenter.info(L(
+                "TikTok : ouverture de la page Sauvegard\u{00e9}s \u{00e9}chou\u{00e9}e \u{2014} lien du menu profil introuvable, vois le journal.",
+                "TikTok: opening the Saved page failed \u{2014} profile-menu link not found, see the log."))
             return
         }
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
@@ -2089,6 +2095,19 @@ extension Notification.Name {
         return true
     }
 
+    /// Ouverture de la page des Enregistr\u{00e9}s TikTok : la route directe
+    /// `/saved` renvoie 404 \u{2014} la page vit dans le menu du profil du site
+    /// desktop. La WebView charge donc la page d\u{2019}accueil connect\u{00e9}e (client
+    /// desktop), ouvre le menu du profil, r\u{00e9}colte le lien des Enregistr\u{00e9}s
+    /// dans le DOM (ou le construit depuis le pseudo), puis y navigue.
+    /// Renvoie false si le lien reste introuvable ou si la navigation \u{00e9}choue.
+    private static func openTikTokSavedPage(paginator: TikTokWebPaginator) async -> Bool {
+        guard await paginator.start(url: URL(string: "https://www.tiktok.com/")!, desktopUserAgent: true) else { return false }
+        guard let saved = await paginator.savedPageURL() else { return false }
+        LogCenter.info(L("TikTok web : ouverture \(saved.absoluteString).", "TikTok web: opening \(saved.absoluteString)."))
+        return await paginator.navigate(saved)
+    }
+
     /// Parcours des sauvegardés TikTok du compte connecté (`ts/`) : soit
     /// toutes les publications enregistrées, soit un dossier de favoris choisi
     /// dans le sélecteur. La page Sauvegardés charge et signe elle-même
@@ -2114,11 +2133,13 @@ extension Notification.Name {
             paginator.close()
             tikTokWebFetch = nil
         }
-        status = L("Ouverture de la page Sauvegardés TikTok…", "Opening the TikTok Saved page…")
-        // Client web desktop : la page Sauvegardés ne sert ses données qu'à
-        // `web_pc` ; un iPhone n'en reçoit qu'une page muette.
-        guard await paginator.start(url: TikTokAPI.savedURL(), desktopUserAgent: true) else {
-            throw NetworkError.invalid(L("Page Sauvegardés TikTok injoignable : réseau ou garde de temps.", "TikTok Saved page unreachable: network or timeout."))
+        status = L("Ouverture de la page Sauvegard\u{00e9}s TikTok\u{2026}", "Opening the TikTok Saved page\u{2026}")
+        // La route directe `/saved` renvoie 404 : la page est atteinte par le
+        // lien r\u{00e9}colt\u{00e9} dans le menu du profil du site desktop.
+        guard await Self.openTikTokSavedPage(paginator: paginator) else {
+            throw NetworkError.invalid(L(
+                "Page Sauvegard\u{00e9}s TikTok injoignable : le site n\u{2019}expose pas de lien \u{ab} Enregistr\u{00e9}s \u{bb} atteignable depuis le menu du profil \u{2014} consulte le journal (lignes \u{ab} TikTok web : \u{bb}).",
+                "TikTok Saved page unreachable: the site exposes no saved link from the profile menu \u{2014} check the log (\u{201c}TikTok web:\u{201d} lines)."))
         }
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
         if let choice {
@@ -2135,13 +2156,17 @@ extension Notification.Name {
             // Un `nil` au premier tour peut être une page encore muette :
             // ouvrir l'onglet Favorites/Collections par un clic simulé
             // avant de conclure ; aux tours suivants, `nil` est la fin du fil.
-            var maybeData = await paginator.nextPage()
+            // Les items globaux passent par `/collect/item_list`, ceux d\u{2019}un
+            // dossier par `/collection/item_list` : filtrer pour ne pas capter
+            // les `item_list` du fil de recommandations.
+            let itemRoute = choice == nil ? "/collect/item_list" : "/collection/item_list"
+            var maybeData = await paginator.nextPage(matching: itemRoute)
             if maybeData == nil, scannedPages == 1 {
                 if let clicked = await paginator.clickNamed([
                     "Favorites", "All favorites", "Collections",
                     L("Favoris", "Favorites"), L("Collections", "Collections")]) {
-                    LogCenter.info(L("TikTok : onglet « \(clicked) » ouvert, relance de la recherche.", "TikTok: “\(clicked)” tab opened, retrying the search."))
-                    maybeData = await paginator.nextPage()
+                    LogCenter.info(L("TikTok : onglet \u{ab} \(clicked) \u{bb} ouvert, relance de la recherche.", "TikTok: \u{201c}\(clicked)\u{201d} tab opened, retrying the search."))
+                    maybeData = await paginator.nextPage(matching: itemRoute)
                 }
             }
             guard let data = maybeData else {
