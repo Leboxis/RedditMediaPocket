@@ -128,25 +128,49 @@ final class KDriveUploadTests: XCTestCase {
 
     // MARK: - Pacer à fenêtre glissante
 
-    func testPacerAllowsUpToLimitThenWaits() {
+    func testPacerSpacesRequestsInsteadOfBursting() {
         var pacer = SlidingWindowPacer(limit: 50, window: 60)
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        for _ in 0..<50 {
-            XCTAssertEqual(pacer.reserveSlot(now: now), 0)
-        }
-        let wait = pacer.reserveSlot(now: now)
-        XCTAssertGreaterThan(wait, 0)
-        XCTAssertLessThanOrEqual(wait, 60)
-        XCTAssertEqual(pacer.count(at: now), 51)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(pacer.reserveSlot(now: t0), 0)
+        // Plus de rafale : la 2e requête attend l'espacement régulier.
+        let wait = pacer.reserveSlot(now: t0)
+        XCTAssertEqual(wait, pacer.spacing, accuracy: 0.001)
+        // Une tentative bloquée ne consomme pas de créneau.
+        XCTAssertEqual(pacer.count(at: t0), 1)
+        // À l'espacement exact, la requête part.
+        XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(pacer.spacing)), 0)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(pacer.spacing)), 2)
+    }
+
+    func testPacerNeverExceedsLimitInWindow() {
+        var pacer = SlidingWindowPacer(limit: 3, window: 60)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(pacer.reserveSlot(now: t0), 0)
+        XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(30)), 0)
+        // Fenêtre saturée (3 max) : la suivante attend, sans consommer.
+        XCTAssertGreaterThan(pacer.reserveSlot(now: t0.addingTimeInterval(30.5)), 0)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(30.5)), 2)
+        XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(61)), 0)
+        XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(91.5)), 0)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(91.5)), 2)
+        XCTAssertGreaterThan(pacer.reserveSlot(now: t0.addingTimeInterval(91.5)), 0)
+    }
+
+    func testPacerNextSlotWaitDoesNotConsume() {
+        var pacer = SlidingWindowPacer(limit: 56, window: 60)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(pacer.nextSlotWait(now: t0), 0)
+        pacer.reserveSlot(now: t0)
+        XCTAssertEqual(pacer.nextSlotWait(now: t0), pacer.spacing, accuracy: 0.001)
+        XCTAssertEqual(pacer.nextSlotWait(now: t0.addingTimeInterval(pacer.spacing)), 0)
+        XCTAssertEqual(pacer.count(at: t0), 1)
     }
 
     func testPacerSlidesAfterWindow() {
         var pacer = SlidingWindowPacer(limit: 2, window: 60)
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertEqual(pacer.reserveSlot(now: t0), 0)
-        XCTAssertEqual(pacer.reserveSlot(now: t0), 0)
-        XCTAssertGreaterThan(pacer.reserveSlot(now: t0), 0)
-        // 61 s plus tard, la fenêtre est libérée.
+        // Après vidage de la fenêtre, le premier départ est immédiat.
         XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(61)), 0)
         XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(61)), 1)
     }
@@ -156,10 +180,10 @@ final class KDriveUploadTests: XCTestCase {
         let t0 = Date(timeIntervalSince1970: 1_000_000)
         XCTAssertNil(pacer.oldest(at: t0))
         pacer.reserveSlot(now: t0)
-        pacer.reserveSlot(now: t0.addingTimeInterval(5))
-        XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(5)), t0)
-        // à t0+61 la fenêtre couvre ]t0+1, t0+61] : t0+5 est encore dedans
-        XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(61)), t0.addingTimeInterval(5))
-        XCTAssertNil(pacer.oldest(at: t0.addingTimeInterval(66)))
+        pacer.reserveSlot(now: t0.addingTimeInterval(7))
+        XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(7)), t0)
+        // à t0+61 la fenêtre couvre ]t0+1, t0+61] : t0+7 est encore dedans
+        XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(61)), t0.addingTimeInterval(7))
+        XCTAssertNil(pacer.oldest(at: t0.addingTimeInterval(68)))
     }
 }

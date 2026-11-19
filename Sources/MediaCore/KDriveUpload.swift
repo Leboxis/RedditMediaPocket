@@ -12,7 +12,7 @@ public enum KDriveUploadPolicy {
     /// Chunks envoyés en parallèle par fichier.
     public static let maxConcurrentChunks = 4
     /// Fichiers uploadés en parallèle.
-    public static let maxConcurrentUploads = 6
+    public static let maxConcurrentUploads = 4
     /// Connexions HTTP simultanées par hôte (borne aussi le débit côté edge).
     public static let maxConnectionsPerHost = 8
     /// L'API accepte au plus 10 000 chunks par session et 1 Gio par requête chunk.
@@ -98,8 +98,13 @@ public enum KDriveChunkReply {
     }
 }
 
-/// Fenêtre glissante de pacing (ex. 50 requêtes/min sous la limite officielle
-/// Infomaniak de 60 req/min, non augmentable).
+/// Fenêtre glissante de pacing (ex. 56 requêtes/min sous la limite officielle
+/// Infomaniak de 60 req/min, non augmentable). Les requêtes sont espacées
+/// uniformément (`window / (limit - 1)`) au lieu de partir en rafale : la
+/// fenêtre ne se sature jamais, donc aucune attente longue — le débit visible
+/// reste continu au lieu de tomber à zéro entre deux rafales. Une tentative
+/// bloquée ne consomme pas de créneau : seules les requêtes réellement
+/// parties comptent dans la fenêtre.
 public struct SlidingWindowPacer {
     public let limit: Int
     public let window: TimeInterval
@@ -110,20 +115,46 @@ public struct SlidingWindowPacer {
         self.window = window
     }
 
-    /// Enregistre une requête à `now` et renvoie l'attente (en s) avant le
-    /// prochain créneau ; 0 si la requête peut partir immédiatement.
+    /// Espacement minimum entre deux requêtes : limite - 1 requêtes espacées
+    /// couvrent `window`, donc jamais plus de `limit` requêtes dans une fenêtre
+    /// glissante, quelle que soit la répartition des départs.
+    public var spacing: TimeInterval {
+        window / Double(max(limit - 1, 1))
+    }
+
+    /// Réserve un créneau à `now` et renvoie l'attente (en s) avant que la
+    /// requête puisse partir ; 0 si elle peut partir immédiatement.
     public mutating func reserveSlot(now: Date = Date()) -> TimeInterval {
         timestamps.removeAll { $0 < now.addingTimeInterval(-window) }
-        timestamps.append(now)
-        if timestamps.count > limit, let oldest = timestamps.first {
-            return max(0, oldest.addingTimeInterval(window).timeIntervalSince(now))
+        guard let oldest = timestamps.first, let newest = timestamps.last else {
+            timestamps.append(now)
+            return 0
         }
+        let wait = max(
+            newest.addingTimeInterval(spacing).timeIntervalSince(now),
+            timestamps.count >= limit ? oldest.addingTimeInterval(window).timeIntervalSince(now) : 0
+        )
+        if wait > 0 { return wait }
+        timestamps.append(now)
         return 0
     }
 
     /// Nombre de requêtes dans la fenêtre glissante à `now`.
     public func count(at now: Date = Date()) -> Int {
         timestamps.filter { $0 >= now.addingTimeInterval(-window) }.count
+    }
+
+    /// Attente (en s) avant le prochain créneau, sans consommer de créneau :
+    /// sert à afficher en continu l'état de la cadence pendant un envoi.
+    public func nextSlotWait(now: Date = Date()) -> TimeInterval {
+        guard timestamps.isEmpty == false else { return 0 }
+        let live = timestamps.filter { $0 >= now.addingTimeInterval(-window) }
+        guard let oldest = live.first, let newest = live.last else { return 0 }
+        var wait = max(0, newest.addingTimeInterval(spacing).timeIntervalSince(now))
+        if live.count >= limit {
+            wait = max(wait, max(0, oldest.addingTimeInterval(window).timeIntervalSince(now)))
+        }
+        return wait
     }
 
     /// Timestamp le plus ancien encore dans la fenêtre (nil si vide).

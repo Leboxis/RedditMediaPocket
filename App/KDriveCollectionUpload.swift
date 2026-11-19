@@ -249,7 +249,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
     /// accessible depuis plusieurs uploads concurrents. 8 connexions par hôte,
     /// comme Orvian-IOS : l'edge Infomaniak bride une IP qui ouvre trop de
-    /// connexions simultanées (FAQ 231), et 8 suffisent avec 4 chunks × 6
+    /// connexions simultanées (FAQ 231), et 8 suffisent avec 4 chunks × 4
     /// fichiers en vol.
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -308,6 +308,8 @@ private final class KDriveContinuousUploadController: ObservableObject {
     @Published var uploadedBytes: Int64 = 0
     @Published var totalBytes: Int64 = 0
     @Published var speedBytesPerSecond: Double = 0
+    @Published var startedCount = 0
+    var activeUploadCount: Int { max(startedCount - completedCount, 0) }
     @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
     @Published private(set) var uploadedFileURLs: [URL] = []
 
@@ -326,15 +328,16 @@ private final class KDriveContinuousUploadController: ObservableObject {
         isUploading = true
         uploadedFileURLs = []
         completedCount = 0
+        startedCount = 0
         totalCount = files.count
         progress = 0
         lastCompletedFileName = ""
         uploadedBytes = 0
         speedBytesPerSecond = 0
         totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
-        // 6 fichiers en parallèle, comme Orvian-IOS : avec 4 chunks par fichier
+        // 4 fichiers en parallèle : avec 4 chunks par fichier
         // et 8 connexions/hôte, on reste sous la limite officielle de 60
-        // req/min (pacing global à 50) et sous le seuil de bridage edge.
+        // req/min (pacing global espacé à 56) et sous le seuil de bridage edge.
         activeLimit = Self.concurrentLimit
 
         activeTask = Task {
@@ -355,6 +358,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                         lastDate = now
                     }
                     uploadedBytes = bytes
+                    KDriveRateLimitCenter.shared.refreshPacingInfo()
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                 }
             }
@@ -371,6 +375,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                 for _ in 0..<initialCount {
                     let fileURL = files[nextIndex]
                     nextIndex += 1
+                    startedCount = nextIndex
                     group.addTask {
                         await Self.uploadOutcome(
                             fileURL: fileURL,
@@ -407,6 +412,7 @@ private final class KDriveContinuousUploadController: ObservableObject {
                     if nextIndex < files.count && !Task.isCancelled {
                         let fileURL = files[nextIndex]
                         nextIndex += 1
+                        startedCount = nextIndex
                         group.addTask {
                             await Self.uploadOutcome(
                                 fileURL: fileURL,
@@ -685,8 +691,8 @@ private final class KDriveContinuousUploadController: ObservableObject {
         LogCenter.kdrive(L("kDrive : session chunkée ouverte — \(remoteFileName) (\(totalChunks) chunks de \(chunkSize / 1_000_000) Mo).", "kDrive: chunked session opened — \(remoteFileName) (\(totalChunks) chunks of \(chunkSize / 1_000_000) MB)."))
 
         // 4 chunks en parallèle par fichier, comme Orvian-IOS : avec 8
-        // connexions/hôte et le pacing global (50 req/min), on reste sous la
-        // limite officielle de 60 req/min et sous le seuil de bridage edge.
+        // connexions/hôte et le pacing global espacé (56 req/min), on reste sous
+        // la limite officielle de 60 req/min et sous le seuil de bridage edge.
         let chunkConcurrency = KDriveUploadPolicy.maxConcurrentChunks
         let maxChunkAttempts = 3
         let sendChunk: (Int) async throws -> Void = { chunkIndex in
@@ -980,6 +986,7 @@ private struct KDriveContinuousUploadSheet: View {
     let skippedCount: Int
 
     @StateObject private var uploader = KDriveContinuousUploadController()
+    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var started = false
     @State private var finished = false
@@ -1042,6 +1049,12 @@ private struct KDriveContinuousUploadSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
+                    if uploader.activeUploadCount > 0 {
+                        Text(L("\(uploader.activeUploadCount) envoi(s) en cours sur \(uploader.activeLimit)", "\(uploader.activeUploadCount) upload(s) in progress of \(uploader.activeLimit)"))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+
                     if uploader.totalBytes > 0 {
                         Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
                             .font(.subheadline.monospacedDigit())
@@ -1059,6 +1072,16 @@ private struct KDriveContinuousUploadSheet: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
+
+                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
+
+                    if rateLimit.nextSlotDelay > 0.5 {
+                        Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.orange)
+                    }
 
                     if !uploader.lastCompletedFileName.isEmpty {
                         Text(uploader.lastCompletedFileName)

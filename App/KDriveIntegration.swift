@@ -102,15 +102,16 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     @Published private(set) var limitedUntil: Date?
     @Published private(set) var requestsLastMinute: Int = 0
+    @Published private(set) var nextSlotDelay: TimeInterval = 0
 
     private var pacer = SlidingWindowPacer(limit: KDriveRateLimitCenter.pacingLimitPerMinute)
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
     /// Marge de sécurité sous la limite officielle : toutes les requêtes
-    /// kDrive (chunks compris) passent par `waitForRequestSlot` avant d'être
-    /// envoyées, pour ne jamais l'atteindre et éviter les 429.
-    static let pacingLimitPerMinute = 50
+    /// kDrive (chunks compris) passent par `waitForRequestSlot`, espacées
+    /// uniformément, pour ne jamais l'atteindre et éviter les 429.
+    static let pacingLimitPerMinute = 56
     private init() {}
 
     /// À appeler après chaque réponse kDrive (listing, envoi, test…).
@@ -143,10 +144,27 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// prochain créneau ; 0 si la requête peut partir immédiatement.
     private func reserveSlot() -> TimeInterval {
         let now = Date()
-        if let until = limitedUntil, until > now { return until.timeIntervalSince(now) }
+        if let until = limitedUntil, until > now {
+            let wait = until.timeIntervalSince(now)
+            nextSlotDelay = wait
+            return wait
+        }
         let wait = pacer.reserveSlot(now: now)
         requestsLastMinute = pacer.count(at: now)
+        nextSlotDelay = pacer.nextSlotWait(now: now)
         return wait > 0 ? max(wait, 0.1) : 0
+    }
+
+    /// Rafraîchit les compteurs de cadence sans consommer de créneau, pour
+    /// afficher en continu l'état de l'API pendant un envoi.
+    func refreshPacingInfo() {
+        let now = Date()
+        requestsLastMinute = pacer.count(at: now)
+        if let until = limitedUntil, until > now {
+            nextSlotDelay = until.timeIntervalSince(now)
+        } else {
+            nextSlotDelay = pacer.nextSlotWait(now: now)
+        }
     }
 
     /// Codes d'erreur officiels (`error.code`) qui traduisent un rate limit.
@@ -1084,6 +1102,7 @@ struct KDriveUploadSheet: View {
     let directoryName: String
 
     @ObservedObject private var service = KDriveService.shared
+    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var started = false
     @State private var finished = false
@@ -1126,6 +1145,16 @@ struct KDriveUploadSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+
+                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
+
+                    if rateLimit.nextSlotDelay > 0.5 {
+                        Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.orange)
+                    }
                     if !service.currentFileName.isEmpty {
                         Text(service.currentFileName)
                             .font(.caption.monospaced())
@@ -1159,6 +1188,12 @@ struct KDriveUploadSheet: View {
         .presentationDetents([.medium])
         .interactiveDismissDisabled(service.isUploading)
         .onAppear { startUploadIfNeeded() }
+        .task {
+            while !finished {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                KDriveRateLimitCenter.shared.refreshPacingInfo()
+            }
+        }
     }
 
     private func startUploadIfNeeded() {
