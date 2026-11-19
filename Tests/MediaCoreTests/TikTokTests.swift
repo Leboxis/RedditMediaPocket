@@ -95,7 +95,7 @@ final class TikTokTests: XCTestCase {
           {"Bitrate":2445819,"GearName":"adapt_lower_720_1",
            "PlayAddr":{"urlList":["https://v16-webapp-prime.tiktok.com/video/a.mp4?sig=1",
                                   "https://v19-webapp-prime.tiktok.com/video/a.mp4?sig=2",
-                                  "https://www.tiktok.com/aweme/v1/play/?sig=3"]}}}]}],"hasMore":0}
+                                  "https://www.tiktok.com/aweme/v1/play/?sig=3"]}}]}}],"hasMore":0}
         """#
         let page = try TikTokWeb.parseItemList(Data(json.utf8))
         let media = try XCTUnwrap(page.posts.first?.media.first)
