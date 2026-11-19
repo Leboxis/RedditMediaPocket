@@ -1005,7 +1005,7 @@ extension Notification.Name {
             guard let account = await Self.resolveTikTokOwnAccount(paginator) else {
                 LogCenter.info(L("TikTok : voie sign\u{00e9}e des dossiers abandonn\u{00e9}e (compte non r\u{00e9}solu) \u{2014} repli.",
                                  "TikTok: signed folder route abandoned (account unresolved) \u{2014} falling back."))
-                await Self.openTikTokSavedCollectionsFallback(paginator)
+                await openTikTokSavedCollectionsFallback(paginator)
                 return
             }
             if (tikTokSavedAccount ?? "").isEmpty { tikTokSavedAccount = account.username }
@@ -1044,7 +1044,7 @@ extension Notification.Name {
             LogCenter.info(L("TikTok : voie directe des dossiers refus\u{00e9}e (r\u{00e9}ponse sans liste) \u{2014} repli sur la page Sauvegard\u{00e9}s.",
                              "TikTok: direct folder route refused (no list in response) \u{2014} falling back to the Saved page."))
         }
-        await Self.openTikTokSavedCollectionsFallback(paginator)
+        await openTikTokSavedCollectionsFallback(paginator)
     }
 
     /// Repli de la liste des dossiers : la page Sauvegard\u{e9}s pilote elle-m\u{00ea}me
