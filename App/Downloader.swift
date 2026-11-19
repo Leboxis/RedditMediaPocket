@@ -2283,9 +2283,11 @@ extension Notification.Name {
             // Voie sign\u{00e9}e : les publications enregistr\u{00e9}es (`collect/item_list`)
             // ou celles d'un dossier (`collection/item_list`) sont servies par
             // des appels que la page signe elle-m\u{00ea}me.
-            signedFeed = choice == nil
-                ? TikTokSignedSavedFeed(paginator: paginator, secUid: account.profile.secUid)
-                : TikTokSignedSavedFeed(paginator: paginator, collectionId: choice.id)
+            if let choice {
+                signedFeed = TikTokSignedSavedFeed(paginator: paginator, collectionId: choice.id)
+            } else {
+                signedFeed = TikTokSignedSavedFeed(paginator: paginator, secUid: account.profile.secUid)
+            }
             if let feed = signedFeed, await feed.prime() {
                 if let choice {
                     LogCenter.info(L("TikTok : dossier \u{ab} \(choice.name) \u{bb} lu par la voie sign\u{00e9}e.",
