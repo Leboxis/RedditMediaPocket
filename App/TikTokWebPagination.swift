@@ -364,6 +364,18 @@ import MediaCore
 
     private var mediaTransfers: [String: MediaTransfer] = [:]
 
+    /// Repli téléchargement : une seconde WebView qui laisse WebKit conduire
+    /// lui-même le transfert (wkDownload — cookies, UA et en-têtes `Sec-Fetch`
+    /// du vrai navigateur, justement ce que le CDN `*-webapp-prime` exige).
+    private lazy var mediaWebView = TikTokMediaWebView()
+
+    /// Octets d'un média téléchargés par la pile réseau du navigateur, quand
+    /// URLSession et le fetch de page sont refusés (HTTP 403). `nil` en échec
+    /// ou après la garde : le demandeur retombe alors sur son erreur directe.
+    func browserDownload(_ url: URL) async -> Data? {
+        await mediaWebView.fetch(url, userAgent: pageUserAgent)
+    }
+
     /// Réponse d'un appel API signé par la page.
     struct APIResponse {
         let status: Int
@@ -691,6 +703,7 @@ import MediaCore
             transfer.continuation.resume(returning: nil)
         }
         mediaTransfers = [:]
+        mediaWebView.close()
         guard let view = webView else { return }
         view.stopLoading()
         view.navigationDelegate = nil

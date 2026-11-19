@@ -1981,6 +1981,10 @@ extension Notification.Name {
     /// requête du vrai client navigateur. `nil` hors parcours TikTok.
     private var tikTokWebFetch: ((URL) async -> Data?)?
 
+    /// Dernier repli CDN : téléchargement conduit par la pile réseau d'une
+    /// WebView (WKDownload), quand URLSession ET le fetch de page sont refusés.
+    private var tikTokWebDownload: ((URL) async -> Data?)?
+
     /// Refus consécutifs (HTTP 403) du CDN TikTok après toute la chaîne de
     /// repli : quatre médias refusés d'affilée signifient que la session qui a
     /// obtenu les URL n'est plus acceptée — aucun des suivants ne passera,
@@ -2027,6 +2031,7 @@ extension Notification.Name {
         defer {
             paginator?.close()
             tikTokWebFetch = nil
+            tikTokWebDownload = nil
         }
 
         // Première page gratuite : le HTML du profil embarque les publications
@@ -2070,6 +2075,7 @@ extension Notification.Name {
                         // Les médias des pages web se téléchargent depuis la
                         // page si le direct est refusé.
                         tikTokWebFetch = { url in await web.fetchMedia(url) }
+                        tikTokWebDownload = { url in await web.browserDownload(url) }
                     } else {
                         webUnavailable = true
                     }
@@ -2343,6 +2349,7 @@ extension Notification.Name {
         defer {
             paginator.close()
             tikTokWebFetch = nil
+            tikTokWebDownload = nil
         }
         status = L("Ouverture de la page Sauvegard\u{00e9}s TikTok\u{2026}", "Opening the TikTok Saved page\u{2026}")
         guard await paginator.start(url: TikTokWebNavigation.loginURL, desktopUserAgent: true) else {
@@ -2354,6 +2361,7 @@ extension Notification.Name {
         // native (403 anti-hotlink) est re-tent\u{00e9}e depuis la page, qui porte
         // les cookies et le referer attendus par le CDN.
         tikTokWebFetch = { url in await paginator.fetchMedia(url) }
+        tikTokWebDownload = { url in await paginator.browserDownload(url) }
         let account = await Self.resolveTikTokOwnAccount(paginator)
         if let account { tikTokSavedAccount = account.username }
         var signedFeed: TikTokSignedSavedFeed?
@@ -3562,18 +3570,31 @@ extension Notification.Name {
                     } catch NetworkError.refused { continue }
                 }
                 // Repli TikTok : le CDN refuse le client URLSession mais sert
-                // la même URL au vrai navigateur — la page la rapatrie.
-                guard let webFetch = tikTokWebFetch else { throw NetworkError.refused(code) }
-                LogCenter.net(L("TikTok : direct refusé (HTTP \(code)), essai depuis la page TikTok…",
-                               "TikTok: direct refused (HTTP \(code)), trying from the TikTok page…"))
-                guard let data = await webFetch(url), !data.isEmpty else {
-                    tikTokCatchCDNRefusal()
-                    throw NetworkError.refused(code)
+                // la même URL au vrai navigateur — d'abord le fetch de la page,
+                // puis une navigation complète (WKDownload) conduite par WebKit
+                // lui-même : cookies, UA et en-têtes Sec-Fetch du lecteur.
+                if let webFetch = tikTokWebFetch {
+                    LogCenter.net(L("TikTok : direct refusé (HTTP \(code)), essai depuis la page TikTok…",
+                                   "TikTok: direct refused (HTTP \(code)), trying from the TikTok page…"))
+                    if let data = await webFetch(url), !data.isEmpty {
+                        let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                        try data.write(to: temporary)
+                        tikTokCDNRefusals = 0
+                        return temporary
+                    }
                 }
-                let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try data.write(to: temporary)
-                tikTokCDNRefusals = 0
-                return temporary
+                if let browserDownload = tikTokWebDownload {
+                    LogCenter.net(L("TikTok : essai par navigation dans la WebView…",
+                                    "TikTok: trying a download through the WebView…"))
+                    if let data = await browserDownload(url), !data.isEmpty {
+                        let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                        try data.write(to: temporary)
+                        tikTokCDNRefusals = 0
+                        return temporary
+                    }
+                }
+                tikTokCatchCDNRefusal()
+                throw NetworkError.refused(code)
             }
         case .redgifs(let id):
             do {
