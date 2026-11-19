@@ -757,7 +757,10 @@ public enum TikTokWeb {
             // Miroirs de la variante retenue : chaque adresse de `urlList` est
             // le meme contenu sur un autre noeud CDN (`v16-`, `v19-`...) ; les
             // secondaires passent souvent quand la premiere est defendue.
-            bestMirrors = candidates.filter { $0 != url }
+            // Le filtre d'hôte s'applique aussi ici : `urlList` contient des
+            // adresses `www.tiktok.com/aweme/v1/play/` mortes, et les garder
+            // ferait tenter un transfert qui ne peut que renvoyer du HTML.
+            bestMirrors = candidates.filter { $0 != url && isPlayableMediaHost($0) }
             bestLabel = "\(gear) (\(bitrate / 1000) kbps)"
         }
         if let url = bestURL, seen.insert(url.absoluteString).inserted {
@@ -775,7 +778,7 @@ public enum TikTokWeb {
         }
         if let url = fallback.first, seen.insert(url.absoluteString).inserted {
             var mirrors: [URL] = []
-            for mirror in fallback.filter({ $0 != url }) where !mirrors.contains(mirror) { mirrors.append(mirror) }
+            for mirror in fallback.filter({ $0 != url && isPlayableMediaHost($0) }) where !mirrors.contains(mirror) { mirrors.append(mirror) }
             out.append(TikTokMedia(id: itemID(item), kind: .video, url: url, mirrors: mirrors, quality: "playAddr (standard)"))
         }
         return out

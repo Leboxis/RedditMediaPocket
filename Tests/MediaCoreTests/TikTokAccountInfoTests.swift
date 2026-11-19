@@ -55,7 +55,9 @@ final class TikTokAccountInfoTests: XCTestCase {
     func testAccountInfoRouteIsThePassportOne() {
         let url = TikTokAPI.accountInfoURL()
         XCTAssertEqual(url.host, "www.tiktok.com")
-        XCTAssertEqual(url.path, "/passport/web/account/info/")
-        XCTAssertTrue(url.query?.contains("aid=1988") == true)
+        // `URL.path` retire le slash final : c'est l'adresse complète qui doit
+        // le porter, la route TikTok étant servie sous sa forme barrée.
+        XCTAssertEqual(url.absoluteString,
+                       "https://www.tiktok.com/passport/web/account/info/?aid=1988")
     }
 }
