@@ -96,6 +96,26 @@ import MediaCore
         handler({ kind: 'route', url: '/__collection_opened__' });
         return true;
       };
+      // Clique le premier élément correspondant à l'un des noms donnés :
+      // la page Sauvegardés ne charge parfois `collection_list` qu'après
+      // l'ouverture de son onglet (Favorites, Collections…).
+      window.__tiktokClickNamed = function(namesJson) {
+        var names = [];
+        try { names = JSON.parse(namesJson) || []; } catch (e) { return ''; }
+        var els = document.querySelectorAll('a, button, [role="button"], [data-e2e], div, span');
+        for (var n = 0; n < names.length; n++) {
+          var wanted = String(names[n]).toLowerCase();
+          for (var i = 0; i < els.length; i++) {
+            var t = (els[i].textContent || '').trim();
+            if (t.length === 0 || t.length > 60 || t.toLowerCase() !== wanted) continue;
+            els[i].click();
+            handler({ kind: 'route', url: '/__clicked_' + t.substring(0, 40) + '__' });
+            return t;
+          }
+        }
+        handler({ kind: 'route', url: '/__no_named_element__' });
+        return '';
+      };
       // Rapatriement d'un média depuis le contexte de la page : le CDN refuse
       // les requêtes hors navigateur (403), mais depuis la page le TLS, les
       // cookies et les en-têtes sont ceux du vrai client. Le corps part par
@@ -259,7 +279,7 @@ import MediaCore
     /// Charge une page tiktok.com (profil ou Sauvegardés) dans la WebView
     /// cachée, sur la session connectée. Retourne false en échec de
     /// chargement (réseau, garde de 30 s).
-    func start(url: URL) async -> Bool {
+    func start(url: URL, desktopUserAgent: Bool = false) async -> Bool {
         close()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = TikTokSession.shared.store
@@ -274,6 +294,13 @@ import MediaCore
         // a une raison de se déclencher.
         let view = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844),
                              configuration: configuration)
+        // La page Sauvegardés ne sert `collection_list` ni `collect/item_list`
+        // qu'au client web desktop (`web_pc`) : à un iPhone elle oppose une
+        // page muette qui pousse vers l'app. La WebView garde un viewport
+        // mobile mais se presente comme le navigateur desktop.
+        if desktopUserAgent {
+            view.customUserAgent = TikTokAPI.desktopUserAgent
+        }
         view.navigationDelegate = self
         webView = view
         // Attachée hors écran à la fenêtre : une WebView hors hiérarchie est
@@ -316,9 +343,27 @@ import MediaCore
 
     /// Corps JSON suivant d'une route signée par le JavaScript de TikTok
     /// (`/item_list` par défaut, `/collection_list` pour les dossiers).
-    /// `nil` quand la page ne charge plus rien : fin du fil atteinte.
-    /// Pendant l'attente, le défilement est relancé toutes les 4 s : un seul
-    /// appel à `scrollTo` ne déclenche pas toujours le chargement paresseux.
+    /// Clique le premier élément de la page portant l'un des noms donnés
+    /// (insensible à la casse) : sert à ouvrir l'onglet Favorites/Collections
+    /// de la page Sauvegardés, qui ne charge pas toujours `collection_list`
+    /// de son propre geste. Renvoie le nom cliqué, ou `nil` si rien ne
+    /// correspond — le diagnostic dans le journal dit lequel des deux.
+    func clickNamed(_ names: [String]) async -> String? {
+        guard let webView else { return nil }
+        let payload = (try? JSONSerialization.data(withJSONObject: names)) ?? Data()
+        let literal = String(decoding: payload, as: UTF8.self)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            webView.evaluateJavaScript("window.__tiktokClickNamed && window.__tiktokClickNamed('\(literal)')") { result, _ in
+                let clicked = result as? String
+                continuation.resume(returning: (clicked?.isEmpty == false) ? clicked : nil)
+            }
+        }
+    }
+
+    /// Corps JSON suivant d'une route signée par le JavaScript de TikTok
+    /// (`/item_list` par défaut, `/collection_list` pour les dossiers).
     func nextPage(matching route: String = "/item_list") async -> Data? {
         guard webView != nil else { return nil }
         if let index = pendingBodies.firstIndex(where: { $0.url.contains(route) }) {

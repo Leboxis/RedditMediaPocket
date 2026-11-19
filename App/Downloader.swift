@@ -998,20 +998,32 @@ extension Notification.Name {
         }
         let paginator = TikTokWebPaginator()
         defer { paginator.close() }
-        guard await paginator.start(url: TikTokAPI.savedURL()) else {
+        guard await paginator.start(url: TikTokAPI.savedURL(), desktopUserAgent: true) else {
             tikTokSavedLoading = false
             return
         }
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
         var collections: [TikTokSavedCollection] = []
-        // Jusqu'à 3 réponses `collection_list` : le sélecteur propose au plus
-        // une centaine de dossiers, et la page les charge par 35.
-        for _ in 0..<3 {
+        // Jusqu'à quelques réponses `collection_list` (pages de 35). Si la
+        // page reste muette, l'onglet Favorites/Collections est ouvert par un
+        // clic simulé avant une dernière attente — jamais de spinner sans
+        // fin : chaque attente est bornée par le paginateur.
+        var data = await paginator.nextPage(matching: "/collection_list")
+        if data == nil {
+            let clicked = await paginator.clickNamed([
+                "Favorites", "Collections", "All favorites",
+                L("Favoris", "Favorites"), L("Collections", "Collections")])
+            if let clicked {
+                LogCenter.info(L("TikTok : onglet « \(clicked) » ouvert pour chercher les collections.", "TikTok: \u{201c}\(clicked)\u{201d} tab opened to look for collections."))
+            }
+            data = await paginator.nextPage(matching: "/collection_list")
+        }
+        while data != nil {
             if Task.isCancelled { break }
-            guard let data = await paginator.nextPage(matching: "/collection_list") else { break }
-            guard let page = try? TikTokWeb.parseCollectionList(data) else { break }
+            guard let page = try? TikTokWeb.parseCollectionList(data!) else { break }
             let known = Set(collections.map({ $0.id }))
             collections += page.filter { !known.contains($0.id) }
+            data = await paginator.nextPage(matching: "/collection_list")
         }
         if !collections.isEmpty {
             LogCenter.info(L("TikTok : \(collections.count) dossier(s) de favoris détecté(s).", "TikTok: \(collections.count) favorites folder(s) detected."))
@@ -2103,7 +2115,9 @@ extension Notification.Name {
             tikTokWebFetch = nil
         }
         status = L("Ouverture de la page Sauvegardés TikTok…", "Opening the TikTok Saved page…")
-        guard await paginator.start(url: TikTokAPI.savedURL()) else {
+        // Client web desktop : la page Sauvegardés ne sert ses données qu'à
+        // `web_pc` ; un iPhone n'en reçoit qu'une page muette.
+        guard await paginator.start(url: TikTokAPI.savedURL(), desktopUserAgent: true) else {
             throw NetworkError.invalid(L("Page Sauvegardés TikTok injoignable : réseau ou garde de temps.", "TikTok Saved page unreachable: network or timeout."))
         }
         if let name = paginator.pageUsername { tikTokSavedAccount = name }
@@ -2118,10 +2132,23 @@ extension Notification.Name {
             try Task.checkCancellation()
             scannedPages += 1
             status = L("Recherche des sauvegardés TikTok… page \(scannedPages)", "Searching TikTok saved posts… page \(scannedPages)")
-            guard let data = await paginator.nextPage() else {
+            // Un `nil` au premier tour peut être une page encore muette :
+            // ouvrir l'onglet Favorites/Collections par un clic simulé
+            // avant de conclure ; aux tours suivants, `nil` est la fin du fil.
+            var maybeData = await paginator.nextPage()
+            if maybeData == nil, scannedPages == 1 {
+                if let clicked = await paginator.clickNamed([
+                    "Favorites", "All favorites", "Collections",
+                    L("Favoris", "Favorites"), L("Collections", "Collections")]) {
+                    LogCenter.info(L("TikTok : onglet « \(clicked) » ouvert, relance de la recherche.", "TikTok: “\(clicked)” tab opened, retrying the search."))
+                    maybeData = await paginator.nextPage()
+                }
+            }
+            guard let data = maybeData else {
                 if paginator.sawOnlyEmptyItemLists { throw TikTokError.verificationRequired }
                 if scannedPages == 1 {
-                    LogCenter.info(L("TikTok : la page Sauvegardés n’a chargé aucune publication ; ouvre la session TikTok dans les Réglages, vérifie que le compte a des publications enregistrées.", "TikTok: the Saved page loaded no posts; open the TikTok session in Settings, check that the account has saved posts."))
+                    status = ""
+                    throw NetworkError.invalid(L("La page Sauvegardés TikTok n’a chargé aucune publication : ouvre la session TikTok dans les Réglages, vérifie que ce compte a des publications enregistrées, puis relance. Le journal liste les routes vues par la page.", "The TikTok Saved page loaded no posts: open the TikTok session in Settings, check that this account has saved posts, then relaunch. The log lists the routes the page saw."))
                 }
                 break
             }
