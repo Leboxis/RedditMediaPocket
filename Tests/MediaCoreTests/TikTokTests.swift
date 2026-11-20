@@ -325,7 +325,7 @@ final class TikTokTests: XCTestCase {
     /// profil, la fenêtre est `webapp.video-detail` : identifiant, texte,
     /// date, auteur et média sont lus comme pour une entrée de liste.
     func testParseVideoPageReadsHydrationJSON() throws {
-        let detail = try TikTokAPI.parseVideoPage(profileHTML(videoPageJSON))
+        let detail = try TikTokWeb.parseVideoPage(profileHTML(videoPageJSON))
         XCTAssertEqual(detail.id, "7301")
         XCTAssertEqual(detail.text, "Une vidéo")
         XCTAssertEqual(detail.publishedAt, Date(timeIntervalSince1970: 1_700_000_000))
@@ -342,17 +342,17 @@ final class TikTokTests: XCTestCase {
     /// arrivent au même message — jamais une erreur de fil générique.
     func testParseVideoPageRejectsUnavailableVideo() {
         let statusCode = #"{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":10216}}}"#
-        XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(statusCode)) { error in
+        XCTAssertThrowsError(try TikTokWeb.parseVideoDetail(statusCode)) { error in
             XCTAssertEqual(error as? TikTokError, .videoUnavailable)
         }
         let emptyItemInfo = #"{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{}}}}"#
-        XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(emptyItemInfo)) { error in
+        XCTAssertThrowsError(try TikTokWeb.parseVideoDetail(emptyItemInfo)) { error in
             XCTAssertEqual(error as? TikTokError, .videoUnavailable)
         }
-        XCTAssertThrowsError(try TikTokAPI.parseVideoPage(profileHTML("{}"))) { error in
+        XCTAssertThrowsError(try TikTokWeb.parseVideoPage(profileHTML("{}"))) { error in
             XCTAssertEqual(error as? TikTokError, .invalidTimeline)
         }
-        XCTAssertThrowsError(try TikTokAPI.parseVideoPage(Data("<html></html>".utf8))) { error in
+        XCTAssertThrowsError(try TikTokWeb.parseVideoPage(Data("<html></html>".utf8))) { error in
             XCTAssertEqual(error as? TikTokError, .invalidTimeline)
         }
     }

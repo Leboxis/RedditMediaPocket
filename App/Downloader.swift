@@ -2041,7 +2041,7 @@ extension Notification.Name {
         })
         try Task.checkCancellation()
         let headers = TikTokAPI.headers(referer: ref.url)
-        let detail = try TikTokAPI.parseVideoPage(try await network.data(ref.url, headers: headers))
+        let detail = try TikTokWeb.parseVideoPage(try await network.data(ref.url, headers: headers))
         await TikTokSession.shared.recordAPIAcceptance(true)
         LogCenter.info(L("TikTok : vidéo \(detail.id) résolue.", "TikTok: video \(detail.id) resolved."))
 
