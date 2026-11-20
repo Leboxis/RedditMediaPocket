@@ -31,13 +31,13 @@ struct DownloadFilterSheet: View {
                                 Text(label(kind))
                                 Spacer()
                                 if kinds.contains(kind) {
-                                    Image(systemName: "checkmark").foregroundStyle(.orange)
+                                    Image(systemName: "checkmark").foregroundStyle(DS.accentEmphasis)
                                 }
                             }
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(DS.onSurface)
                     }
                 } header: {
                     Text(L("Types de médias", "Media types"))
@@ -61,7 +61,7 @@ struct DownloadFilterSheet: View {
                         HStack {
                             Text(L("Taille minimale", "Minimum size"))
                             Spacer()
-                            Text(minimumMB == 0 ? L("Sans", "None") : "\(minimumMB) Mo").monospacedDigit().foregroundStyle(.secondary)
+                            Text(minimumMB == 0 ? L("Sans", "None") : "\(minimumMB) Mo").monospacedDigit().foregroundStyle(DS.onSurfaceMuted)
                         }
                     }
                 } footer: {
@@ -101,7 +101,7 @@ struct DownloadFilterSheet: View {
                 }
             }
             .onAppear(perform: load)
-            .tint(.orange)
+            .tint(DS.accent)
         }
     }
 

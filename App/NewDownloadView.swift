@@ -521,7 +521,7 @@ struct TikTokSavedPicker: View {
                         Label(L("Aucun dossier détecté pour l'instant. TikTok ne les charge pas toujours sans interaction : relève la feuille pour réessayer.", "No folder detected so far. TikTok does not always load them without interaction: pull to refresh and retry."),
                               systemImage: "questionmark.folder")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                     } else {
                         ForEach(model.tikTokSavedCollections) { folder in
                             Button {
@@ -532,7 +532,7 @@ struct TikTokSavedPicker: View {
                                     Spacer()
                                     Text(verbatim: "\(folder.itemCount)")
                                         .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.secondary)
+                                        .foregroundStyle(DS.onSurfaceMuted)
                                 }
                             }
                         }
@@ -544,7 +544,7 @@ struct TikTokSavedPicker: View {
                     Label(L("Médias publics d'un compte TikTok précis, sans lien avec les sauvegardés.", "Public media of a specific TikTok account, unrelated to saved posts."),
                           systemImage: "music.note")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                     HStack {
                         TextField(L("compte TikTok", "TikTok account"), text: $accountName)
                             .textInputAutocapitalization(.never)
@@ -565,7 +565,7 @@ struct TikTokSavedPicker: View {
                     Section {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.caption)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(DS.accentEmphasis)
                     }
                 }
             }
@@ -585,8 +585,8 @@ struct TikTokSavedPicker: View {
             .overlay {
                 if model.tikTokSavedLoading {
                     ProgressView(L("Recherche des collections et des sauvegardés…", "Looking for collections and saved posts…"))
-                        .padding()
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(DS.space(4))
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.radiusM))
                 }
             }
             .task {
