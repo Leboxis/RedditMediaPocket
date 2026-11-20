@@ -4,17 +4,8 @@ import MediaCore
 @main @MainActor struct RedditMediaPocketApp: App {
     @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    /// 2 = nouvelle interface, 1 = celle d'avant la refonte. Lu ici, une seule
-    /// fois : c'est ce qui permet au basculement de repeindre l'app sans relance.
-    @AppStorage(Theme.revisionKey) private var uiRevision = Theme.defaultRevision
     init() { AppLanguage.initialize(); LegacyBackgroundCleanup.shared.runIfNeeded() }
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environment(\.locale, Locale(identifier: language))
-                .environment(\.theme, Theme.resolved(revision: uiRevision))
-        }
-    }
+    var body: some Scene { WindowGroup { ContentView().environment(\.locale, Locale(identifier: language)) } }
 }
 
 private struct Selection: Identifiable {
@@ -51,130 +42,19 @@ struct ContentView: View {
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
-    @Environment(\.theme) private var theme
-
-    /// Ce que le champ attend, selon la source. Partagé par les deux mises en
-    /// page : le composeur moderne ne doit pas appauvrir la consigne.
-    private var sourcePlaceholder: String {
-        switch model.sourceKind {
-        case "r": return L("sub, ou lien de post", "sub, or post link")
-        case "rg": return L("pseudo, #tag ou lien", "username, #tag or link")
-        case "x": return L("nom, lien vidéo/album", "name, video/album link")
-        case "tw": return L("compte X", "X account")
-        case "tt": return L("compte TikTok", "TikTok account")
-        case "ig": return L("compte Instagram", "Instagram account")
-        default: return L("pseudo", "username")
-        }
-    }
-
-    /// La mise en page classique, extraite telle quelle : aucune valeur n'a
-    /// changé, seul son emplacement change. C'est le point de bascule entre les
-    /// deux révisions.
-    private var classicMainScreen: some View {
-        VStack(spacing: 0) {
-            inputRow
-            optionsRow
-            sourceHintRow
-            userChipsRow
-            metricsRow
-            transferBarRow
-            statusRow
-            incompleteBanner
-            gallerySection
-        }
-    }
-
-    /// Le point de bascule unique : tout le reste de l'écran est partagé.
-    @ViewBuilder private var mainScreen: some View {
-        if theme.usesFloatingToolbar {
-            modernMainScreen
-        } else {
-            classicMainScreen
-        }
-    }
-
-    private var modernMainScreen: some View {
-        VStack(spacing: 0) {
-            modernComposer
-            optionsRow
-            sourceHintRow
-            userChipsRow
-            metricsRow
-            transferBarRow
-            statusRow
-            incompleteBanner
-            gallerySection
-        }
-    }
-
-    /// Composeur : source, saisie et action principale sur une seule surface.
-    /// Le champ n'a plus de fond propre — c'est la carte qui porte la forme.
-    private var modernComposer: some View {
-        HStack(spacing: 10) {
-            SourceKindButton(kind: SourceKind(rawValue: model.sourceKind) ?? .user) {
-                guard !model.running else { return }
-                sourceGridPresented = true
-            }
-            if model.sourceKind == "saved" {
-                // Les sauvegardés Reddit ne se nomment pas : le compte vient de
-                // la session. Un champ éditable laisserait croire l'inverse.
-                Spacer()
-            } else {
-            TextField(sourcePlaceholder, text: $model.username)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.go)
-                .focused($editing)
-                .disabled(model.running)
-                .onSubmit { start() }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 9)
-                .background(theme.background, in: RoundedRectangle(cornerRadius: theme.cornerField))
-            }
-            actionPill
-        }
-        .padding(10)
-        .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cornerCard))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 10)
-    }
-
-    /// Action principale, avec son libellé : une flèche seule ne dit pas ce qui
-    /// va se passer. La pastille d'état reste en coin, comme avant.
-    private var actionPill: some View {
-        Button {
-            if model.running { model.stop() } else { start() }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: model.running ? "stop.fill" : "arrow.down")
-                    .font(.system(size: 14, weight: .bold))
-                    .accessibilityHidden(true)
-                Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
-                    .font(.headline)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 44)
-            .layoutPriority(1)
-            .background(theme.accent, in: Capsule())
-            .overlay(alignment: .topTrailing) {
-                Circle()
-                    .fill(model.running ? Color.green : Color.red)
-                    .frame(width: 9, height: 9)
-                    .overlay(Circle().stroke(theme.surface, lineWidth: 2))
-                    .offset(x: 2, y: -2)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(cannotStart)
-        .accessibilityLabel(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
-    }
-
     var body: some View {
         NavigationStack {
-            mainScreen
+            VStack(spacing: 0) {
+                inputRow
+                optionsRow
+                sourceHintRow
+                userChipsRow
+                metricsRow
+                transferBarRow
+                statusRow
+                incompleteBanner
+                gallerySection
+            }
             // Transition l\u{e9}g\u{e8}re entre les options d'une source et celles d'une
             // autre ; aucune animation si R\u{e9}duire les animations est actif.
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.sourceKind)
@@ -289,7 +169,12 @@ struct ContentView: View {
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
-                TextField(sourcePlaceholder, text: $model.username)
+                TextField(model.sourceKind == "r" ? L("sub, ou lien de post", "sub, or post link") :
+                          (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
+                            (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
+                              (model.sourceKind == "tw" ? L("compte X", "X account") :
+                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") :
+                                  (model.sourceKind == "ig" ? L("compte Instagram", "Instagram account") : L("pseudo", "username")))))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -833,23 +718,6 @@ private enum SourceSelection {
         }
     }
 
-    /// Libellé court d'une tuile moderne : un mot, sans le code de saisie.
-    /// Le code (`u/`, `r/`, `RG`…) et le libellé long restent l'affaire du mode
-    /// classique et de VoiceOver.
-    static func shortLabel(_ kind: SourceKind) -> String {
-        switch kind {
-        case .user: return "Reddit"
-        case .subreddit: return "Subreddit"
-        case .redGifs: return "RedGifs"
-        case .saved: return L("Sauvegardés", "Saved")
-        case .xFetish: return "X-Fetish"
-        case .twitter: return "X"
-        case .tiktok: return "TikTok"
-        case .tiktokSaved: return L("TikTok sauvegardés", "TikTok saved")
-        case .instagram: return "Instagram"
-        }
-    }
-
     static func spoken(_ kind: SourceKind) -> String {
         switch kind {
         case .user: return L("profil Reddit", "Reddit profile")
@@ -877,28 +745,16 @@ private struct SourceKindButton: View {
     let kind: SourceKind
     let open: () -> Void
 
-    @Environment(\.theme) private var theme
-
     var body: some View {
         Button {
             SourceSelection.haptic()
             open()
         } label: {
-            Group {
-                if theme.usesFloatingToolbar, let mark = SourceSelection.mark(kind) {
-                    // Le code `u/` n'a plus de sens à côté d'un logo, et un fond
-                    // de surface identique à celui de la carte rendrait la zone
-                    // tactile invisible : le bouton prend le fond de l'écran.
-                    SourceMarkView(mark: mark, tint: theme.primaryText, size: 22)
-                } else {
-                    Text(SourceSelection.face(kind))
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(theme.usesFloatingToolbar ? theme.primaryText : .orange)
-                }
-            }
-            .frame(width: 52, height: 48)
-            .background(theme.usesFloatingToolbar ? theme.background : Color(uiColor: .secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: theme.usesFloatingToolbar ? theme.cornerField : 14))
+            Text(SourceSelection.face(kind))
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 52, height: 48)
+                .foregroundStyle(.orange)
+                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(L("Source : \(SourceSelection.spoken(kind)). Touchez pour choisir parmi toutes les sources.", "Source: \(SourceSelection.spoken(kind)). Tap to choose among all sources."))
@@ -963,8 +819,6 @@ private struct SourceGridCard: View {
     let sessionMissing: Bool
     let pick: () -> Void
 
-    @Environment(\.theme) private var theme
-
     var body: some View {
         Button(action: pick) {
             VStack(spacing: 6) {
@@ -976,36 +830,21 @@ private struct SourceGridCard: View {
                             .accessibilityLabel(L("Connexion requise", "Sign-in required"))
                     }
                 }
-                if theme.usesFloatingToolbar {
-                    // Un seul mot sous le logo : le code de saisie est redondant
-                    // à côté d'une marque reconnaissable. Le libellé long reste
-                    // porté par la carte pour VoiceOver.
-                    Text(SourceSelection.shortLabel(kind))
-                        .font(.caption)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(height: 30)
-                } else {
-                    Text(SourceSelection.face(kind))
-                        .font(.system(size: 15, weight: .semibold))
-                    Text(SourceSelection.spoken(kind))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .frame(height: 30)
-                }
+                Text(SourceSelection.face(kind))
+                    .font(.system(size: 15, weight: .semibold))
+                Text(SourceSelection.spoken(kind))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .frame(height: 30)
             }
-            .scaleEffect(theme.usesFloatingToolbar && isCurrent ? 1.03 : 1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            // En moderne, le glyphe et le libellé gardent leur teinte à la
-            // sélection : seuls le fond et le contour la signalent. Sans cette
-            // ligne, les trois sources sans marque passaient encore à l'orange.
-            .foregroundStyle(theme.usesFloatingToolbar ? theme.primaryText : (isCurrent ? .orange : .primary))
-            .background(isCurrent ? Color.orange.opacity(0.12) : theme.surface,
-                        in: RoundedRectangle(cornerRadius: theme.cornerCard))
-            .overlay(RoundedRectangle(cornerRadius: theme.cornerCard).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
+            .foregroundStyle(isCurrent ? .orange : .primary)
+            .background(isCurrent ? Color.orange.opacity(0.12) : Color(uiColor: .secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(SourceSelection.spoken(kind))
@@ -1017,11 +856,7 @@ private struct SourceGridCard: View {
     /// rangée restent alignées, quel que soit le glyphe.
     @ViewBuilder private var glyph: some View {
         if let mark = SourceSelection.mark(kind) {
-            // Mode moderne : teinte constante, la sélection se lit au fond et au
-            // contour. Mode classique : logo teinté quand la tuile est active.
-            SourceMarkView(mark: mark,
-                           tint: theme.usesFloatingToolbar ? theme.primaryText : (isCurrent ? .orange : .primary),
-                           size: 22)
+            SourceMarkView(mark: mark, tint: isCurrent ? .orange : .primary, size: 22)
                 .frame(height: 24)
         } else {
             Image(systemName: SourceSelection.icon(kind))
@@ -1045,22 +880,9 @@ private struct DownloadSettings: View {
     @State private var confirmDeleteAll = false
     @State private var diagnosticsPresented = false
     @Environment(\.dismiss) private var dismiss
-    /// Même clé que la racine : la modifier ici repeint l'app immédiatement,
-    /// puisque le thème est réinjecté depuis `RedditMediaPocketApp`.
-    @AppStorage(Theme.revisionKey) private var uiRevision = Theme.defaultRevision
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Toggle(L("Nouvelle interface", "New interface"), isOn: Binding(
-                        get: { uiRevision >= Theme.defaultRevision },
-                        set: { uiRevision = $0 ? Theme.defaultRevision : 1 }
-                    ))
-                } header: {
-                    Text(L("Apparence", "Appearance"))
-                } footer: {
-                    Text(L("Reviens à l'ancien affichage à tout moment ; le changement s'applique sans relancer l'app.", "Switch back to the previous look at any time; the change applies without relaunching."))
-                }
                 Section {
                     Picker(L("Langue", "Language"), selection: $language) {
                         Text("Français").tag("fr")
