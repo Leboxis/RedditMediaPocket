@@ -185,3 +185,15 @@ struct DownloadHub: View {
 4. Vérification : `swift test` + build CI sur chaque push.
 
 **Prochaine étape : choisir A, B ou C.** Ensuite, plus aucune déviation de la direction choisie.
+
+## 5. Livré — direction A « Console d'archive » (2026-11-20)
+
+Choix retenu : **A**. Implémentation en commits sur `main`, CI verte à chaque push (build IPA + release publiées) :
+
+- `759e1da` — ce document (diagnostic + directions).
+- `b832761` + `05ca3c6` — design system `DS` (10 couleurs Asset Catalog Any+Dark, espacement 4 pt, rayons S/M/L, élévation, ressorts) + shell `TabView` 4 onglets (Nouveau / Bibliothèque / Activité / Réglages) + écran-matrice **Nouveau** (commande plein largeur + console de transfert : métriques monospaced, progression, statut, bannière archive incomplète).
+- `4985f63` — onglet **Bibliothèque** réinventé : galerie plein cadre (gouttière `DS.gridGap`, zéro carte), skeleton au chargement, états vide/recherche en `ContentUnavailableView` avec action « Choisir une source », barre de sélection en carte `surfaceElevated`.
+- `eaf13d3` — feuilles du flux Nouveau en tokens (filtres de téléchargement, picker sauvegardés TikTok).
+- `bc18d54` — token-ification `DS` de toutes les vues restantes (sauvegardés, suivis, logs, journal des échecs, diagnostics, kDrive, lecteurs média plein écran).
+
+Checklist par écran livré : contrastes ≥ 4,5:1 light **et** dark (paires `onSurface`/`onSurfaceMuted`/`onAccent` calculées) · cibles ≥ 44 pt (`contentShape` sur lignes et icônes de menu) · une action primaire par écran (bouton Télécharger plein largeur) · labels visibles, erreurs sous le champ, destructif rouge + confirmation · tokens uniquement (les seules couleurs littérales restantes sont les teintes de marque des lignes de connexion X/TikTok/Instagram) · SF Symbols partout · springs `DS.spring`/`DS.micro`, `scaleEffect(0.97)` au toucher, `accessibilityReduceMotion` respecté · états loading (skeleton) / vide (action) / erreur (alert + retry) présents · TabView 4 onglets icône+libellé, sheets fermables · **toutes les features du §1.1 atteignables** (commande 9 sources, liens collés, options par source, collections +N, métriques/progression/statut/bannière, galerie recherche/tri/filtre/sélection multiple/aperçu/infos/export, sauvegardés Reddit, comptes suivis, filtres, logs, échecs, diagnostic, kDrive, connexions 4 services, quota disque, tout supprimer) · previews light + dark + accessibility XXL sur les écrans-matrices.
