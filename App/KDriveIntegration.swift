@@ -227,6 +227,8 @@ final class KDriveService: ObservableObject {
     @Published var lastError: String?
     @Published private(set) var uploadedFileURLs: [URL] = []
     @Published private(set) var wasCancelled = false
+    @Published private(set) var lastSuccessCount = 0
+    @Published private(set) var lastFailedCount = 0
 
     private var activeTask: Task<Void, Never>?
 
@@ -663,6 +665,8 @@ guard (200..<300).contains(httpResponse.statusCode) else {
             isUploading = false
             activeTask = nil
             lastError = summaryMessage
+            lastSuccessCount = success
+            lastFailedCount = failed
             if Task.isCancelled {
                 completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
@@ -1179,7 +1183,7 @@ struct KDriveUploadSheet: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .errorAlert(finalError)
-        .presentationDetents([.medium])
+        .presentationDetents([.large])
         .interactiveDismissDisabled(service.isUploading)
         .confirmationDialog(
             L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone ?", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device?"),
@@ -1196,6 +1200,11 @@ struct KDriveUploadSheet: View {
             while !finished {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 KDriveRateLimitCenter.shared.refreshPacingInfo()
+                if started, !service.isUploading {
+                    successCount = service.lastSuccessCount
+                    failedCount = service.lastFailedCount
+                    finished = true
+                }
             }
         }
     }
@@ -1234,7 +1243,7 @@ struct KDriveUploadSheet: View {
             return
         }
 
-        service.uploadBatch(files: files, token: token, driveId: driveId, directoryId: directoryId) { success, failed, error in
+        service.uploadBatch(files: files, token: token, driveId: driveId, directoryId: directoryId) { @MainActor success, failed, error in
             successCount = success
             failedCount = failed
             finalError = service.wasCancelled ? nil : error

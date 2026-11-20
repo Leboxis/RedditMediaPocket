@@ -630,6 +630,11 @@ extension Notification.Name {
             // `ttv/videos` d'avant le dossier global affichaient deux pastilles).
             var seenIDs = Set<String>()
             collections = collections.filter { seenIDs.insert($0.id).inserted }
+            // Pastille sans média disque (dossier absent ou vide, ex. « Tiktok -
+            // Videos » laissée par un dossier fantôme) : retirée au chargement.
+            let beforePrune = collections.count
+            collections.removeAll { !Self.folderHasMedia($0.folderName) }
+            if collections.count != beforePrune { saveCollections() }
             if saved.contains(where: \.archived) { saveCollections() }
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {

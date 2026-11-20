@@ -4,7 +4,7 @@ import MediaCore
 /// Carte « console » des envois kDrive (direction A) : en-tête façon ligne de
 /// Réglages (tuile icône + titre + statut), puis — pendant l'envoi — grand
 /// compteur monospaced, barre de progression accent et statistiques en
-/// caption ; à la fin, icône de statut + résumé synthétique.
+/// caption sur deux colonnes ; à la fin, icône de statut + résumé synthétique.
 struct UploadConsoleCard: View {
     let icon: String
     let iconColor: Color
@@ -18,13 +18,12 @@ struct UploadConsoleCard: View {
     let summary: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DS.space(3)) {
-            // En-tête, même habillage qu'une ligne de la zone Connexions.
+        VStack(alignment: .leading, spacing: DS.space(2)) {
             HStack(spacing: DS.space(3)) {
                 Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(iconColor)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 36, height: 36)
                     .background(iconColor.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusM))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -40,9 +39,9 @@ struct UploadConsoleCard: View {
             }
 
             if let counter, let progress {
-                VStack(alignment: .leading, spacing: DS.space(2)) {
+                VStack(alignment: .leading, spacing: DS.space(1)) {
                     Text(counter)
-                        .font(.system(.title2, design: .monospaced, weight: .semibold))
+                        .font(.system(.title3, design: .monospaced, weight: .semibold))
                         .foregroundStyle(DS.onSurface)
                         .accessibilityLabel(counter)
                     ProgressView(value: progress)
@@ -62,13 +61,13 @@ struct UploadConsoleCard: View {
             }
 
             if !stats.isEmpty {
-                VStack(alignment: .leading, spacing: DS.space(1)) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: DS.space(2)) {
                     ForEach(stats.indices, id: \.self) { i in
-                        HStack {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(stats[i].label)
                                 .font(DS.caption2)
                                 .foregroundStyle(DS.onSurfaceMuted)
-                            Spacer()
+                                .lineLimit(1)
                             Text(stats[i].value)
                                 .font(DS.monoCaption)
                                 .foregroundStyle(DS.onSurface)
@@ -79,7 +78,7 @@ struct UploadConsoleCard: View {
                 }
             }
         }
-        .padding(DS.space(4))
+        .padding(DS.space(3))
         .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusL))
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
         .accessibilityElement(children: .combine)

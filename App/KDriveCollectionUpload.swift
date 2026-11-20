@@ -494,6 +494,9 @@ final class KDriveContinuousUploadController: ObservableObject {
         activeTask?.cancel()
         activeTask = nil
         isUploading = false
+        // État final immédiat : la feuille repasse en « terminé » et les médias
+        // déjà uploadés restent supprimables. `start()` remet finished à false.
+        finished = true
     }
 
     nonisolated private static func uploadOutcome(
@@ -1112,7 +1115,7 @@ private struct KDriveContinuousUploadSheet: View {
             Text(L("Ces médias existent déjà sur le Drive. Les copies locales seront supprimées définitivement (pas de corbeille).", "These media files already exist on the Drive. Local copies will be permanently removed (no trash)."))
         }
         .errorAlert(uploader.finalError)
-        .presentationDetents([.medium])
+        .presentationDetents([.large])
         .onAppear { startUploadIfNeeded() }
     }
 
@@ -1231,7 +1234,7 @@ struct KDriveUploadBanner: View {
     @State private var presented = false
 
     var body: some View {
-        if uploader.isUploading, let lot = uploader.activeLot {
+        if (uploader.isUploading || presented), let lot = uploader.activeLot {
             Button {
                 presented = true
             } label: {
