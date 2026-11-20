@@ -19,6 +19,9 @@ targets:
         CFBundleLocalizations: [en, fr]
     dependencies:
       - package: MediaCore
+    scheme:
+      testTargets:
+        - RedditMediaPocketTests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.leboxis.RedditMediaPocket
@@ -36,7 +39,7 @@ targets:
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Ajouter les médias téléchargés à ta photothèque.
         CODE_SIGNING_ALLOWED: NO
   RedditMediaPocketTests:
-    type: unitTestBundle
+    type: bundle.unit-test
     platform: iOS
     sources: [Tests/AppTests]
     dependencies:
