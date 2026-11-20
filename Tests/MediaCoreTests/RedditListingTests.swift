@@ -76,7 +76,7 @@ final class RedditListingTests: XCTestCase {
         let posts = try RedditListing.parse(Data(listing.utf8))
         // Image : href i.redd.it + img d'aperçu.
         let image = MediaExtractor.extract(posts[0].html)
-        XCTAssertEqual(image, [.direct(URL(string: "https://i.redd.it/aaa111.jpg")!])
+        XCTAssertEqual(image, [.direct(URL(string: "https://i.redd.it/aaa111.jpg")!)])
         XCTAssertNotNil(MediaExtractor.previewImage(posts[0].html))
         // Vidéo : fallback v.redd.it prioritaire.
         let video = MediaExtractor.extract(posts[1].html)
