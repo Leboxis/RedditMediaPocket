@@ -30,9 +30,9 @@ final class TikTokTests: XCTestCase {
         XCTAssertEqual(try FeedSource.parse("@nasa"), .twitterUser("nasa"))
         // Une vidéo isolée devient une source dédiée : le pseudo n'est pas
         // exigé, l'adresse seule suffit.
-        XCTAssertEqual(try FeedSource.parse("https://www.tiktok.com/@nasa/video/7301"),
-                       .tiktokVideo(TikTokAPI.TikTokVideoRef(postID: "7301", author: "nasa",
-                                                            url: URL(string: "https://www.tiktok.com/@nasa/video/7301")!)))
+        XCTAssertEqual(try FeedSource.parse("https://www.tiktok.com/@nasa/video/7350012345678901234"),
+                       .tiktokVideo(TikTokAPI.TikTokVideoRef(postID: "7350012345678901234", author: "nasa",
+                                                            url: URL(string: "https://www.tiktok.com/@nasa/video/7350012345678901234")!)))
         // `x/` reste X-Fetish.
         XCTAssertEqual(try FeedSource.parse("x/someone"), .xFetish(XFetishAlbums.Target(model: "someone", videos: [], albums: [])))
     }
@@ -259,15 +259,15 @@ final class TikTokTests: XCTestCase {
     /// uniquement `@pseudo/video/<id>`. Le diaporama `/photo/<id>` porte
     /// la même forme que la vidéo.
     func testVideoRefParsesLongForm() {
-        var ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/video/7301?lang=fr&is_from_webapp=1")!
-        XCTAssertEqual(ref.postID, "7301")
+        var ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/video/7350012345678901234?lang=fr&is_from_webapp=1")!
+        XCTAssertEqual(ref.postID, "7350012345678901234")
         XCTAssertEqual(ref.author, "nasa")
         XCTAssertEqual(ref.url.absoluteString,
-                       "https://www.tiktok.com/@nasa/video/7301")
-        ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/photo/7302")!
-        XCTAssertEqual(ref.postID, "7302")
+                       "https://www.tiktok.com/@nasa/video/7350012345678901234")
+        ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/photo/7350012345678901235")!
+        XCTAssertEqual(ref.postID, "7350012345678901235")
         XCTAssertEqual(ref.url.absoluteString,
-                       "https://www.tiktok.com/@nasa/photo/7302")
+                       "https://www.tiktok.com/@nasa/photo/7350012345678901235")
     }
 
     /// Un lien court de partage n'expose pas l'identifiant : c'est la
@@ -285,9 +285,9 @@ final class TikTokTests: XCTestCase {
     /// un profil, un identifiant non numérique, des identifiants
     /// incrustés ou un hôte tiers ne sont jamais acceptés.
     func testVideoRefRejectsOtherAddresses() {
-        XCTAssertEqual(TikTokAPI.videoRef("www.tiktok.com/@nasa/video/7301")!.url.absoluteString,
-                       "https://www.tiktok.com/@nasa/video/7301")
-        XCTAssertNotNil(TikTokAPI.videoRef("tt/https://www.tiktok.com/@nasa/video/7301"))
+        XCTAssertEqual(TikTokAPI.videoRef("www.tiktok.com/@nasa/video/7350012345678901234")!.url.absoluteString,
+                       "https://www.tiktok.com/@nasa/video/7350012345678901234")
+        XCTAssertNotNil(TikTokAPI.videoRef("tt/https://www.tiktok.com/@nasa/video/7350012345678901234"))
         XCTAssertNil(TikTokAPI.videoRef("https://www.tiktok.com/@nasa"))
         XCTAssertNil(TikTokAPI.videoRef("https://www.tiktok.com/@nasa/video/abc"))
         XCTAssertNil(TikTokAPI.videoRef("https://evil.example/@nasa/video/7301"))
@@ -299,13 +299,13 @@ final class TikTokTests: XCTestCase {
     /// du compte au même pseudo ; `ttv.` ne recouvre jamais un dossier
     /// `tk.` (compte) ni `tw.` (X).
     func testVideoSourceIdentity() throws {
-        let source = try FeedSource.parse("https://www.tiktok.com/@nasa/video/7301")
-        XCTAssertEqual(source.id, "ttv/7301")
-        XCTAssertEqual(source.folderName, "ttv.7301")
-        XCTAssertEqual(source.displayName, "ttv/7301")
+        let source = try FeedSource.parse("https://www.tiktok.com/@nasa/video/7350012345678901234")
+        XCTAssertEqual(source.id, "ttv/7350012345678901234")
+        XCTAssertEqual(source.folderName, "ttv.7350012345678901234")
+        XCTAssertEqual(source.displayName, "ttv/7350012345678901234")
         XCTAssertEqual(source.feedURL().absoluteString,
-                       "https://www.tiktok.com/@nasa/video/7301")
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("ttv/7301"), "7301 - TikTok")
+                       "https://www.tiktok.com/@nasa/video/7350012345678901234")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("ttv/7350012345678901234"), "7350012345678901234 - TikTok")
         XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
                           FilenamePolicy.kDriveFolderName("tk/nasa"))
         XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
