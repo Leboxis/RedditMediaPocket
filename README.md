@@ -92,6 +92,73 @@ Fin octobre 2026, Instagram a renommé cette requête (anciennement `PolarisProf
 
 Instagram peut opposer son mur de connexion à tout moment (compte privé, fermeture du profil, vérification exigée) : le parcours s'arrête alors proprement, les médias déjà téléchargés restent en place, et le message explique la cause. Un compte introuvable produit un message explicite plutôt qu'un « aucun média » silencieux. Deux pages sans nouveauté suffisent à considérer le compte rattrapé.
 
+## Flux `.rss` Reddit : repli sur `old.reddit.com`
+
+Depuis novembre 2026, `www.reddit.com` ne sert plus ces flux : `/r/<sub>/.rss`, `/r/<sub>/new.rss` et `/user/<nom>/submitted.rss` répondent un document Atom **« Not Found »** émis par `rss.reddit.com` (HTTP 404), alors que la page d'accueil du site répond toujours 200 et que le `429` de quota, lui, reste possible. Un `404` sur une adresse `.rss` déclenche donc un **unique** nouvel essai sur `old.reddit.com` — même chemin, mêmes paramètres, jeton privé des sauvegardés compris. Le journal indique les deux tentatives et laquelle a servi :
+
+```text
+Flux Reddit refusé (HTTP 404) sur /r/pics/new.rss — nouvel essai sur old.reddit.com/r/pics/new.rss.
+Repli old.reddit.com : flux servi (N octets).
+```
+
+Le repli ne s'applique ni à un hôte tiers, ni à une adresse qui n'est pas un flux `.rss`, et il ne boucle jamais : une adresse déjà sur `old.reddit.com` n'en a pas. Si le repli est refusé à son tour, le parcours s'arrête avec l'erreur d'origine.
+
+## Médias TikTok (`tt`) et sauvegardés du compte (`ts`)
+
+### Marche à suivre
+
+1. **Réglages → Se connecter à TikTok.** La fenêtre intégrée ouvre `https://www.tiktok.com/` ; utiliser ses identifiants TikTok. Les boutons « Continuer avec Google / Facebook / Apple » sont acceptés. La session est conservée dans un stockage WebKit propre à TikTok, distinct de ceux de Reddit et de X : une déconnexion TikTok n'efface ni l'une ni l'autre, et inversement. Comme elle est persistante, la connexion est retrouvée après un redémarrage, jusqu'à expiration des cookies ou déconnexion explicite.
+2. **Bouton de source → `tt`** pour les médias publics d'un compte, **`ts`** pour ton propre compte.
+3. **`tt`** : saisir le pseudo (`nasa`), avec `@`, avec le préfixe `tt/`, ou coller `tiktok.com/@nasa`. **`ts`** : un sélecteur propose trois cibles — **toutes les publications enregistrées**, **un dossier de favoris** de ton choix, ou **un compte précis**.
+4. **Lancer.** Le parcours crée la collection `tt/pseudo` (dossier `tk.pseudo`) ou `ts/pseudo` (dossier `ts.pseudo`).
+5. **Vérifier dans le journal** (bouton `doc.text.magnifyingglass`) les lignes `TikTok :` : elles disent quelle voie a servi, combien de publications ont été lues, et pourquoi un média a été écarté.
+
+Les deux modes exigent une session TikTok : un profil public comme les sauvegardés sont lus avec les cookies de la session, et un parcours lancé sans connexion s'arrête sur un message explicite plutôt que de rendre zéro média. La connexion se fait une fois, dans les Réglages.
+
+### Ce que fait le parcours
+
+- **Résolution du compte.** Pour `tt`, le `secUid` est lu dans le JSON d'hydratation de la page profil. Pour `ts`, le compte connecté est demandé au site lui-même : c'est la seule source fiable, le premier lien `/@` d'une page de fil désignant un créateur voisin et non le propriétaire.
+- **Pagination.** La route `api/post/item_list` exige une signature que seul le JavaScript de TikTok produit. Le parcours tente d'abord un appel « desktop » ; au premier refus, une WebView cachée branchée sur la session charge la page et laisse le site signer lui-même ses requêtes, dont les réponses sont capturées.
+- **Qualité.** Chaque vidéo est prise dans la variante de plus haute définition listée dans `bitrateInfo` (la définition prime sur le débit : un 1080p à débit plus bas reste plus fin qu'un 720p). Les diaporamas sont pris image par image.
+- **Miroirs et replis.** Chaque entrée de `urlList` est un miroir CDN du même média (`v16-`, `v19-`…) : un nœud qui refuse n'empêche pas le transfert. Si tous refusent, le média est redemandé depuis la page, puis par une navigation WebKit conduite par le navigateur lui-même.
+
+### Points d'entrée utilisés
+
+Tous les appels passent par une page `tiktok.com` chargée dans la session : les cookies, le `msToken` et la signature sont ceux du vrai client.
+
+| Point d'entrée | Rôle |
+|---|---|
+| `GET https://www.tiktok.com/@<pseudo>` | page d'un profil ; son JSON `__UNIVERSAL_DATA_FOR_REHYDRATION__` donne le `secUid` et la première page de publications |
+| `GET https://www.tiktok.com/passport/web/account/info/?aid=1988` | **identité du compte connecté** : `username` et `sec_uid`. Répond `user_id: "0"` hors session |
+| `GET https://www.tiktok.com/api/user/collection_list/` | dossiers de favoris du compte (`collectionId`, nom, total), paginés par `cursor` |
+| `GET https://www.tiktok.com/api/collection/item_list/?aid=1988&collectionId=…&count=30&cursor=…&sourceType=113` | publications d'un dossier. **Cinq paramètres seulement** (voir plus bas) |
+| `GET https://www.tiktok.com/api/user/collect/item_list/` | toutes les publications enregistrées du compte |
+| `GET https://www.tiktok.com/api/post/item_list/` | publications d'un profil (essai « desktop » avant la WebView) |
+
+### Deux pièges à ne pas réintroduire
+
+- **`api/collection/item_list` refuse le contexte complet.** `collection_list` accepte les ~25 paramètres de contexte web (région, fuseau, `device_id`, `browser_version`…) ; `api/collection/item_list` les accepte aussi mais répond `{"itemList":[]}` — un dossier rempli renvoyait 235 octets et zéro publication. La forme de référence, celle de yt-dlp, n'en porte que cinq : `aid`, `collectionId`, `count`, `cursor`, `sourceType`. L'application envoie la forme complète d'abord, puis retente avec la forme minimale si la page revient vide, et journalise le corps reçu pour trancher.
+- **L'identifiant d'un dossier se lit dans ses deux formes.** Un nœud `collection_list` peut porter `collectionId` en nombre et un `id` en texte : lire les chaînes avant les nombres laisse gagner un faux identifiant. Chaque clé est donc lue en chaîne *et* en nombre avant de passer à la suivante.
+
+### Routes mortes
+
+Ces adresses ne doivent pas être réintroduites : elles répondent une redirection ou une page d'erreur, jamais un média ni un fil.
+
+| Route | Réponse constatée |
+|---|---|
+| `tiktok.com/saved`, `/favorites`, `/bookmarks`, `/collections` | `302` vers `/404?fromUrl=…` |
+| `www.tiktok.com/aweme/v1/play/` | `302` vers `/404`, donc du HTML |
+
+Les URL de média servies par `www.tiktok.com` lui-même sont écartées à la lecture, comme le fait yt-dlp. Les conserver ne produisait qu'un essai mort par média, et l'erreur `invalid` qui en résultait court-circuitait le repli WebView.
+
+### Signature des appels
+
+Le SDK que le site charge publie son point d'entrée sous `self.byted_acrawler` (snake_case) ; la graphie historique `bytedAcrawler` n'existe plus. `frontierSign(url)` est le seul point d'entrée exporté — `sign` n'existe pas — et rend les paramètres attendus par les routes paginées (`X-Bogus`, `X-Gnarly`, `X-Mssdk-Info`), reportés tels quels sur l'URL. Le nom du signataire est cherché sous plusieurs graphies pour survivre à un changement de génération ; s'il reste introuvable, le journal le dit explicitement au lieu de laisser croire à une session expirée.
+
+### Limites
+
+Un compte privé, un profil sans média ou une vérification (captcha) exigée par TikTok arrêtent proprement le parcours avec un message explicite. Les URL de médias expirent après quelques heures : une session fraîche les régénère. Aucun contournement de captcha n'est implémenté.
+
 ## Journal des échecs et nouvel essai
 
 Un média inaccessible pendant un parcours était compté « ignoré » puis oublié : marqué vu, il n'était jamais réévalué. Le bouton **triangle d'avertissement** (barre d'outils) ouvre désormais le journal des échecs : chaque média en échec y reste inscrit, avec sa collection, le nom de fichier prévu et la cause, jusqu'à réparation ou effacement. Le badge du bouton montre le nombre d'échecs en attente.
@@ -225,6 +292,9 @@ Références consultées :
 - Apple : https://developer.apple.com/documentation/avfoundation/avassetexportpresetpassthrough
 - Sélection des formats RedGIFs dans yt-dlp : https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/redgifs.py
 - Modèle d’images et miniatures Imgur : https://api.imgur.com/models/image
+- TikTok, formats et filtrage des URL mortes dans yt-dlp : https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py
+- TikTok, `collection_list`, signature et défi JavaScript dans gallery-dl : https://github.com/mikf/gallery-dl/blob/master/gallery_dl/extractor/tiktok.py
+- Formats TikTok cassés servis par `www.tiktok.com` : https://github.com/yt-dlp/yt-dlp/issues/11034
 
 ## Réglage de la concurrence
 
