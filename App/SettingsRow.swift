@@ -21,9 +21,9 @@ struct SettingsRow: View {
     /// Action au toucher sur la ligne ; `nil` quand la ligne est embarquée
     /// dans un `NavigationLink` (le lien gère le toucher).
     var tap: (() -> Void)?
+    var enabled = true
     var menuItems: [MenuItem] = []
     var showsChevron = false
-    var enabled = true
 
     var body: some View {
         HStack(spacing: DS.space(3)) {
