@@ -817,6 +817,23 @@ private enum SourceSelection {
         }
     }
 
+    /// Libellé court d'une tuile moderne : un mot, sans le code de saisie.
+    /// Le code (`u/`, `r/`, `RG`…) et le libellé long restent l'affaire du mode
+    /// classique et de VoiceOver.
+    static func shortLabel(_ kind: SourceKind) -> String {
+        switch kind {
+        case .user: return "Reddit"
+        case .subreddit: return "Subreddit"
+        case .redGifs: return "RedGifs"
+        case .saved: return L("Sauvegardés", "Saved")
+        case .xFetish: return "X-Fetish"
+        case .twitter: return "X"
+        case .tiktok: return "TikTok"
+        case .tiktokSaved: return L("TikTok sauvegardés", "TikTok saved")
+        case .instagram: return "Instagram"
+        }
+    }
+
     static func spoken(_ kind: SourceKind) -> String {
         switch kind {
         case .user: return L("profil Reddit", "Reddit profile")
@@ -918,6 +935,8 @@ private struct SourceGridCard: View {
     let sessionMissing: Bool
     let pick: () -> Void
 
+    @Environment(\.theme) private var theme
+
     var body: some View {
         Button(action: pick) {
             VStack(spacing: 6) {
@@ -929,21 +948,33 @@ private struct SourceGridCard: View {
                             .accessibilityLabel(L("Connexion requise", "Sign-in required"))
                     }
                 }
-                Text(SourceSelection.face(kind))
-                    .font(.system(size: 15, weight: .semibold))
-                Text(SourceSelection.spoken(kind))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(height: 30)
+                if theme.usesFloatingToolbar {
+                    // Un seul mot sous le logo : le code de saisie est redondant
+                    // à côté d'une marque reconnaissable. Le libellé long reste
+                    // porté par la carte pour VoiceOver.
+                    Text(SourceSelection.shortLabel(kind))
+                        .font(.caption)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(height: 30)
+                } else {
+                    Text(SourceSelection.face(kind))
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(SourceSelection.spoken(kind))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .frame(height: 30)
+                }
             }
+            .scaleEffect(theme.usesFloatingToolbar && isCurrent ? 1.03 : 1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .foregroundStyle(isCurrent ? .orange : .primary)
-            .background(isCurrent ? Color.orange.opacity(0.12) : Color(uiColor: .secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
+            .background(isCurrent ? Color.orange.opacity(0.12) : theme.surface,
+                        in: RoundedRectangle(cornerRadius: theme.cornerCard))
+            .overlay(RoundedRectangle(cornerRadius: theme.cornerCard).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(SourceSelection.spoken(kind))
@@ -955,7 +986,11 @@ private struct SourceGridCard: View {
     /// rangée restent alignées, quel que soit le glyphe.
     @ViewBuilder private var glyph: some View {
         if let mark = SourceSelection.mark(kind) {
-            SourceMarkView(mark: mark, tint: isCurrent ? .orange : .primary, size: 22)
+            // Mode moderne : teinte constante, la sélection se lit au fond et au
+            // contour. Mode classique : logo teinté quand la tuile est active.
+            SourceMarkView(mark: mark,
+                           tint: theme.usesFloatingToolbar ? theme.primaryText : (isCurrent ? .orange : .primary),
+                           size: 22)
                 .frame(height: 24)
         } else {
             Image(systemName: SourceSelection.icon(kind))
