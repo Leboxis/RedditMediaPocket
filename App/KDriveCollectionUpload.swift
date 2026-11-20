@@ -1087,18 +1087,22 @@ private struct KDriveContinuousUploadSheet: View {
                 } else {
                     ProgressView(value: uploader.progress)
                         .progressViewStyle(.linear)
-                        .padding(.horizontal)
+                        .tint(DS.accent)
+                        .padding(.horizontal, DS.space(4))
 
                     Image(systemName: "icloud.and.arrow.up.fill")
-                        .font(.system(size: 44))
+                        .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(DS.accentEmphasis)
+                        .frame(width: 44, height: 44)
+                        .background(DS.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusM))
 
                     Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
-                        .font(.headline)
+                        .font(DS.headline)
+                        .foregroundStyle(DS.onSurface)
 
                     Text(L("\(uploader.completedCount) sur \(max(1, uploader.totalCount)) terminé(s)", "\(uploader.completedCount) of \(max(1, uploader.totalCount)) completed"))
-                        .font(.subheadline)
-                        .foregroundStyle(DS.onSurfaceMuted)
+                        .font(.system(.title2, design: .monospaced, weight: .semibold))
+                        .foregroundStyle(DS.onSurface)
 
                     if uploader.activeUploadCount > 0 {
                         Text(L("\(uploader.activeUploadCount) envoi(s) en cours sur \(uploader.activeLimit)", "\(uploader.activeUploadCount) upload(s) in progress of \(uploader.activeLimit)"))
@@ -1285,17 +1289,25 @@ struct KDriveUploadBanner: View {
             Button {
                 presented = true
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: DS.space(2)) {
                     Image(systemName: "icloud.and.arrow.up.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(DS.accentEmphasis)
+                        .frame(width: 28, height: 28)
+                        .background(DS.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
                     Text(L("Envoi kDrive… \(uploader.completedCount)/\(max(1, uploader.totalCount))", "kDrive upload… \(uploader.completedCount)/\(max(1, uploader.totalCount))"))
-                        .font(.caption.monospacedDigit())
+                        .font(DS.monoCaption)
+                        .foregroundStyle(DS.onSurface)
                 }
                 .padding(.horizontal, DS.space(3))
                 .padding(.vertical, DS.space(2))
-                .background(.regularMaterial, in: Capsule())
+                .frame(minHeight: 44)
+                .background(DS.surfaceElevated, in: Capsule())
                 .overlay(Capsule().strokeBorder(DS.accent.opacity(0.4)))
+                .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(DSPressableButtonStyle())
+            .accessibilityLabel(L("Envoi kDrive en cours : \(uploader.completedCount) sur \(max(1, uploader.totalCount)). Touchez pour voir la progression.", "kDrive upload in progress: \(uploader.completedCount) of \(max(1, uploader.totalCount)). Tap to see progress."))
             .sheet(isPresented: $presented) {
                 KDriveContinuousUploadSheet(lot: lot, token: kDriveToken, driveId: kDriveId)
             }
