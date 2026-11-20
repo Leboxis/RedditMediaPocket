@@ -30,11 +30,11 @@ public enum FeedError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unsupportedVideo: return L("Manifest vidéo segmenté non pris en charge ; aucune qualité inférieure téléchargée.", "Segmented video manifest unsupported; no lower-quality version downloaded.")
-        case .invalidFeed: return L("Réponse RSS invalide : Reddit peut refuser cet accès anonyme.", "Invalid RSS response: Reddit may deny anonymous access.")
+        case .invalidFeed: return L("Réponse de listing invalide : Reddit peut refuser cet accès (session requise depuis le 13/11/2026).", "Invalid listing response: Reddit may deny this access (session required since 11/13/2026).")
         case .invalidUsername: return L("Pseudo invalide (3 à 20 lettres, chiffres, tirets ou underscores, ex. u/pseudo).", "Invalid username (3 to 20 letters, digits, hyphens or underscores, e.g. u/username).")
         case .invalidSubreddit: return L("Subreddit invalide (2 à 21 lettres, chiffres ou underscores, ex. r/pics).", "Invalid subreddit (2 to 21 letters, digits or underscores, e.g. r/pics).")
         case .invalidXFetishProfile: return L("Profil X-Fetish invalide. Saisis le nom indiqué après /models/ dans son adresse.", "Invalid X-Fetish profile. Enter the name shown after /models/ in its address.")
-        case .loginRequired: return L("Connecte-toi à Reddit dans les Réglages, puis relance : les éléments sauvegardés exigent une session.", "Sign in to Reddit in Settings, then try again: saved posts require a session.")
+        case .loginRequired: return L("Connecte-toi à Reddit dans les Réglages, puis relance : depuis le 13 novembre 2026, Reddit ne sert plus aucun flux sans session.", "Sign in to Reddit in Settings, then try again: since November 13, 2026, Reddit serves no feed without a session.")
         }
     }
 }
@@ -256,7 +256,7 @@ public enum FeedSource: Hashable, Sendable {
         }
     }
 
-    /// URL de départ publique (RSS pour Reddit, liste d'albums pour X-Fetish).
+    /// URL de départ du parcours (listing JSON pour Reddit, liste d'albums pour X-Fetish). Reddit : les `.rss` sont coupés depuis le 13/11/2026 (404 partout), les listings `.json` exigent une session (HTTP 403 sinon).
     /// `after` est le curseur `t3_…` du dernier post vu.
     /// `sort` ne s'applique qu'aux subreddits (`new`, `hot`, `top` + `t=month`).
     /// Les comptes RedGifs utilisent l'API `users/<pseudo>/search`
@@ -276,11 +276,11 @@ public enum FeedSource: Hashable, Sendable {
             }
             return XFetishAlbums.listingURL(model: target.collectionName, page: 1)
         case .user(let name):
-            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.rss")!
+            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/submitted.json")!
             components.queryItems = items
             return components.url!
         case .saved(let name):
-            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/saved.rss")!
+            var components = URLComponents(string: "https://www.reddit.com/user/\(name)/saved.json")!
             components.queryItems = items
             return components.url!
         case .subreddit(let name):
@@ -291,7 +291,7 @@ public enum FeedSource: Hashable, Sendable {
             case "top": path = "top"
             default: path = "new"
             }
-            var components = URLComponents(string: "https://www.reddit.com/r/\(name)/\(path).rss")!
+            var components = URLComponents(string: "https://www.reddit.com/r/\(name)/\(path).json")!
             if acknowledged == "top" {
                 components.queryItems = [URLQueryItem(name: "t", value: "month")] + items
             } else {

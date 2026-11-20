@@ -61,7 +61,9 @@ import MediaCore
             // sinon le jeton lié à l'UA serait invalidé.
             request.setValue(XFetishAPI.userAgent, forHTTPHeaderField: "User-Agent")
         } else {
-            request.setValue("RedditMediaPocket/0.1 (iOS; RSS reader)", forHTTPHeaderField: "User-Agent")
+            // Reddit bloque les UA applicatifs sur ses pages `.json`
+            // (HTTP 403 « blocked by network security ») : UA Safari iPhone.
+            request.setValue(XFetishAPI.userAgent, forHTTPHeaderField: "User-Agent")
         }
         if XFetishAPI.isXFetish(url) {
             // Anti-hotlink `storage*.x-fetish.tube/remote_control.php` (HTTP 403
@@ -140,8 +142,9 @@ import MediaCore
         do {
             return try await fetchOnce(url, bearer: bearer, headers: headers, body: body)
         } catch NetworkError.refused(let code) where code == 404 {
-            // Reddit ne sert plus les flux `.rss` sur `www.reddit.com` : ils
-            // répondent un Atom « Not Found » (404). `old.reddit.com` est déjà
+            // Les flux `.rss` de Reddit sont coupés depuis le 13/11/2026 (404
+            // sur www.reddit.com ET old.reddit.com). Le repli historique sur
+            // `old.reddit.com` est conservé pour un éventuel `.rss` restant ;
             // l'hôte des préférences privées et sert le même chemin : une
             // seule nouvelle tentative, et le journal dit laquelle a réussi —
             // c'est ainsi que le repli sera confirmé ou remplacé.
@@ -170,9 +173,9 @@ import MediaCore
         // `old.reddit.com` sert le même contenu et mérite la même économie de
         // requêtes, sinon chaque page repartirait sur le repli.
         let feedHost = url.host?.lowercased()
-        let isRSS = (feedHost == "www.reddit.com" || feedHost == "old.reddit.com")
-            && url.path.hasSuffix(".rss") && !SavedFeed.containsCredential(url)
-        if isRSS, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 {
+        let isListing = (feedHost == "www.reddit.com" || feedHost == "old.reddit.com")
+            && (url.path.hasSuffix(".rss") || url.path.hasSuffix(".json")) && !SavedFeed.containsCredential(url)
+        if isListing, let cached = rssCache[url], Date().timeIntervalSince(cached.date) < 120 {
             LogCenter.net(L("Page déjà en mémoire (\(cached.data.count / 1024) Ko), pas de nouvel appel.", "Page already in memory (\(cached.data.count / 1024) KB), no new call."))
             return (cached.data, [:])
         }
@@ -211,7 +214,7 @@ import MediaCore
         let http = response as? HTTPURLResponse
         LogCenter.net(L("Réponse \(http?.statusCode ?? 0) de \(LogDiagnostics.requestSummary(response.url ?? url)) : \(data.count) octets, \(response.mimeType ?? "type inconnu"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s.", "Response \(http?.statusCode ?? 0) from \(LogDiagnostics.requestSummary(response.url ?? url)): \(data.count) bytes, \(response.mimeType ?? "unknown type"), \(String(format: "%.1f", Date().timeIntervalSince(started))) s."))
         try check(response, requestedURL: url)
-        if isRSS, data.count <= 2_000_000 {
+        if isListing, data.count <= 2_000_000 {
             // Reuse successful pages within a run; manual restart clears them.
             if rssCache.count >= 16, let oldest = rssCache.min(by: { $0.value.date < $1.value.date })?.key { rssCache.removeValue(forKey: oldest) }
             rssCache[url] = (Date(), data)
@@ -231,32 +234,42 @@ import MediaCore
             let html = try await data(URL(string: "https://old.reddit.com/prefs/feeds/")!)
             try Task.checkCancellation()
             let feed = try SavedFeed(preferencesHTML: String(decoding: html, as: UTF8.self), username: username)
-            LogCenter.net(L("Flux sauvegardés trouvé : \(LogDiagnostics.requestSummary(feed.pageURL())).", "Saved feed found: \(LogDiagnostics.requestSummary(feed.pageURL()))."))
+            LogCenter.net(L("Compte détecté dans prefs/feeds : \(feed.username) (les flux RSS privés sont coupés depuis le 13/11/2026).", "Account detected in prefs/feeds: \(feed.username) (private RSS feeds have been off since 11/13/2026)."))
             return feed
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            throw NetworkError.invalid(L("Reddit refuse l’accès aux flux RSS privés (HTTP \(code)).", "Reddit denied access to private RSS feeds (HTTP \(code))."))
+            throw NetworkError.invalid(L("Reddit refuse l’accès à prefs/feeds (HTTP \(code)).", "Reddit denied access to prefs/feeds (HTTP \(code))."))
         }
     }
 
+    /// Posts sauvegardés du compte connecté via le listing JSON
+    /// `www.reddit.com/user/<pseudo>/saved.json` (les flux `.rss` privés sont
+    /// coupés depuis le 13/11/2026). Nécessite la session Reddit.
     func savedPosts(_ feed: SavedFeed, after: String?) async throws -> [Post] {
+        var components = URLComponents(string: "https://www.reddit.com/user/\(feed.username)/saved.json")!
+        var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
+        if let after { items.append(URLQueryItem(name: "after", value: after)) }
+        components.queryItems = items
+        guard let url = components.url else {
+            throw NetworkError.invalid(L("Adresse des sauvegardés invalide.", "Invalid saved-posts address."))
+        }
         do {
-            let body = try await data(feed.pageURL(after: after))
+            let body = try await data(url)
             try Task.checkCancellation()
-            return try FeedParser.parse(body)
+            return try RedditListing.parse(body)
         } catch {
             try Task.checkCancellation()
             if error is CancellationError { throw error }
             if case NetworkError.limited = error { throw error }
             if case NetworkError.refused(let code) = error {
                 if (300...399).contains(code) {
-                    throw NetworkError.invalid(L("Redirection du flux privé refusée : destination incompatible (HTTP \(code)).", "Private feed redirect refused: incompatible destination (HTTP \(code))."))
+                    throw NetworkError.invalid(L("Redirection des sauvegardés refusée : destination incompatible (HTTP \(code)).", "Saved-posts redirect refused: incompatible destination (HTTP \(code))."))
                 }
-                throw NetworkError.invalid(L("Flux privé des sauvegardés refusé par Reddit (HTTP \(code)).", "Reddit denied access to the private saved feed (HTTP \(code))."))
+                throw NetworkError.invalid(L("Listing des sauvegardés refusé par Reddit (HTTP \(code)) : session requise depuis le 13/11/2026.", "Reddit refused the saved listing (HTTP \(code)): a session is required since 11/13/2026."))
             }
-            // URLSession errors can contain the private URL: never expose its token.
-            throw NetworkError.invalid(L("Impossible de lire le flux RSS privé des sauvegardés.", "Unable to read the private saved RSS feed."))
+            throw NetworkError.invalid(L("Impossible de lire les sauvegardés.", "Unable to read saved posts."))
         }
     }
+
     func download(_ url: URL, headers: [String: String]? = nil) async throws -> URL {
         // X-Fetish `get_image` / `get_file` : forçage IPv4 (le stockage est
         // IPv4-only, le token est lié à l'IP ; en IPv6 le 403 est systématique).

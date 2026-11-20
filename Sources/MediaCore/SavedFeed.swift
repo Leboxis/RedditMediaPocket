@@ -5,7 +5,7 @@ public enum SavedFeedError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .unavailable:
-            return L("Flux privé des sauvegardés introuvable. Reconnecte-toi à Reddit et active les flux RSS privés dans les préférences Reddit (prefs/feeds).", "Private saved feed not found. Sign in to Reddit again and enable private RSS feeds in Reddit preferences (prefs/feeds).")
+            return L("Compte introuvable dans prefs/feeds. Reconnecte-toi à Reddit (les sauvegardés passent par le listing JSON depuis la coupure RSS du 13/11/2026).", "Account not found in prefs/feeds. Sign in to Reddit again (saved posts use the JSON listing since the RSS shutdown on 11/13/2026).")
         case .wrongAccount:
             return L("Le pseudo des sauvegardés ne correspond pas au compte Reddit connecté. Corrige le pseudo ou change de compte dans les Réglages.", "The saved-feed username does not match the signed-in Reddit account. Correct the username or switch accounts in Settings.")
         }

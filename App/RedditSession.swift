@@ -65,7 +65,7 @@ struct RedditLogin: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(showsFeedPreferences ? L("Connexion", "Sign in") : L("Flux privés", "Private feeds")) {
                         showsFeedPreferences.toggle()
-                        message = showsFeedPreferences ? L("Active les flux RSS privés dans Reddit pour télécharger tes sauvegardés, puis ferme cette fenêtre.", "Enable private RSS feeds in Reddit to download your saved posts, then close this window.") : ""
+                        message = showsFeedPreferences ? L("Ouvre prefs/feeds pour détecter ton compte (les sauvegardés passent par le listing JSON, plus par RSS), puis ferme cette fenêtre.", "Open prefs/feeds to detect your account (saved posts go through the JSON listing, not RSS anymore), then close this window.") : ""
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {

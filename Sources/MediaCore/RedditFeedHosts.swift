@@ -1,15 +1,11 @@
 import Foundation
 
-/// Reddit ne sert plus les flux `.rss` sur `www.reddit.com` : ces adresses
-/// répondent désormais un document Atom « Not Found » émis par
-/// `rss.reddit.com` (HTTP 404), y compris pour les subreddits publics
-/// (`/r/<sub>/.rss`) et les profils (`/user/<nom>/submitted.rss`).
-///
-/// Le même chemin reste servi par `old.reddit.com`, qui est déjà l'hôte des
-/// pages de préférences privées (`prefs/feeds`) : c'est donc le repli
-/// naturel, et il porte les cookies de session comme l'hôte d'origine.
-/// Ce repli est une hypothèse tant qu'un flux n'a pas été lu avec succès :
-/// `Network` journalise les deux tentatives pour trancher au premier essai.
+/// Depuis le 13 novembre 2026, Reddit ne sert plus aucun flux `.rss` :
+/// `www.reddit.com` comme `old.reddit.com` répondent un document Atom
+/// « Not Found » (HTTP 404), y compris avec une session. Le repli historique
+/// `www.reddit.com → old.reddit.com` est conservé pour un éventuel `.rss`
+/// restant, mais les listings `.json` (chemin retenu depuis la coupure) ne
+/// sont jamais réécrits : `fallback(from:)` renvoie `nil` pour eux.
 public enum RedditFeedHosts {
     /// Hôte de repli d'une adresse de flux, ou `nil` quand il n'y a rien à
     /// retenter : autre hôte, autre forme d'adresse, ou adresse déjà sur le

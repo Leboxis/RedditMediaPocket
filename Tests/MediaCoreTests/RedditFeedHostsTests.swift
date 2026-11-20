@@ -35,6 +35,15 @@ final class RedditFeedHostsTests: XCTestCase {
             from: URL(string: "https://www.reddit.com/comments/abc123.json")!))
     }
 
+    /// Les listings `.json` (chemin retenu depuis la coupure RSS du
+    /// 13/11/2026) ne doivent jamais être rejoués sur `old.reddit.com`.
+    func testNoFallbackForJsonListings() {
+        XCTAssertNil(RedditFeedHosts.fallback(
+            from: URL(string: "https://www.reddit.com/r/pics/new.json?limit=100")!))
+        XCTAssertNil(RedditFeedHosts.fallback(
+            from: URL(string: "https://www.reddit.com/user/spez/submitted.json?limit=100")!))
+    }
+
     /// Un hôte tiers n'est jamais réécrit : le repli reste dans Reddit.
     func testNoFallbackForForeignHost() {
         XCTAssertNil(RedditFeedHosts.fallback(

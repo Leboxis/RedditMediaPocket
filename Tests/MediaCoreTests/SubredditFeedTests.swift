@@ -22,35 +22,35 @@ final class SubredditFeedTests: XCTestCase {
     func testUserFeedURL() {
         XCTAssertEqual(
             FeedSource.user("leboxis").feedURL().absoluteString,
-            "https://www.reddit.com/user/leboxis/submitted.rss?limit=100"
+            "https://www.reddit.com/user/leboxis/submitted.json?limit=100"
         )
         XCTAssertEqual(
             FeedSource.user("leboxis").feedURL(after: "t3_abc").absoluteString,
-            "https://www.reddit.com/user/leboxis/submitted.rss?limit=100&after=t3_abc"
+            "https://www.reddit.com/user/leboxis/submitted.json?limit=100&after=t3_abc"
         )
     }
 
     func testSubredditFeedURLs() {
         XCTAssertEqual(
             FeedSource.subreddit("pics").feedURL().absoluteString,
-            "https://www.reddit.com/r/pics/new.rss?limit=100"
+            "https://www.reddit.com/r/pics/new.json?limit=100"
         )
         XCTAssertEqual(
             FeedSource.subreddit("pics").feedURL(sort: "hot").absoluteString,
-            "https://www.reddit.com/r/pics/hot.rss?limit=100"
+            "https://www.reddit.com/r/pics/hot.json?limit=100"
         )
         XCTAssertEqual(
             FeedSource.subreddit("pics").feedURL(sort: "top").absoluteString,
-            "https://www.reddit.com/r/pics/top.rss?t=month&limit=100"
+            "https://www.reddit.com/r/pics/top.json?t=month&limit=100"
         )
         XCTAssertEqual(
             FeedSource.subreddit("pics").feedURL(sort: "new", after: "t3_abc").absoluteString,
-            "https://www.reddit.com/r/pics/new.rss?limit=100&after=t3_abc"
+            "https://www.reddit.com/r/pics/new.json?limit=100&after=t3_abc"
         )
         // Tri inconnu : repli sur les nouveautés.
         XCTAssertEqual(
             FeedSource.subreddit("pics").feedURL(sort: "bogus").absoluteString,
-            "https://www.reddit.com/r/pics/new.rss?limit=100"
+            "https://www.reddit.com/r/pics/new.json?limit=100"
         )
     }
 
@@ -69,11 +69,11 @@ final class SubredditFeedTests: XCTestCase {
     func testSavedFeedURL() {
         XCTAssertEqual(
             FeedSource.saved("leboxis").feedURL().absoluteString,
-            "https://www.reddit.com/user/leboxis/saved.rss?limit=100"
+            "https://www.reddit.com/user/leboxis/saved.json?limit=100"
         )
         XCTAssertEqual(
             FeedSource.saved("leboxis").feedURL(after: "t3_abc").absoluteString,
-            "https://www.reddit.com/user/leboxis/saved.rss?limit=100&after=t3_abc"
+            "https://www.reddit.com/user/leboxis/saved.json?limit=100&after=t3_abc"
         )
     }
 

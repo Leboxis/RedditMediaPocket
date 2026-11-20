@@ -460,7 +460,9 @@ extension Notification.Name {
         if sourceKind == "ts" { return true }
         if let source = resolvedSource {
             switch source {
-            case .saved, .twitterUser, .tiktokUser: return true
+            // Depuis le 13/11/2026, Reddit ne sert plus aucun flux sans
+            // session (RSS coupé, `.json` anonyme en HTTP 403).
+            case .saved, .user, .subreddit, .redditPosts, .twitterUser, .tiktokUser: return true
             // Une vidéo TikTok isolée est une page publique : aucune session
             // n'est exigée pour la lire et télécharger son média.
             default: return false
@@ -1046,13 +1048,18 @@ extension Notification.Name {
         }
     }
 
-    /// Aperçu en lecture seule des posts publics d'un profil (RSS), sans
+    /// Aperçu en lecture seule des posts d'un profil (listing JSON), sans
     /// aucun téléchargement.
     func previewPosts(username: String) async throws -> [Post] {
         let source = FeedSource.user(try MediaExtractor.username(username))
-        let body = try await network.data(source.feedURL())
-        try Task.checkCancellation()
-        return try FeedParser.parse(body)
+        let url = source.feedURL()
+        do {
+            let body = try await network.data(url)
+            try Task.checkCancellation()
+            return try RedditListing.parse(body)
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            throw FeedError.loginRequired
+        }
     }
 
     /// Charge la page Sauvegardés du compte connecté et la liste de ses
@@ -3086,8 +3093,16 @@ extension Notification.Name {
     private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
         if let privateFeed {
             return try await network.savedPosts(privateFeed, after: after)
-        } else {
-            return try FeedParser.parse(try await network.data(source.feedURL(sort: subSort, after: after)))
+        }
+        let url = source.feedURL(sort: subSort, after: after)
+        do {
+            let body = try await network.data(url)
+            // Reddit sert des listings JSON depuis la coupure des flux RSS
+            // (13/11/2026) ; les autres sources restent en Atom.
+            if url.path.hasSuffix(".json") { return try RedditListing.parse(body) }
+            return try FeedParser.parse(body)
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            throw FeedError.loginRequired
         }
     }
 

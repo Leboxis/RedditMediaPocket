@@ -59,7 +59,7 @@ struct SourceDiagnosticsView: View {
         let xSession = XSession.shared
         let tikTokSession = TikTokSession.shared
         checks = [
-            DiagnosticCheck(id: "reddit-feed", title: L("Reddit : flux public anonyme", "Reddit: anonymous public feed")),
+            DiagnosticCheck(id: "reddit-feed", title: L("Reddit : listing JSON (session requise depuis le 13/11/2026)", "Reddit: JSON listing (session required since 11/13/2026)")),
             DiagnosticCheck(id: "reddit-session", title: L("Reddit : session locale", "Reddit: local session")),
             DiagnosticCheck(id: "redgifs", title: L("RedGifs : jeton temporaire", "RedGifs: temporary token")),
             DiagnosticCheck(id: "x-session", title: L("X : session locale", "X: local session")),
@@ -73,8 +73,7 @@ struct SourceDiagnosticsView: View {
             let state: DiagnosticState
             switch id {
             case "reddit-feed":
-                state = await probeFeed(network, url: URL(string: "https://www.reddit.com/r/pics/.rss")!,
-                                        ok: L("Flux RSS servi.", "RSS feed served."))
+                state = await probeRedditListing(network)
             case "reddit-session":
                 state = sessionState(reddit.hasSession,
                                      ok: L("Session détectée.", "Session detected."),
@@ -102,6 +101,24 @@ struct SourceDiagnosticsView: View {
     /// Une session absente n'est pas une panne : l'état le dit sans erreur.
     private func sessionState(_ present: Bool, ok: String, missing: String) -> DiagnosticState {
         present ? .ok(ok) : .fail(missing)
+    }
+
+    /// Sonde le listing JSON public de Reddit (`/r/pics/new.json`). Depuis le
+    /// 13/11/2026 les `.rss` sont coupés (404) et les `.json` exigent une
+    /// session : 200 = OK avec session, 403/401 = session manquante (attendu
+    /// sans connexion).
+    private func probeRedditListing(_ network: Network) async -> DiagnosticState {
+        let url = URL(string: "https://www.reddit.com/r/pics/new.json?limit=1")!
+        do {
+            let data = try await network.data(url)
+            return data.isEmpty
+                ? .fail(L("Réponse vide.", "Empty response."))
+                : .ok(L("Listing JSON servi (\(data.count) octets).", "JSON listing served (\(data.count) bytes)."))
+        } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            return .fail(L("HTTP \(code) : session requise — les flux RSS sont coupés depuis le 13/11/2026 et les `.json` exigent une connexion.", "HTTP \(code): session required — RSS feeds have been off since 11/13/2026 and `.json` requires sign-in."))
+        } catch {
+            return .fail(error.localizedDescription)
+        }
     }
 
     private func probeFeed(_ network: Network, url: URL, ok: String, headers: [String: String]? = nil) async -> DiagnosticState {
