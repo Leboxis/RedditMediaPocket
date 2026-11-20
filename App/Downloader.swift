@@ -1597,8 +1597,20 @@ extension Notification.Name {
                 // n'écrit rien, mais la page suivante ne doit pas démarrer si
                 // la précédente a rempli le quota.
                 try self.checkStorageQuota(folder: folder, canonical: canonical)
+                // Miroir full-res pour les posts image Reddit : la source
+                // `preview.redd.it` du listing JSON (avec ses paramètres de
+                // taille d'origine) est tentée si `i.redd.it` répond 404.
+                var redditMirrors: [String: [URL]] = [:]
+                for post in posts {
+                    let media = MediaExtractor.extract(post.html)
+                    guard media.count == 1, case .direct(let url) = media[0],
+                          url.host?.lowercased() == "i.redd.it",
+                          let preview = MediaExtractor.previewImage(post.html) else { continue }
+                    redditMirrors[post.id] = [preview]
+                }
                 let downloads = try await self.prepareDownloads(posts, folder: folder,
-                    seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
+                    seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical,
+                    mediaMirrors: redditMirrors)
                 LogCenter.info(L("Page \(pageNumber) : \(downloads.count) nouveaux médias à prendre.", "Page \(pageNumber): \(downloads.count) new media to fetch."))
                 try await self.executeDownloads(downloads, &preparedCount)
                 LogCenter.info(L("Page \(pageNumber) terminée : total préparé \(preparedCount).", "Page \(pageNumber) done: total prepared \(preparedCount)."))
@@ -3901,6 +3913,25 @@ extension Notification.Name {
                 tikTokCDNRefusals = 0
                 return saved
             } catch {
+                // Repli général sur refus 403/404, quelle que soit la source :
+                // d'abord les miroirs déclarés pour ce post (ex. source
+                // `preview.redd.it` full-res d'un post Reddit), puis la
+                // réécriture d'hôte `i.redd.it` → `preview.redd.it` (depuis
+                // novembre 2026, i.redd.it répond 404 aux non-navigateurs).
+                let genericRefusal: Bool = {
+                    if case NetworkError.refused(let code) = error { return code == 403 || code == 404 }
+                    return false
+                }()
+                if genericRefusal || Self.tikTokRefusalCode(error, media: url) != nil {
+                    for candidate in mirrors + RedditCDN.previewFallbacks(for: url) where candidate != url {
+                        LogCenter.net(L("Miroir \(candidate.host ?? "CDN")…", "Mirror \(candidate.host ?? "CDN")…"))
+                        do {
+                            let saved = try await network.download(candidate, headers: headers)
+                            tikTokCDNRefusals = 0
+                            return saved
+                        } catch { continue }
+                    }
+                }
                 // Toute défaillance d'un média TikTok passe par les replis. Le
                 // refus CDN (403) n'est pas le seul cas : une URL morte
                 // (`www.tiktok.com/aweme/v1/play/` répond du HTML) échoue en
@@ -3909,16 +3940,6 @@ extension Notification.Name {
                 // qui masquait le repli dans le journal. Les sources autres que
                 // TikTok gardent leur erreur d'origine.
                 guard let code = Self.tikTokRefusalCode(error, media: url) else { throw error }
-                // Miroirs CDN : chaque adresse de `urlList` sert le même
-                // contenu ; un nœud refuse parfois là où le suivant passe.
-                for mirror in mirrors where mirror != url {
-                    LogCenter.net(L("TikTok : miroir \(mirror.host ?? "CDN")…", "TikTok: mirror \(mirror.host ?? "CDN")…"))
-                    do {
-                        let saved = try await network.download(mirror, headers: headers)
-                        tikTokCDNRefusals = 0
-                        return saved
-                    } catch { continue }
-                }
                 // Repli TikTok : le CDN refuse le client URLSession mais sert
                 // la même URL au vrai navigateur — d'abord le fetch de la page,
                 // puis une navigation complète (WKDownload) conduite par WebKit
