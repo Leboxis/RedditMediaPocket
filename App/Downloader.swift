@@ -15,6 +15,8 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// Compte TikTok (`tt/pseudo`) : session WebKit distincte, parcours paginé
     /// de l'API interne `api/post/item_list`.
     var isTikTok = false
+    /// Vidéo TikTok isolée (`ttv/<id>`) : une seule page lue, un seul média.
+    var isTikTokVideo = false
     /// Sauvegardés TikTok du compte connecté (`ts/pseudo`) : session WebKit
     /// exigée, dossiers de favoris et publications enregistrées.
     var isTikTokSaved = false
@@ -31,10 +33,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var archived = false
     var lastRun: Date?
     /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
-    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo` ou
-    /// `r/posts`.
+    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo`,
+    /// `ttv/<id>` ou `r/posts`.
     var id: String {
         if isTikTokSaved { return "ts/\(name)" }
+        if isTikTokVideo { return "ttv/\(name)" }
         if isTikTok { return "tt/\(name)" }
         if isInstagram { return "ig/\(name)" }
         if isTwitter { return "tw/\(name)" }
@@ -52,6 +55,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
     /// collection existante ne peut entrer en collision.
     var folderName: String {
         if isTikTokSaved { return "ts.\(name)" }
+        if isTikTokVideo { return "ttv.\(name)" }
         if isTikTok { return "tk.\(name)" }
         if isInstagram { return "ig.\(name)" }
         if isTwitter { return "tw.\(name)" }
@@ -65,9 +69,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isTikTokVideo, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isTikTokSaved: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isTikTokVideo: Bool = false, isTikTokSaved: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
@@ -75,6 +79,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
         self.isTikTok = isTikTok
+        self.isTikTokVideo = isTikTokVideo
         self.isTikTokSaved = isTikTokSaved
         self.isInstagram = isInstagram
         self.isRedGifsTag = isRedGifsTag
@@ -92,6 +97,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
         isTikTok = try container.decodeIfPresent(Bool.self, forKey: .isTikTok) ?? false
+        isTikTokVideo = try container.decodeIfPresent(Bool.self, forKey: .isTikTokVideo) ?? false
         isTikTokSaved = try container.decodeIfPresent(Bool.self, forKey: .isTikTokSaved) ?? false
         isInstagram = try container.decodeIfPresent(Bool.self, forKey: .isInstagram) ?? false
         isRedGifsTag = try container.decodeIfPresent(Bool.self, forKey: .isRedGifsTag) ?? false
@@ -116,6 +122,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
         case .tiktokUser(let name): self.init(name: name, isTikTok: true)
+        case .tiktokVideo(let ref): self.init(name: ref.stableID, isTikTokVideo: true)
         case .tiktokSaved(let name): self.init(name: name, isTikTokSaved: true)
         case .instagramUser(let name): self.init(name: name, isInstagram: true)
         case .redditPosts: self.init(name: "posts", isRedditPosts: true)
@@ -452,6 +459,8 @@ extension Notification.Name {
         if let source = resolvedSource {
             switch source {
             case .saved, .twitterUser, .tiktokUser: return true
+            // Une vidéo TikTok isolée est une page publique : aucune session
+            // n'est exigée pour la lire et télécharger son média.
             default: return false
             }
         }
@@ -621,6 +630,7 @@ extension Notification.Name {
                 case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
                 case .tiktokUser(let name): sourceKind = "tt"; username = name
+                case .tiktokVideo(let ref): sourceKind = "tt"; username = ref.url.absoluteString
                 case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
                 case .instagramUser(let name): sourceKind = "ig"; username = name
                 case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
@@ -667,6 +677,10 @@ extension Notification.Name {
                 collections.append(UserCollection(name: model, isXFetish: true))
             } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTwitter: true))
+            } else if folder.hasPrefix("ttv."), !folder.dropFirst(4).isEmpty {
+                // Vidéo TikTok isolée : la clé de dossier porte l'identifiant
+                // stable de la publication (chiffres, ou code de partage).
+                collections.append(UserCollection(name: String(folder.dropFirst(4)), isTikTokVideo: true))
             } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTikTok: true))
             } else if folder.hasPrefix("ts."), !folder.dropFirst(3).isEmpty {
@@ -717,6 +731,7 @@ extension Notification.Name {
             case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
             case .tiktokUser(let name): sourceKind = "tt"; username = name
+            case .tiktokVideo(let ref): sourceKind = "tt"; username = ref.url.absoluteString
             case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
             case .instagramUser(let name): sourceKind = "ig"; username = name
             case .redditPosts: sourceKind = "r"; username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(source.id)) ?? ""
@@ -1319,6 +1334,19 @@ extension Notification.Name {
             var preparedCount = 0
             try await runTikTokSaved(canonical: canonical, folder: folder,
                                      choice: tikTokSavedChoice,
+                                     seenMedia: &seenMedia,
+                                     usedFilenames: &usedFilenames,
+                                     preparedCount: &preparedCount)
+            return
+        }
+        // Vidéo TikTok isolée : une seule page lue, seuls ses propres médias
+        // sont préparés, aucun profil n'est parcouru. Chemin séparé, comme
+        // les autres sources non RSS.
+        if case .tiktokVideo(let ref) = source {
+            var seenMedia = Set<Media>()
+            var usedFilenames = Set<String>()
+            var preparedCount = 0
+            try await runTikTokVideo(ref, canonical: canonical, folder: folder,
                                      seenMedia: &seenMedia,
                                      usedFilenames: &usedFilenames,
                                      preparedCount: &preparedCount)
@@ -1993,6 +2021,74 @@ extension Notification.Name {
 
     /// Seuil d'interruption d'un lot TikTok sur refus CDN consécutifs.
     private static let tikTokCDNRefusalLimit = 4
+
+    /// Vidéo TikTok isolée (adresse collée) : la page de la publication est
+    /// lue, seuls ses médias sont préparés, aucun profil n'est parcouru.
+    ///
+    /// Le lien court est suivi par la redirection URLSession : la page
+    /// canonique livre le post et son auteur. La préparation, le dédoublonnage
+    /// par clé média et le transfert (miroirs CDN compris) sont ceux de
+    /// `runTikTok`, restreints à une seule publication.
+    private func runTikTokVideo(_ ref: TikTokAPI.TikTokVideoRef, canonical: String,
+                                folder: URL, seenMedia: inout Set<Media>,
+                                usedFilenames: inout Set<String>,
+                                preparedCount: inout Int) async throws {
+        status = L("Résolution de la vidéo TikTok…", "Resolving TikTok video…")
+        // Clés déjà sur disque : une clé média suffit, comme dans le parcours
+        // `tt/` — la même vidéo relancée ne retélécharge rien.
+        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+            FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
+        })
+        try Task.checkCancellation()
+        let headers = TikTokAPI.headers(referer: ref.url)
+        let detail = try TikTokAPI.parseVideoPage(try await network.data(ref.url, headers: headers))
+        await TikTokSession.shared.recordAPIAcceptance(true)
+        LogCenter.info(L("TikTok : vidéo \(detail.id) résolue.", "TikTok: video \(detail.id) resolved."))
+
+        let postPage = TikTokAPI.postPageURL(author: detail.author, postID: detail.id)
+        var posts: [Post] = []
+        var mediaOverrides: [String: [Media]] = [:]
+        var mediaHeadersByMedia: [String: [String: String]] = [:]
+        var mediaMirrorsByMedia: [String: [URL]] = [:]
+        var mediaExtensions: [String: String] = [:]
+        for media in detail.media where !savedIDs.contains(media.storageKey) {
+            let id = media.storageKey
+            mediaOverrides[id] = [.direct(media.url)]
+            // Anti-hotlink : `Referer` sur la page de la publication, UA du
+            // client qui a obtenu l'URL — la même règle que `runTikTok`.
+            mediaHeadersByMedia[id] = postPage.map { TikTokAPI.mediaHeaders(referer: $0) }
+                ?? TikTokAPI.mediaHeaders()
+            mediaMirrorsByMedia[id] = media.mirrors
+            if media.kind == .video { mediaExtensions[id] = "mp4" }
+            posts.append(Post(id: id, title: detail.text, html: "",
+                              publishedAt: detail.publishedAt,
+                              link: postPage?.absoluteString))
+        }
+        let downloads = try await prepareDownloads(posts, folder: folder,
+            seenMedia: &seenMedia, usedFilenames: &usedFilenames,
+            author: canonical, mediaOverrides: mediaOverrides,
+            mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
+            mediaExtensions: mediaExtensions)
+        beginTransferUnit(total: downloads.count)
+        try await executeDownloads(downloads, &preparedCount)
+
+        if let index = collections.firstIndex(where: { $0.id == canonical }) {
+            collections[index].lastRun = Date()
+            saveCollections()
+        }
+        recordLastRunCount(canonical)
+        LogCenter.info(L("TikTok : vidéo lue, \(preparedCount) média préparé.",
+                         "TikTok: video read, \(preparedCount) media prepared."))
+        if failed > 0 {
+            status = ""
+            let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
+            errorMessage = L("La vidéo TikTok n'a pas pu être transférée.\n\(kept) médias conservés.",
+                             "The TikTok video could not be transferred.\n\(kept) media files kept.")
+            return
+        }
+        status = count == 0 ? L("Vidéo déjà présente", "Video already saved")
+                            : L("\(count) média(s) TikTok téléchargé(s)", "\(count) TikTok media downloaded")
+    }
 
     /// Parcours des publications d'un compte TikTok.
     ///

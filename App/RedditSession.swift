@@ -187,20 +187,3 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
-struct RedditSessionIndicator: View {
-    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    @ObservedObject private var session = RedditSession.shared
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: session.hasSession ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
-                .font(.title3)
-            Text(session.hasSession ? L("Session Reddit détectée", "Reddit session detected") : L("Reddit · sans session", "Reddit · signed out"))
-                .font(.subheadline.weight(.semibold))
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .foregroundStyle(session.hasSession ? Color.green : Color.secondary)
-        .padding(12)
-        .background(session.hasSession ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
-    }
-}

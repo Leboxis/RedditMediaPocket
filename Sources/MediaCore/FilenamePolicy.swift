@@ -292,8 +292,10 @@ public enum FilenamePolicy {
             // hériter du dossier d'un profil Reddit au même pseudo.
             else if first == "tw" { typeSuffix = " - X" }
             // `tt` reste distinct de `tw` : un compte TikTok ne doit jamais
-            // hériter du dossier d'un compte X au même pseudo.
-            else if first == "tt" { typeSuffix = " - TikTok" }
+            // hériter du dossier d'un compte X au même pseudo. `ttv` (vidéo
+            // TikTok isolée) porte la même mention, au moins autant qu'un
+            // subreddit nommé d'après un identifiant numérique.
+            else if first == "tt" || first == "ttv" { typeSuffix = " - TikTok" }
             // `ig` reste distinct de toutes les autres sources : un compte
             // Instagram ne doit jamais hériter du dossier d'un profil au
             // même pseudo.

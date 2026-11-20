@@ -103,14 +103,14 @@ Repli old.reddit.com : flux servi (N octets).
 
 Le repli ne s'applique ni à un hôte tiers, ni à une adresse qui n'est pas un flux `.rss`, et il ne boucle jamais : une adresse déjà sur `old.reddit.com` n'en a pas. Si le repli est refusé à son tour, le parcours s'arrête avec l'erreur d'origine.
 
-## Médias TikTok (`tt`) et sauvegardés du compte (`ts`)
+## Médias TikTok (`tt`), vidéos isolées et sauvegardés du compte (`ts`)
 
 ### Marche à suivre
 
 1. **Réglages → Se connecter à TikTok.** La fenêtre intégrée ouvre `https://www.tiktok.com/` ; utiliser ses identifiants TikTok. Les boutons « Continuer avec Google / Facebook / Apple » sont acceptés. La session est conservée dans un stockage WebKit propre à TikTok, distinct de ceux de Reddit et de X : une déconnexion TikTok n'efface ni l'une ni l'autre, et inversement. Comme elle est persistante, la connexion est retrouvée après un redémarrage, jusqu'à expiration des cookies ou déconnexion explicite.
-2. **Bouton de source → `tt`** pour les médias publics d'un compte, **`ts`** pour ton propre compte.
-3. **`tt`** : saisir le pseudo (`nasa`), avec `@`, avec le préfixe `tt/`, ou coller `tiktok.com/@nasa`. **`ts`** : un sélecteur propose trois cibles — **toutes les publications enregistrées**, **un dossier de favoris** de ton choix, ou **un compte précis**.
-4. **Lancer.** Le parcours crée la collection `tt/pseudo` (dossier `tk.pseudo`) ou `ts/pseudo` (dossier `ts.pseudo`).
+2. **Bouton de source → `tt`** pour les médias publics d'un compte ou une vidéo isolée, **`ts`** pour ton propre compte.
+3. **`tt`** : saisir le pseudo (`nasa`), avec `@`, avec le préfixe `tt/`, ou coller `tiktok.com/@nasa`. Une **vidéo isolée** est acceptée telle quelle : coller `tiktok.com/@pseudo/video/…` (ou `…/photo/…`, ou un lien court `vm.tiktok.com/…`) ne télécharge que cette vidéo. **`ts`** : un sélecteur propose trois cibles — **toutes les publications enregistrées**, **un dossier de favoris** de ton choix, ou **un compte précis**.
+4. **Lancer.** Le parcours crée la collection `tt/pseudo` (dossier `tk.pseudo`), `ts/pseudo` (dossier `ts.pseudo`) ou, pour une vidéo isolée, `ttv/<identifiant>` (dossier `ttv.<identifiant>`) — la relance du même lien ne retélécharge rien.
 5. **Vérifier dans le journal** (bouton `doc.text.magnifyingglass`) les lignes `TikTok :` : elles disent quelle voie a servi, combien de publications ont été lues, et pourquoi un média a été écarté.
 
 Les deux modes exigent une session TikTok : un profil public comme les sauvegardés sont lus avec les cookies de la session, et un parcours lancé sans connexion s'arrête sur un message explicite plutôt que de rendre zéro média. La connexion se fait une fois, dans les Réglages.

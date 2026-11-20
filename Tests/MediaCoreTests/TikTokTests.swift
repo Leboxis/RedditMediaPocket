@@ -28,11 +28,11 @@ final class TikTokTests: XCTestCase {
         XCTAssertEqual(try FeedSource.parse("https://www.tiktok.com/@nasa"), .tiktokUser("nasa"))
         // `@` reste X : le préfixe `tt/` est le seul à déclencher TikTok.
         XCTAssertEqual(try FeedSource.parse("@nasa"), .twitterUser("nasa"))
-        // Une vidéo isolée est refusée avec un message dédié, pas une erreur
-        // de pseudo.
-        XCTAssertThrowsError(try FeedSource.parse("https://www.tiktok.com/@nasa/video/7301")) { error in
-            XCTAssertTrue(error is TikTokError)
-        }
+        // Une vidéo isolée devient une source dédiée : le pseudo n'est pas
+        // exigé, l'adresse seule suffit.
+        XCTAssertEqual(try FeedSource.parse("https://www.tiktok.com/@nasa/video/7301"),
+                       .tiktokVideo(TikTokAPI.TikTokVideoRef(postID: "7301", author: "nasa",
+                                                            url: URL(string: "https://www.tiktok.com/@nasa/video/7301")!)))
         // `x/` reste X-Fetish.
         XCTAssertEqual(try FeedSource.parse("x/someone"), .xFetish(XFetishAlbums.Target(model: "someone", videos: [], albums: [])))
     }
@@ -250,6 +250,111 @@ final class TikTokTests: XCTestCase {
         XCTAssertNil(FilenamePolicy.tikTokMediaID(inFileName: "Titre - xfv-12-3.mp4"))
         // Un fragment de titre ne doit pas être accepté comme clé.
         XCTAssertNil(FilenamePolicy.tikTokMediaID(inFileName: "tkv-abc.mp4"))
+    }
+
+    // MARK: - Vidéo isolée
+
+    /// La forme longue accepte des paramètres décoratifs (`lang=fr`,
+    /// `is_from_webapp=1`) : la forme canonique les écarte et garde
+    /// uniquement `@pseudo/video/<id>`. Le diaporama `/photo/<id>` porte
+    /// la même forme que la vidéo.
+    func testVideoRefParsesLongForm() {
+        var ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/video/7301?lang=fr&is_from_webapp=1")!
+        XCTAssertEqual(ref.postID, "7301")
+        XCTAssertEqual(ref.author, "nasa")
+        XCTAssertEqual(ref.url.absoluteString,
+                       "https://www.tiktok.com/@nasa/video/7301")
+        ref = TikTokAPI.videoRef("https://www.tiktok.com/@nasa/photo/7302")!
+        XCTAssertEqual(ref.postID, "7302")
+        XCTAssertEqual(ref.url.absoluteString,
+                       "https://www.tiktok.com/@nasa/photo/7302")
+    }
+
+    /// Un lien court de partage n'expose pas l'identifiant : c'est la
+    /// redirection du site, qui amène à la page canonique, qui le livre.
+    func testVideoRefKeepsShortLinksAsShared() {
+        let ref = TikTokAPI.videoRef("https://vm.tiktok.com/ZMabc123")!
+        XCTAssertNil(ref.postID)
+        XCTAssertNil(ref.author)
+        XCTAssertEqual(ref.url.absoluteString, "https://vm.tiktok.com/ZMabc123")
+        XCTAssertEqual(ref.stableID, "ZMabc123")
+    }
+
+    /// Un `http` nu est complété en `https` (partage presse-papiers), le
+    /// préfixe `tt/` du chemin de la feuille de partage est retiré, mais
+    /// un profil, un identifiant non numérique, des identifiants
+    /// incrustés ou un hôte tiers ne sont jamais acceptés.
+    func testVideoRefRejectsOtherAddresses() {
+        XCTAssertEqual(TikTokAPI.videoRef("www.tiktok.com/@nasa/video/7301")!.url.absoluteString,
+                       "https://www.tiktok.com/@nasa/video/7301")
+        XCTAssertNotNil(TikTokAPI.videoRef("tt/https://www.tiktok.com/@nasa/video/7301"))
+        XCTAssertNil(TikTokAPI.videoRef("https://www.tiktok.com/@nasa"))
+        XCTAssertNil(TikTokAPI.videoRef("https://www.tiktok.com/@nasa/video/abc"))
+        XCTAssertNil(TikTokAPI.videoRef("https://evil.example/@nasa/video/7301"))
+        // Des identifiants incrustés ne sont pas une adresse de vidéo.
+        XCTAssertNil(TikTokAPI.videoRef("https://nasa:motdepasse@www.tiktok.com/@nasa/video/7301"))
+    }
+
+    /// Identifiant et dossier dérivés de la vidéo seule, distincts de ceux
+    /// du compte au même pseudo ; `ttv.` ne recouvre jamais un dossier
+    /// `tk.` (compte) ni `tw.` (X).
+    func testVideoSourceIdentity() throws {
+        let source = try FeedSource.parse("https://www.tiktok.com/@nasa/video/7301")
+        XCTAssertEqual(source.id, "ttv/7301")
+        XCTAssertEqual(source.folderName, "ttv.7301")
+        XCTAssertEqual(source.displayName, "ttv/7301")
+        XCTAssertEqual(source.feedURL().absoluteString,
+                       "https://www.tiktok.com/@nasa/video/7301")
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("ttv/7301"), "7301 - TikTok")
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
+                          FilenamePolicy.kDriveFolderName("tk/nasa"))
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
+                          FilenamePolicy.kDriveFolderName("tw/nasa"))
+    }
+
+    // MARK: - Page de la vidéo
+
+    private let videoPageJSON = #"""
+    {"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{
+      "itemStruct":{"id":"7301","desc":"Une vidéo","createTime":"1700000000",
+        "author":{"uniqueId":"nasa"},
+        "video":{"playAddr":"https://v16-webapp-prime.tiktok.com/video/a.mp4"}}}}}}
+    """#
+
+    /// La page d'une vidéo isolée s'hydrate avec le même script qu'un
+    /// profil, la fenêtre est `webapp.video-detail` : identifiant, texte,
+    /// date, auteur et média sont lus comme pour une entrée de liste.
+    func testParseVideoPageReadsHydrationJSON() throws {
+        let detail = try TikTokAPI.parseVideoPage(profileHTML(videoPageJSON))
+        XCTAssertEqual(detail.id, "7301")
+        XCTAssertEqual(detail.text, "Une vidéo")
+        XCTAssertEqual(detail.publishedAt, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertEqual(detail.author, "nasa")
+        let media = try XCTUnwrap(detail.media.first)
+        XCTAssertEqual(media.kind, .video)
+        XCTAssertEqual(media.url.absoluteString,
+                       "https://v16-webapp-prime.tiktok.com/video/a.mp4")
+        XCTAssertTrue(media.mirrors.isEmpty)
+    }
+
+    /// Hors publication lisible (vidéo supprimée ou privée, lien court
+    /// expiré), `statusCode` non nul comme fenêtre sans `itemStruct`
+    /// arrivent au même message — jamais une erreur de fil générique.
+    func testParseVideoPageRejectsUnavailableVideo() {
+        let statusCode = #{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":10216}}}
+        XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(statusCode)) { error in
+            XCTAssertEqual(error as? TikTokError, .videoUnavailable)
+        }
+        let emptyItemInfo = #{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{}}}}
+        XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(emptyItemInfo)) { error in
+            XCTAssertEqual(error as? TikTokError, .videoUnavailable)
+        }
+        XCTAssertThrowsError(try TikTokAPI.parseVideoPage(profileHTML("{}"))) { error in
+            XCTAssertEqual(error as? TikTokError, .invalidTimeline)
+        }
+        XCTAssertThrowsError(try TikTokAPI.parseVideoPage(Data("<html></html>".utf8))) { error in
+            XCTAssertEqual(error as? TikTokError, .invalidTimeline)
+        }
     }
 
     // MARK: - Sauvegardés TikTok (ts/)

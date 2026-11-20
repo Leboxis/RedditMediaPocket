@@ -173,7 +173,7 @@ struct ContentView: View {
                           (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
                             (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
                               (model.sourceKind == "tw" ? L("compte X", "X account") :
-                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") :
+                                (model.sourceKind == "tt" ? L("compte TikTok ou vidéo", "TikTok account or video") :
                                   (model.sourceKind == "ig" ? L("compte Instagram", "Instagram account") : L("pseudo", "username")))))), text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
@@ -866,6 +866,66 @@ private struct SourceGridCard: View {
     }
 }
 
+/// Ligne de connexion d'un service, dans les Réglages : marque compacte,
+/// statut dans le sous-titre, pastille d'état et menu d'actions. Toucher la
+/// ligne rouvre la fenêtre du service ; déconnexion et ouverture sont dans
+/// le menu d'extrémité.
+private struct ConnectionRow: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let connected: Bool
+    let rejected: Bool
+    let status: String
+    let busy: Bool
+    let clearing: Bool
+    let connectLabel: String
+    let onConnect: () -> Void
+    let onSignOut: () -> Void
+
+    private var statusColor: Color { connected ? Color.green : (rejected ? Color.red : Color.secondary) }
+
+    var body: some View {
+        HStack(spacing: 11) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+            }
+            Spacer(minLength: 12)
+            Menu {
+                Button(action: onConnect) { Label(connectLabel, systemImage: connected ? "safari" : "person.badge.key") }
+                Button(role: .destructive, action: onSignOut) {
+                    Label(L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(busy || clearing)
+            .accessibilityLabel(L("Actions \(title)", "\(title) actions"))
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !busy, !clearing else { return }
+            onConnect()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title) : \(status)")
+        .accessibilityHint(connectLabel)
+    }
+}
+
 private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
@@ -920,51 +980,42 @@ private struct DownloadSettings: View {
                     }
                 }
                 Section {
-                    RedditSessionIndicator()
-                    Button(reddit.hasSession ? L("Session détectée · ouvrir Reddit", "Session detected · open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit")) { loginPresented = true }
-                        .disabled(model.running || reddit.clearing)
-                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await reddit.logout() } }
-                        .disabled(model.running || reddit.clearing)
+                    ConnectionRow(symbol: "person.crop.circle", tint: .orange, title: L("Reddit", "Reddit"),
+                                  connected: reddit.hasSession, rejected: false,
+                                  status: reddit.hasSession ? L("Session détectée", "Session detected") : L("Sans session", "Signed out"),
+                                  busy: model.running, clearing: reddit.clearing,
+                                  connectLabel: reddit.hasSession ? L("Ouvrir Reddit", "Open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit"),
+                                  onConnect: { loginPresented = true },
+                                  onSignOut: { Task { await reddit.logout() } })
+                    ConnectionRow(symbol: "bird", tint: .gray, title: "X",
+                                  connected: xSession.apiAccepted, rejected: xSession.apiRejected,
+                                  status: xSession.apiAccepted ? L("Session détectée", "Session detected")
+                                    : (xSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
+                                  busy: model.running, clearing: xSession.clearing,
+                                  connectLabel: xSession.hasSession ? L("Ouvrir X", "Open X") : L("Se connecter à X", "Sign in to X"),
+                                  onConnect: { xLoginPresented = true },
+                                  onSignOut: { Task { await xSession.logout() } })
+                    ConnectionRow(symbol: "music.note", tint: .cyan, title: "TikTok",
+                                  connected: tikTokSession.apiAccepted, rejected: tikTokSession.apiRejected,
+                                  status: tikTokSession.apiAccepted ? L("Session détectée", "Session detected")
+                                    : (tikTokSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
+                                  busy: model.running, clearing: tikTokSession.clearing,
+                                  connectLabel: tikTokSession.hasSession ? L("Ouvrir TikTok", "Open TikTok") : L("Se connecter à TikTok", "Sign in to TikTok"),
+                                  onConnect: { tikTokLoginPresented = true },
+                                  onSignOut: { Task { await tikTokSession.logout() } })
+                    ConnectionRow(symbol: "camera", tint: .pink, title: "Instagram",
+                                  connected: instagramSession.apiAccepted, rejected: instagramSession.apiRejected,
+                                  status: instagramSession.apiAccepted ? L("Session détectée", "Session detected")
+                                    : (instagramSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
+                                  busy: model.running, clearing: instagramSession.clearing,
+                                  connectLabel: instagramSession.hasSession ? L("Ouvrir Instagram", "Open Instagram") : L("Se connecter à Instagram", "Sign in to Instagram"),
+                                  onConnect: { instagramLoginPresented = true },
+                                  onSignOut: { Task { await instagramSession.logout() } })
                 } header: {
-                    Text("Reddit")
-                } footer: {
-                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.") : L("Session locale. Les limites Reddit restent applicables.", "Local session. Reddit rate limits still apply."))
-                }
-                Section {
-                    XSessionIndicator()
-                    Button(xSession.hasSession ? L("Ouvrir X", "Open X") : L("Se connecter à X", "Sign in to X")) { xLoginPresented = true }
-                        .disabled(model.running || xSession.clearing)
-                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await xSession.logout() } }
-                        .disabled(model.running || xSession.clearing)
-                } header: {
-                    Text("X")
-                } footer: {
-                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
-                         : L("Session distincte de Reddit, requise par la source tw. X ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit, required by the tw source. X publishes no media without it. Its rate limits still apply."))
-                }
-                Section {
-                    TikTokSessionIndicator()
-                    Button(tikTokSession.hasSession ? L("Ouvrir TikTok", "Open TikTok") : L("Se connecter à TikTok", "Sign in to TikTok")) { tikTokLoginPresented = true }
-                        .disabled(model.running || tikTokSession.clearing)
-                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await tikTokSession.logout() } }
-                        .disabled(model.running || tikTokSession.clearing)
-                } header: {
-                    Text("TikTok")
-                } footer: {
-                    Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
-                         : L("Session distincte de Reddit et de X, requise par la source tt. TikTok ne publie aucun média sans elle. Ses limites serveur restent applicables.", "A session separate from Reddit and X, required by the tt source. TikTok publishes no media without it. Its rate limits still apply."))
-                }
-                Section {
-                    InstagramSessionIndicator()
-                    Button(instagramSession.hasSession ? L("Ouvrir Instagram", "Open Instagram") : L("Se connecter à Instagram", "Sign in to Instagram")) { instagramLoginPresented = true }
-                        .disabled(model.running || instagramSession.clearing)
-                    Button(L("Déconnexion", "Sign out"), role: .destructive) { Task { await instagramSession.logout() } }
-                        .disabled(model.running || instagramSession.clearing)
-                } header: {
-                    Text("Instagram")
+                    Text(L("Connexions", "Accounts"))
                 } footer: {
                     Text(model.running ? L("Arrête les transferts pour modifier la session.", "Stop downloads to change the session.")
-                         : L("Session distincte de Reddit, de X et de TikTok. Sans elle, Instagram limite les requêtes anonymes et ne livre que les images des douze dernières publications ; avec elle, les vidéos et l'historique complet sont accessibles. Ses limites serveur restent applicables.", "A session separate from Reddit, X and TikTok. Without it, Instagram rate-limits anonymous requests and only serves the images of the twelve latest posts; with it, videos and the full history are available. Its server limits still apply."))
+                         : L("Sessions locales, indépendantes d'un service à l'autre. Toucher une ligne ouvre la fenêtre du service ; la déconnexion est dans son menu.", "Local sessions, independent across services. Tap a row to open the service's window; sign-out is in its menu."))
                 }
                 KDriveSettingsSection()
                 Section {

@@ -52,6 +52,11 @@ public enum FeedSource: Hashable, Sendable {
     case redgifsGif(String)
     case twitterUser(String)
     case tiktokUser(String)
+    /// Vidéo TikTok isolée, désignée par son adresse (page `/video/<id>`,
+    /// diaporama `/photo/<id>` ou lien court partagé) : cette seule vidéo est
+    /// lue, aucun profil n'est parcouru. Même modèle que les posts Reddit
+    /// isolés et les GIF RedGifs isolés.
+    case tiktokVideo(TikTokAPI.TikTokVideoRef)
     /// Sauvegardés TikTok du compte connecté (`ts/pseudo`) : publications
     /// enregistrées et dossiers de favoris, par la session WebKit.
     case tiktokSaved(String)
@@ -66,7 +71,9 @@ public enum FeedSource: Hashable, Sendable {
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
     /// `rg/pseudo` (ou `g/`), `rg/#tag` et une adresse `redgifs.com/watch/<id>`,
     /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`), `tt/pseudo`
-    /// (`@pseudo` ou `tiktok.com/@pseudo`), `ig/pseudo`
+    /// (`@pseudo` ou `tiktok.com/@pseudo`) et une adresse de vidéo TikTok
+    /// isolée (`tiktok.com/@pseudo/video/<id>` ou lien court `vm.tiktok.com`),
+    /// `ig/pseudo`
     /// (`instagram.com/pseudo`),
     /// une ou plusieurs adresses `reddit.com/r/…/comments/<id>/…` (ou `redd.it/<id>`),
     /// une URL `redgifs.com/users/pseudo` ou un pseudo nu
@@ -83,6 +90,9 @@ public enum FeedSource: Hashable, Sendable {
             return try .twitterUser(XTwitterAPI.username(trimmed))
         }
         if lower.hasPrefix("tt/") {
+            // Une adresse de vidéo isolée collée derrière le préfixe désigne
+            // cette seule vidéo, pas le compte de son auteur.
+            if let video = TikTokAPI.videoRef(trimmed) { return .tiktokVideo(video) }
             return try .tiktokUser(TikTokAPI.username(trimmed))
         }
         if lower.hasPrefix("ts/") {
@@ -91,9 +101,10 @@ public enum FeedSource: Hashable, Sendable {
             return .tiktokSaved(raw)
         }
         if lower.contains("tiktok.com/") {
-            // Une vidéo isolée n'est pas un compte : refuser explicitement
-            // plutôt que d'échouer sur « video », qui n'est pas un pseudo.
-            if TikTokAPI.isVideoURL(trimmed) { throw TikTokError.postUnsupported }
+            // Une vidéo isolée (page `/video/<id>` ou lien court partagé)
+            // désigne cette seule vidéo : même modèle que les posts Reddit
+            // isolés. Le reste d'une adresse tiktok.com reste un compte.
+            if let video = TikTokAPI.videoRef(trimmed) { return .tiktokVideo(video) }
             return try .tiktokUser(TikTokAPI.username(trimmed))
         }
         if lower.hasPrefix("ig/") {
@@ -199,6 +210,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
         case .tiktokUser(let name): return "tt/\(name)"
+        case .tiktokVideo(let video): return "ttv/\(video.stableID)"
         case .tiktokSaved(let name): return "ts/\(name)"
         case .instagramUser(let name): return "ig/\(name)"
         // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
@@ -228,6 +240,11 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
         case .tiktokUser(let name): return "tk.\(name)"
+        // `ttv.` est son propre préfixe : il ne peut pas recouvrir un dossier
+        // `tk.<pseudo>` (« tkv. » n'a pas le préfixe « tk. »), et l'identifiant
+        // d'une vidéo (chiffres, ou code de partage alphanumérique) ne peut pas
+        // être confondu avec un pseudo des autres sources.
+        case .tiktokVideo(let video): return "ttv.\(video.stableID)"
         case .tiktokSaved(let name): return "ts.\(name)"
         case .instagramUser(let name): return "ig.\(name)"
         case .redditPosts: return "reddit.posts"
@@ -294,6 +311,10 @@ public enum FeedSource: Hashable, Sendable {
             // parcours réel pagine par la WebView de `TikTokWebPaginator`
             // avec les cookies de session, jamais par cette URL seule.
             return TikTokAPI.profileURL(username: name)
+        case .tiktokVideo(let video):
+            // Page de la vidéo : c'est aussi l'URL que le parcours charge
+            // (les liens courts y sont suivis par la redirection du site).
+            return video.url
         case .tiktokSaved:
             // Parcours par la WebView de `TikTokWebPaginator` sur la session
             // connectée : cette URL ne sert qu'à l'affichage.

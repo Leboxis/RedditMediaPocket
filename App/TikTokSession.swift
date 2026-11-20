@@ -268,20 +268,3 @@ private struct TikTokWebContent: UIViewControllerRepresentable {
     }
 }
 
-struct TikTokSessionIndicator: View {
-    @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    @ObservedObject private var session = TikTokSession.shared
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: session.apiAccepted ? "checkmark.shield.fill" : "person.crop.circle.badge.questionmark")
-                .font(.title3)
-            Text(session.statusText)
-                .font(.subheadline.weight(.semibold))
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .foregroundStyle(session.apiAccepted ? Color.green : (session.apiRejected ? Color.red : Color.secondary))
-        .padding(12)
-        .background(session.apiAccepted ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
-    }
-}

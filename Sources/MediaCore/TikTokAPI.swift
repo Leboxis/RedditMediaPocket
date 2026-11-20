@@ -1,7 +1,7 @@
 import Foundation
 
 public enum TikTokError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported, verificationRequired, cdnRefused
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, invalidTimeline, tooManyPages, invalidPageLimit, videoUnavailable, verificationRequired, cdnRefused
 
     public var errorDescription: String? {
         switch self {
@@ -19,8 +19,8 @@ public enum TikTokError: LocalizedError {
             return L("Trop de pages de médias TikTok à parcourir.", "Too many TikTok media pages to scan.")
         case .invalidPageLimit:
             return L("Limite de pages invalide.", "Invalid page limit.")
-        case .postUnsupported:
-            return L("Les vidéos TikTok isolées ne sont pas prises en charge. Colle l'adresse du compte : les médias de ses publications seront parcourus.", "Single TikTok videos are not supported. Paste the account address instead: the media of its posts will be scanned.")
+        case .videoUnavailable:
+            return L("Vidéo TikTok introuvable, supprimée ou privée. Si le lien a été raccourci, il peut avoir expiré : recolle l'adresse de la vidéo depuis TikTok.", "TikTok video not found, deleted or private. For a short link, it may have expired: paste the video address again from TikTok.")
         case .verificationRequired:
             return L("TikTok exige une vérification avant de servir ce profil : ouvre la session TikTok dans les Réglages, visite tiktok.com dans la fenêtre affichée, complète la vérification (captcha) si elle apparaît, puis relance le parcours.", "TikTok requires a verification before serving this profile: open the TikTok session in Settings, browse tiktok.com in the shown window, complete the captcha if one appears, then run again.")
         case .cdnRefused:
@@ -70,13 +70,64 @@ public enum TikTokAPI {
         return name
     }
 
-    /// Adresse d'une vidéo isolée (`tiktok.com/@pseudo/video/<id>` ou
-    /// `vm.tiktok.com`). Détectée seulement pour refuser la saisie avec un
-    /// message utile : ce cas n'est pas pris en charge, et le dire vaut mieux
-    /// qu'une erreur de pseudo (« video » n'est pas un compte).
-    public static func isVideoURL(_ text: String) -> Bool {
-        text.range(of: "(?:^|//)(?:www\\.)?tiktok\\.com/@[A-Za-z0-9._]+/video/",
-                   options: .regularExpression) != nil
+    /// Une vidéo TikTok isolée, désignée par son adresse. Même modèle que
+    /// `RedditPostRef.Target` : l'adresse est analysée hors ligne, sans
+    /// réseau, et le parcours ne lit qu'elle.
+    public struct TikTokVideoRef: Hashable, Sendable {
+        /// Identifiant du post, lu dans la forme longue (`/video/<id>`).
+        /// `nil` pour un lien court de partage.
+        public let postID: String?
+        /// Pseudo de l'auteur, lu dans la forme longue.
+        public let author: String?
+        /// Adresse fournie, en forme canonique https. Un lien court reste tel
+        /// quel : la redirection du site amène à la page canonique, et c'est
+        /// la page chargée qui livre l'identifiant réel de la publication.
+        public let url: URL
+
+        public init(postID: String?, author: String?, url: URL) {
+            self.postID = postID; self.author = author; self.url = url
+        }
+
+        /// Identifiant stable de la source : l'identifiant du post quand la
+        /// forme longue le porte, le code de partage sinon. Sert de clé de
+        /// collection et de dossier — il ne doit jamais être vide.
+        public var stableID: String {
+            if let postID, !postID.isEmpty { return postID }
+            let code = url.pathComponents.filter { $0 != "/" }.first ?? ""
+            return code.isEmpty ? url.absoluteString : code
+        }
+    }
+
+    /// Lit une adresse TikTok qui désigne une seule vidéo : page longue
+    /// `tiktok.com/@pseudo/video/<id>` (le diaporama `/photo/<id>` porte la
+    /// même forme), ou lien court partagé `vm.tiktok.com/<code>`. `nil` pour
+    /// tout le reste — profil, page inconnue, autre domaine.
+    public static func videoRef(_ raw: String) -> TikTokVideoRef? {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.lowercased().hasPrefix("tt/") { value = String(value.dropFirst(3)) }
+        guard !value.isEmpty else { return nil }
+        let candidate = value.contains("://") ? value : "https://" + value
+        guard let url = URL(string: candidate), url.scheme?.lowercased() == "https",
+              url.user == nil, url.password == nil, url.port == nil || url.port == 443,
+              let host = url.host?.lowercased(),
+              host == "tiktok.com" || host == "vm.tiktok.com" || host == "vt.tiktok.com"
+                || host.hasSuffix(".tiktok.com") else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        // Forme longue : `/@pseudo/video/<id>`. L'adresse canonique écarte les
+        // paramètres décoratifs (`?lang=fr`, `is_from_webapp=1`…).
+        if parts.count >= 3, parts[0].hasPrefix("@"),
+           ["video", "photo"].contains(parts[1].lowercased()),
+           parts[2].range(of: "^[0-9]{6,30}$", options: .regularExpression) != nil {
+            let author = String(parts[0].dropFirst())
+            guard let canonical = URL(string: "https://www.tiktok.com/@\(author)/\(parts[1].lowercased())/\(parts[2])") else { return nil }
+            return TikTokVideoRef(postID: parts[2], author: author, url: canonical)
+        }
+        // Lien court de partage : un seul segment de code, alphanumérique.
+        if (host == "vm.tiktok.com" || host == "vt.tiktok.com"), parts.count == 1,
+           parts[0].range(of: "^[A-Za-z0-9]{5,32}$", options: .regularExpression) != nil {
+            return TikTokVideoRef(postID: nil, author: nil, url: url)
+        }
+        return nil
     }
 
     /// Page publique du profil : sert à résoudre le `secUid` du compte, la clé
@@ -596,6 +647,60 @@ public enum TikTokWeb {
         }
         let posts = posts(from: objects(detail, "itemList") ?? [])
         return Profile(secUid: secUid, posts: posts)
+    }
+
+    /// Une vidéo isolée lue dans sa page : les mêmes champs qu'une entrée de
+    /// liste (`id`, `desc`, `createTime`, médias), plus le pseudo de l'auteur
+    /// lu dans la page — celui du `Referer` exigé par les transferts CDN.
+    public struct TikTokVideoDetail: Sendable {
+        public let id: String
+        public let text: String
+        public let publishedAt: Date?
+        public let author: String?
+        public let media: [TikTokMedia]
+
+        public init(id: String, text: String, publishedAt: Date?, author: String?, media: [TikTokMedia]) {
+            self.id = id; self.text = text; self.publishedAt = publishedAt
+            self.author = author; self.media = media
+        }
+    }
+
+    /// Lit le HTML de la page d'une vidéo isolée. Le script d'hydratation est
+    /// le même que celui d'un profil ; la fenêtre y est `webapp.video-detail`.
+    public static func parseVideoPage(_ data: Data) throws -> TikTokVideoDetail {
+        let html = String(decoding: data, as: UTF8.self)
+        guard let start = html.range(of: #"id="__UNIVERSAL_DATA_FOR_REHYDRATION__""#),
+              let open = html[start.upperBound...].range(of: ">"),
+              let close = html[open.upperBound...].range(of: "</script>") else {
+            throw TikTokError.invalidTimeline
+        }
+        return try parseVideoDetail(String(html[open.upperBound..<close.lowerBound]))
+    }
+
+    /// Lit le JSON d'hydratation d'une page vidéo. Hors publication lisible
+    /// (vidéo supprimée ou privée, lien court expiré, vérification exigée),
+    /// TikTok livre soit un `statusCode` non nul, soit la fenêtre sans
+    /// `itemInfo` — les deux arrivent au même message explicite.
+    public static func parseVideoDetail(_ json: String) throws -> TikTokVideoDetail {
+        guard let payload = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let scope = dictionary(payload, "__DEFAULT_SCOPE__"),
+              let detail = dictionary(scope, "webapp.video-detail") else {
+            throw TikTokError.invalidTimeline
+        }
+        if number(detail, "statusCode") != 0 { throw TikTokError.videoUnavailable }
+        guard let item = dictionary(dictionary(detail, "itemInfo"), "itemStruct") else {
+            throw TikTokError.videoUnavailable
+        }
+        guard let id = text(item, "id") ?? text(item, "aweme_id"), !id.isEmpty else {
+            throw TikTokError.videoUnavailable
+        }
+        let media = mediaList(item)
+        guard !media.isEmpty else { throw TikTokError.videoUnavailable }
+        let author = text(dictionary(item, "author"), "uniqueId")
+            ?? text(dictionary(item, "author"), "unique_id")
+        return TikTokVideoDetail(id: id, text: text(item, "desc") ?? "",
+                                 publishedAt: parseDate(text(item, "createTime")),
+                                 author: author, media: media)
     }
 
     /// Une page de la liste des dossiers de favoris du compte connecté
