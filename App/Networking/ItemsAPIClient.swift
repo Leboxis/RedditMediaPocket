@@ -8,7 +8,7 @@ public enum ConfigurationAPI {
 
 /// Contrat du client, injectable dans les vues et les tests.
 public protocol ItemsAPIClientProtocol: Sendable {
-    func list(type: String? = nil, search: String? = nil, page: Int = 1, limit: Int = 20) async throws -> ItemPage
+    func list(type: String?, search: String?, page: Int, limit: Int) async throws -> ItemPage
     func get(id: Int) async throws -> Item
     func create(_ brouillon: ItemDraft) async throws -> Item
     func update(id: Int, _ brouillon: ItemDraft) async throws -> Item

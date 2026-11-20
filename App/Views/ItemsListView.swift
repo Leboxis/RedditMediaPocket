@@ -84,7 +84,7 @@ struct ItemsListView: View {
         erreur = nil
         defer { chargement = false }
         do {
-            let page = try await client.list()
+            let page = try await client.list(type: nil, search: nil, page: 1, limit: 20)
             items = page.items
         } catch is CancellationError {
             // Annulation silencieuse : la vue a disparu.
