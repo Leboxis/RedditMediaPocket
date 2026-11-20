@@ -100,4 +100,47 @@ final class RedditListingTests: XCTestCase {
         XCTAssertTrue(try RedditListing.parse(Data(empty.utf8)).isEmpty)
         XCTAssertNil(RedditListing.after(Data(empty.utf8)))
     }
+
+    /// Le listing JSON porte gallery_data + media_metadata : la galerie doit
+    /// être résolue directement (Post.galleryMedia), sans appel
+    /// /comments/<id>.json, avec l'URL signée s.u exacte (vraie extension).
+    func testGalleryResolvedInlineWithSignedURL() throws {
+        let json = """
+        {
+          "kind": "Listing",
+          "data": {
+            "after": null,
+            "children": [
+              {
+                "kind": "t3",
+                "data": {
+                  "id": "ddd444", "name": "t3_ddd444", "title": "Galerie",
+                  "permalink": "/r/pics/comments/ddd444/galerie/",
+                  "url": "https://www.reddit.com/gallery/ddd444",
+                  "created_utc": 1763600300.0, "is_video": false,
+                  "gallery_data": { "items": [ { "media_id": "m1" }, { "media_id": "m2" } ] },
+                  "media_metadata": {
+                    "m1": { "status": "valid", "m": "image/jpeg", "e": "Image",
+                             "s": { "u": "https://preview.redd.it/aaa111.jpeg?width=2000&amp;auto=webp&amp;s=xyz" } },
+                    "m2": { "status": "valid", "m": "image/jpg", "e": "Image",
+                             "s": { "u": "https://preview.redd.it/bbb222.jpg?width=1000&amp;s=abc" } }
+                  }
+                }
+              }
+            ]
+          }
+        }
+        """
+        let posts = try RedditListing.parse(Data(json.utf8))
+        XCTAssertEqual(posts.count, 1)
+        let gallery = try XCTUnwrap(posts[0].galleryMedia)
+        XCTAssertEqual(gallery.count, 2)
+        // URL signée exacte, `&amp;` conservé dans le html/img mais décodé dans
+        // les Media ; l'extension réelle (.jpeg) est préservée.
+        guard case .direct(let first) = gallery[0] else { return XCTFail() }
+        XCTAssertEqual(first.absoluteString,
+                       "https://preview.redd.it/aaa111.jpeg?width=2000&auto=webp&s=xyz")
+        // Le lien /gallery/ reste dans le html pour le repli réseau éventuel.
+        XCTAssertNotNil(GalleryFeed.linkedID(posts[0].html))
+    }
 }

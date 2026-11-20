@@ -41,12 +41,8 @@ public enum GalleryFeed {
         return components.url
     }
 
-    /// Liste ordonnée des originaux de la galerie : l'ordre vient de
-    /// `gallery_data.items`, chaque entrée est résolue par `media_metadata`
-    /// vers l'original `i.redd.it` (la source `preview.redd.it` est une copie
-    /// réduite) ou vers `v.redd.it` pour les vidéos (manifest DASH réutilisant
-    /// le pipeline `redditVideo` existant). Une galerie crosspostée porte ses
-    /// données dans `crosspost_parent_list` ; hors galerie, la liste est vide.
+    /// Liste ordonnée des médias d'une galerie à partir du JSON du post
+    /// (`/comments/<id>.json`).
     public static func parse(_ data: Data) throws -> [Media] {
         let root: Any
         do { root = try JSONSerialization.jsonObject(with: data) } catch { throw FeedError.invalidFeed }
@@ -56,9 +52,21 @@ public enum GalleryFeed {
               let child = children.first, let post = child["data"] as? [String: Any] else {
             throw FeedError.invalidFeed
         }
-        // L'entrée porteuse est le post lui-même, sinon son parent de crosspost.
-        var entry = post
-        if entry["gallery_data"] == nil, let parents = post["crosspost_parent_list"] as? [[String: Any]],
+        return media(inPost: post)
+    }
+
+    /// Médias d'un post à partir de son objet `data` (listing `.json` ou
+    /// comments JSON) : l'ordre vient de `gallery_data.items`, chaque entrée
+    /// est résolue par `media_metadata`. Les images utilisent l'URL **exacte et
+    /// signée** `s.u` (déséchappée), qui porte la vraie extension — ne jamais
+    /// reconstruire `i.redd.it/<id>.jpg` à partir du MIME : les médias récents
+    /// sont en `.jpeg`/`.png` et le `.jpg` reconstruit renvoie HTTP 404.
+    /// Les vidéos de galerie restent en `v.redd.it` (manifest DASH, pipeline
+    /// `redditVideo`). Une galerie crosspostée porte ses données dans
+    /// `crosspost_parent_list` ; hors galerie, la liste est vide.
+    public static func media(inPost entry: [String: Any]) -> [Media] {
+        var entry = entry
+        if entry["gallery_data"] == nil, let parents = entry["crosspost_parent_list"] as? [[String: Any]],
            let parent = parents.last(where: { $0["gallery_data"] != nil }) { entry = parent }
         guard let gallery = entry["gallery_data"] as? [String: Any],
               let items = gallery["items"] as? [[String: Any]],
@@ -88,23 +96,14 @@ public enum GalleryFeed {
                 if seen.insert(candidate).inserted { media.append(candidate) }
                 continue
             }
-            let ext: String
-            switch mime {
-            case "image/jpg", "image/jpeg": ext = "jpg"
-            case "image/png": ext = "png"
-            case "image/webp": ext = "webp"
-            case "image/gif": ext = "gif"
-            default: continue
-            }
-            guard let raw = source["u"] as? String ?? source["gif"] as? String,
-                  var components = URLComponents(string: raw) else { continue }
-            components.query = nil
-            guard let url = components.url, url.scheme == "https",
-                  let host = url.host?.lowercased(), ["preview.redd.it", "i.redd.it"].contains(host),
+            // Image : URL signée exacte `s.u` (ou `gif`), `&amp;` déséchappé.
+            guard let raw = (source["u"] as? String ?? source["gif"] as? String)?
+                    .replacingOccurrences(of: "&amp;", with: "&"),
+                  let url = URL(string: raw), url.scheme == "https",
+                  let host = url.host?.lowercased(),
+                  ["preview.redd.it", "external-preview.redd.it", "i.redd.it"].contains(host),
                   !url.deletingPathExtension().lastPathComponent.isEmpty else { continue }
-            let original = URL(string: "https://i.redd.it/\(url.deletingPathExtension().lastPathComponent).\(ext)")
-            guard let original else { continue }
-            let candidate: Media = .direct(original)
+            let candidate: Media = .direct(url)
             if seen.insert(candidate).inserted { media.append(candidate) }
         }
         return media

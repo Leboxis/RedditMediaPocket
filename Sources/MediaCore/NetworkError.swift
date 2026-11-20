@@ -6,6 +6,9 @@ public enum NetworkError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .refused(let code):
+            if code == 404 {
+                return L("Ressource introuvable (HTTP 404).", "Resource not found (HTTP 404).")
+            }
             return L("Accès refusé par le serveur (HTTP \(code)).", "Server denied access (HTTP \(code)).")
         case .limited(let service, _):
             return L("\(service) : limite de requêtes atteinte (HTTP 429).", "\(service): request limit reached (HTTP 429).")

@@ -10,70 +10,56 @@ import Foundation
 ///
 /// Le parseur produit les mêmes `Post` que `FeedParser` (Atom) : le `html`
 /// est synthétisé avec des `href`/`img` afin que `MediaExtractor.extract` et
-/// `GalleryFeed.linkedID` retrouvent les médias exactement comme dans un
-/// contenu RSS.
+/// `GalleryFeed.linkedID` retrouvent les médias. Quand le listing porte
+/// déjà `gallery_data` + `media_metadata`, la galerie est résolue
+/// immédiatement (`Post.galleryMedia`) : aucun appel `/comments/<id>.json`
+/// supplémentaire.
 public enum RedditListing {
-    private struct Listing: Decodable { let data: ListingData }
-    private struct ListingData: Decodable { let after: String?; let children: [Child] }
-    private struct Child: Decodable { let kind: String; let data: ChildData }
-    private struct ChildData: Decodable {
-        let id: String?
-        let name: String?
-        let title: String?
-        let permalink: String?
-        let url: String?
-        let createdUtc: Double?
-        let isVideo: Bool?
-        let media: MediaPayload?
-        let preview: PreviewPayload?
-    }
-    private struct MediaPayload: Decodable { let redditVideo: RedditVideo? }
-    private struct RedditVideo: Decodable { let fallbackUrl: String? }
-    private struct PreviewPayload: Decodable { let images: [PreviewImage]? }
-    private struct PreviewImage: Decodable { let source: PreviewSource? }
-    private struct PreviewSource: Decodable { let url: String? }
+    private static let mediaHosts = ["v.redd.it", "redgifs.com", "www.redgifs.com", "i.redd.it", "i.imgur.com"]
 
     /// Parse une listing JSON `t3_…` en posts. Lève `FeedError.invalidFeed`
     /// si le document n'est pas une listing JSON.
     public static func parse(_ data: Data) throws -> [Post] {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        guard let listing = try? decoder.decode(Listing.self, from: data) else {
+        guard let root = try? JSONSerialization.jsonObject(with: data),
+              let listing = root as? [String: Any],
+              let listingData = listing["data"] as? [String: Any],
+              let children = listingData["children"] as? [[String: Any]] else {
             throw FeedError.invalidFeed
         }
         var posts: [Post] = []
-        for child in listing.data.children where child.kind == "t3" {
-            if let post = post(from: child.data) { posts.append(post) }
+        for child in children where (child["kind"] as? String) == "t3",
+            let d = child["data"] as? [String: Any] {
+            if let post = post(from: d) { posts.append(post) }
         }
         return posts
     }
 
     /// Curseur de pagination (`data.after`) d'une listing, si présent.
     public static func after(_ data: Data) -> String? {
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return (try? decoder.decode(Listing.self, from: data))?.data.after
+        guard let root = try? JSONSerialization.jsonObject(with: data),
+              let listing = root as? [String: Any],
+              let listingData = listing["data"] as? [String: Any] else { return nil }
+        return listingData["after"] as? String
     }
 
-    private static let mediaHosts = ["v.redd.it", "redgifs.com", "www.redgifs.com", "i.redd.it", "i.imgur.com"]
-
-    private static func post(from d: ChildData) -> Post? {
-        let id = d.name ?? d.id.map { "t3_" + $0 } ?? ""
+    private static func post(from d: [String: Any]) -> Post? {
+        let id = (d["name"] as? String) ?? (d["id"] as? String).map { "t3_" + $0 } ?? ""
         guard !id.isEmpty else { return nil }
-        let link: String? = d.permalink.map {
+        let link = (d["permalink"] as? String).map {
             $0.hasPrefix("http") ? $0 : "https://www.reddit.com" + $0
         }
-        let publishedAt = d.createdUtc.map { Date(timeIntervalSince1970: $0) }
+        let publishedAt = (d["created_utc"] as? NSNumber)?.doubleValue.map { Date(timeIntervalSince1970: $0) }
 
         // HTML synthétisé : mêmes motifs (href média, href galerie, img
-        // d'aperçu) que le `content:encoded` d'un flux Atom.
+        // d'aperçu signé) que le `content:encoded` d'un flux Atom.
         var html = ""
         if let link { html += #"<a href="\#(link)"></a>"# }
         var candidates: [String] = []
-        if d.isVideo == true, let fallback = d.media?.redditVideo?.fallbackUrl {
+        if (d["is_video"] as? Bool) == true,
+           let fallback = ((d["media"] as? [String: Any])?["reddit_video"] as? [String: Any])?["fallback_url"] as? String {
             candidates.append(fallback)
         }
-        if let url = d.url { candidates.append(url) }
+        if let url = d["url"] as? String { candidates.append(url) }
         for raw in candidates {
             guard let url = URL(string: raw), url.scheme == "https", let host = url.host?.lowercased() else { continue }
             let isGallery = host.hasSuffix("reddit.com") && url.path.contains("/gallery/")
@@ -81,9 +67,15 @@ public enum RedditListing {
                 html += #"<a href="\#(raw)"></a>"#
             }
         }
-        if let preview = d.preview?.images?.first?.source?.url {
+        // Aperçu signé (preview.images[].source.url, `&amp;` déséchappé à la
+        // lecture par MediaExtractor.previewImage) : sert de miroir full-res
+        // si l'original i.redd.it est refusé.
+        if let preview = (((d["preview"] as? [String: Any])?["images"] as? [[String: Any]])?.first?["source"] as? [String: Any])?["url"] as? String {
             html += #"<img src="\#(preview)">"#
         }
-        return Post(id: id, title: d.title ?? "", html: html, publishedAt: publishedAt, link: link)
+        let gallery = GalleryFeed.media(inPost: d)
+        return Post(id: id, title: d["title"] as? String ?? "", html: html,
+                    publishedAt: publishedAt, link: link,
+                    galleryMedia: gallery.isEmpty ? nil : gallery)
     }
 }

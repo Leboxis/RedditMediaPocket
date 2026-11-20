@@ -9,8 +9,11 @@ public struct Post: Identifiable {
     public let html: String
     public let publishedAt: Date?
     public let link: String?
-    public init(id: String, title: String, html: String, publishedAt: Date? = nil, link: String? = nil) {
-        self.id = id; self.title = title; self.html = html; self.publishedAt = publishedAt; self.link = link
+    /// Médias d'une galerie déjà résolus dans le listing JSON (gallery_data +
+    /// media_metadata) : évite un appel `/comments/<id>.json` par galerie.
+    public let galleryMedia: [Media]?
+    public init(id: String, title: String, html: String, publishedAt: Date? = nil, link: String? = nil, galleryMedia: [Media]? = nil) {
+        self.id = id; self.title = title; self.html = html; self.publishedAt = publishedAt; self.link = link; self.galleryMedia = galleryMedia
     }
 }
 

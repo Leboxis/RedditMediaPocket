@@ -3403,7 +3403,10 @@ extension Notification.Name {
                                    mediaExtensions: [String: String] = [:],
                                    xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> [Download] {
         var galleryLists: [String: [Media]] = [:]
-        let candidates = posts.filter { mediaOverrides[$0.id] == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
+        // Le listing JSON porte déjà gallery_data/media_metadata : la galerie
+        // est résolue sans réseau (Post.galleryMedia) ; l'appel
+        // /comments/<id>.json n'est fait que quand le listing ne le porte pas.
+        let candidates = posts.filter { mediaOverrides[$0.id] == nil && $0.galleryMedia == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
         if !candidates.isEmpty {
             // Borné au même plafond que les transferts : une page de 100 posts
             // galerie lançait auparavant 100 requêtes simultanées vers
@@ -3444,7 +3447,7 @@ extension Notification.Name {
         for post in posts {
             var media = mediaOverrides[post.id] ?? MediaExtractor.extract(post.html)
             if media.isEmpty {
-                media = galleryLists[post.id] ?? []
+                media = post.galleryMedia ?? galleryLists[post.id] ?? []
             }
             for (index, item) in media.enumerated() {
                 guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
@@ -3923,7 +3926,7 @@ extension Notification.Name {
                     return false
                 }()
                 if genericRefusal || Self.tikTokRefusalCode(error, media: url) != nil {
-                    for candidate in mirrors + RedditCDN.previewFallbacks(for: url) where candidate != url {
+                    for candidate in mirrors + RedditCDN.fallbacks(for: url) where candidate != url {
                         LogCenter.net(L("Miroir \(candidate.host ?? "CDN")…", "Mirror \(candidate.host ?? "CDN")…"))
                         do {
                             let saved = try await network.download(candidate, headers: headers)
