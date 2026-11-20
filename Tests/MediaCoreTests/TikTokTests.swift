@@ -358,24 +358,6 @@ final class TikTokTests: XCTestCase {
         XCTAssertEqual(TimingPolicy.mediaWebView, 300)
     }
 
-    /// Charge utile du sidecar : JSON lisible (ISO 8601, clés triées) avec
-    /// les mêmes champs que le fichier local.
-    func testMediaMetadataPayload() throws {
-        let metadata = MediaMetadata(downloadedAt: Date(timeIntervalSince1970: 1_800_000_000),
-                                     postDate: Date(timeIntervalSince1970: 1_700_000_000),
-                                     author: "nasa",
-                                     postLink: "https://www.tiktok.com/@nasa/video/7301")
-        let payload = try XCTUnwrap(metadata.payloadData())
-        let text = String(decoding: payload, as: UTF8.self)
-        XCTAssertTrue(text.contains("nasa"))
-        XCTAssertTrue(text.contains("2023-11-14"))
-        // Décodage retour : la charge utile reste un MediaMetadata.
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let round = try decoder.decode(MediaMetadata.self, from: payload)
-        XCTAssertEqual(round, metadata)
-    }
-
     // MARK: - Page de la vidéo
 
     private let videoPageJSON = #"""

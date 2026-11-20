@@ -35,16 +35,6 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         } catch { return false }
     }
 
-    /// Charge utile JSON du sidecar, prête à être publiée hors de l'app
-    /// (kDrive) : dates ISO 8601 lisibles directement, décorations constantes.
-    /// Mêmes champs que le fichier local, encodés pour l'affichage.
-    public func payloadData() -> Data? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        return try? encoder.encode(self)
-    }
-
     @discardableResult public static func remove(for url: URL) -> Bool {
         (try? FileManager.default.removeItem(at: location(for: url))) != nil
     }
