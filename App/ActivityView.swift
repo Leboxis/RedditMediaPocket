@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 
 /// Onglet **Activité** : le suivi des opérations — journal de bord et journal
 /// des échecs, présentés en feuilles depuis une liste à deux entrées.
