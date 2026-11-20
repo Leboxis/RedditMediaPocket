@@ -28,7 +28,7 @@ struct LibraryView: View {
     @State private var savingToGallery = false
     @State private var gallerySaveMessage: String?
     @FocusState private var editing: Bool
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: DS.gridGap), count: 3)
 
     var body: some View {
         NavigationStack {
@@ -132,14 +132,14 @@ struct LibraryView: View {
         Group {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+                    HStack(spacing: DS.space(2)) {
                         ForEach(model.collections.sorted { $0.displayName < $1.displayName }) { collection in
                             userChip(collection)
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, DS.space(4))
                 }
-                .padding(.bottom, 10)
+                .padding(.bottom, DS.space(2))
                 .disabled(model.running)
             }
         }
@@ -162,8 +162,8 @@ struct LibraryView: View {
                 }
                 if active { Image(systemName: "checkmark") }
             }
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 11).padding(.vertical, 7)
+            .font(DS.caption)
+            .padding(.horizontal, DS.space(3)).padding(.vertical, DS.space(2))
             .frame(minHeight: 44)
             .foregroundStyle(active ? DS.onAccent : DS.onSurface)
             .background(active ? DS.accent : DS.surface, in: Capsule())
@@ -183,32 +183,36 @@ struct LibraryView: View {
 
     @ViewBuilder private var gallerySection: some View {
         if model.files.isEmpty && model.loadingFiles {
-            Spacer()
-            ProgressView(L("Chargement de la galerie…", "Loading gallery…"))
-            Spacer()
+            // Skeleton plutôt que spinner : le chargement de la galerie peut
+            // dépasser 1 s sur une grosse bibliothèque.
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: DS.gridGap) {
+                    ForEach(0..<12, id: \.self) { _ in
+                        DS.surface
+                            .aspectRatio(1, contentMode: .fit)
+                            .redacted(reason: .placeholder)
+                    }
+                }
+            }
         } else if model.files.isEmpty {
-            Spacer()
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(DS.onSurfaceMuted)
-                .accessibilityLabel(L("Galerie vide", "Empty gallery"))
-            Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source dans l'onglet Nouveau", "Choose a source in the New tab"))
-                .font(.footnote).foregroundStyle(DS.onSurfaceMuted).padding(.top, 6)
-            Spacer()
+            ContentUnavailableView {
+                Label(L("Galerie vide", "Empty gallery"), systemImage: "photo.on.rectangle.angled")
+            } description: {
+                Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source dans l'onglet Nouveau", "Choose a source in the New tab"))
+            } actions: {
+                Button(L("Choisir une source", "Choose a source")) { goToDownload() }
+                    .buttonStyle(.borderedProminent)
+            }
         } else {
             galleryToolbar
             if selectingMedia {
                 selectionBar
             }
             if model.displayedFiles.isEmpty {
-                Spacer()
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.system(size: 34, weight: .ultraLight)).foregroundStyle(DS.onSurfaceMuted)
-                Text(L("Aucun média ne correspond à la recherche.", "No media matches the search."))
-                    .font(.footnote).foregroundStyle(DS.onSurfaceMuted).padding(.top, 6)
-                Spacer()
+                ContentUnavailableView.search(text: model.gallerySearch)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 3) {
+                    LazyVGrid(columns: columns, spacing: DS.gridGap) {
                         ForEach(model.displayedFiles, id: \.self) { url in
                             thumbnailButton(url)
                         }
@@ -312,11 +316,12 @@ struct LibraryView: View {
             .accessibilityLabel(L("Quitter la sélection", "Exit selection"))
         }
         .font(.system(size: 17, weight: .semibold))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(DS.surface, in: Capsule())
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .padding(.horizontal, DS.space(3))
+        .padding(.vertical, DS.space(2))
+        .background(DS.surfaceElevated, in: Capsule())
+        .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
+        .padding(.horizontal, DS.space(4))
+        .padding(.bottom, DS.space(2))
     }
 
     /// Recherche, tri et filtre rapide de la galerie. Ces réglages ne changent
@@ -369,4 +374,9 @@ struct LibraryView: View {
 #Preview("Bibliothèque — sombre") {
     LibraryView(model: Downloader(), goToDownload: {})
         .preferredColorScheme(.dark)
+}
+
+#Preview("Bibliothèque — texte accessibility XXL") {
+    LibraryView(model: Downloader(), goToDownload: {})
+        .dynamicTypeSize(.accessibility3)
 }

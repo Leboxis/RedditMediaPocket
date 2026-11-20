@@ -34,6 +34,9 @@ enum DS {
     static let radiusM: CGFloat = 12
     static let radiusL: CGFloat = 20
 
+    /// Gouttière de la grille de médias plein cadre (galerie).
+    static let gridGap: CGFloat = 2
+
     // MARK: - Élévation (cartes / sheets uniquement)
 
     static let shadowColor = Color.black

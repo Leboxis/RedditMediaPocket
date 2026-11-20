@@ -48,7 +48,7 @@ struct MediaThumbnail: View {
     @State private var loaded = false
 
     var body: some View {
-        Color(uiColor: .secondarySystemBackground)
+        DS.surface
             .aspectRatio(1, contentMode: .fit)
             .overlay {
                 GeometryReader { geometry in
@@ -58,7 +58,7 @@ struct MediaThumbnail: View {
                     } else {
                         ZStack {
                             if loaded {
-                                Image(systemName: isVideo(url) ? "video" : "photo").foregroundStyle(.secondary)
+                                Image(systemName: isVideo(url) ? "video" : "photo").foregroundStyle(DS.onSurfaceMuted)
                             } else { ProgressView().controlSize(.small) }
                         }.frame(width: geometry.size.width, height: geometry.size.height)
                     }
