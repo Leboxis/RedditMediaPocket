@@ -2045,7 +2045,7 @@ extension Notification.Name {
         // d'hydratation (vérification silencieuse, variante mobile), même
         // avec les cookies de la session. La WebView fait ce que fait la
         // page elle-même : charger, exécuter, servir son propre JSON.
-        let detail: TikTokAPI.TikTokVideoDetail
+        let detail: TikTokWeb.TikTokVideoDetail
         do {
             let headers = TikTokAPI.headers(referer: ref.url)
             detail = try TikTokWeb.parseVideoPage(try await network.data(ref.url, headers: headers))
