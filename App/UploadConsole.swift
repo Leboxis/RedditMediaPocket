@@ -95,18 +95,20 @@ struct UploadActionButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button(role: destructive ? .destructive : nil, action: action) {
-            HStack(spacing: DS.space(2)) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                }
-                Text(title)
+        let label = HStack(spacing: DS.space(2)) {
+            if let systemImage {
+                Image(systemName: systemImage)
             }
-            .font(DS.headline)
-            .frame(maxWidth: .infinity, minHeight: 48)
+            Text(title)
         }
-        .buttonStyle(prominent ? .borderedProminent : .bordered)
-        .tint(prominent ? DS.accent : (destructive ? DS.error : DS.accent))
-        .controlSize(.large)
+        .font(DS.headline)
+        .frame(maxWidth: .infinity, minHeight: 48)
+
+        let button = Button(role: destructive ? .destructive : nil, action: action) { label }
+        if prominent {
+            button.buttonStyle(.borderedProminent).tint(DS.accent)
+        } else {
+            button.buttonStyle(.bordered).tint(destructive ? DS.error : DS.accent)
+        }
     }
 }
