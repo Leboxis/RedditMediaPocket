@@ -4,8 +4,17 @@ import MediaCore
 @main @MainActor struct RedditMediaPocketApp: App {
     @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
+    /// 2 = nouvelle interface, 1 = celle d'avant la refonte. Lu ici, une seule
+    /// fois : c'est ce qui permet au basculement de repeindre l'app sans relance.
+    @AppStorage(Theme.revisionKey) private var uiRevision = Theme.defaultRevision
     init() { AppLanguage.initialize(); LegacyBackgroundCleanup.shared.runIfNeeded() }
-    var body: some Scene { WindowGroup { ContentView().environment(\.locale, Locale(identifier: language)) } }
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(\.locale, Locale(identifier: language))
+                .environment(\.theme, Theme.resolved(revision: uiRevision))
+        }
+    }
 }
 
 private struct Selection: Identifiable {
@@ -42,19 +51,109 @@ struct ContentView: View {
     @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 3), count: 3)
 
+    @Environment(\.theme) private var theme
+
+    /// La mise en page classique, extraite telle quelle : aucune valeur n'a
+    /// changé, seul son emplacement change. C'est le point de bascule entre les
+    /// deux révisions.
+    private var classicMainScreen: some View {
+        VStack(spacing: 0) {
+            inputRow
+            optionsRow
+            sourceHintRow
+            userChipsRow
+            metricsRow
+            transferBarRow
+            statusRow
+            incompleteBanner
+            gallerySection
+        }
+    }
+
+    /// Le point de bascule unique : tout le reste de l'écran est partagé.
+    @ViewBuilder private var mainScreen: some View {
+        if theme.usesFloatingToolbar {
+            modernMainScreen
+        } else {
+            classicMainScreen
+        }
+    }
+
+    private var modernMainScreen: some View {
+        VStack(spacing: 0) {
+            modernComposer
+            optionsRow
+            sourceHintRow
+            userChipsRow
+            metricsRow
+            transferBarRow
+            statusRow
+            incompleteBanner
+            gallerySection
+        }
+    }
+
+    /// Composeur : source, saisie et action principale sur une seule surface.
+    /// Le champ n'a plus de fond propre — c'est la carte qui porte la forme.
+    private var modernComposer: some View {
+        HStack(spacing: 10) {
+            SourceKindButton(kind: SourceKind(rawValue: model.sourceKind) ?? .user) {
+                guard !model.running else { return }
+                sourceGridPresented = true
+            }
+            TextField(L("pseudo, lien ou compte", "username, link or account"), text: $model.username)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .focused($editing)
+                .disabled(model.running)
+                .onSubmit { start() }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .background(theme.background, in: RoundedRectangle(cornerRadius: theme.cornerField))
+            actionPill
+        }
+        .padding(10)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: theme.cornerCard))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+    }
+
+    /// Action principale, avec son libellé : une flèche seule ne dit pas ce qui
+    /// va se passer. La pastille d'état reste en coin, comme avant.
+    private var actionPill: some View {
+        Button {
+            if model.running { model.stop() } else { start() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: model.running ? "stop.fill" : "arrow.down")
+                    .font(.system(size: 14, weight: .bold))
+                    .accessibilityHidden(true)
+                Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
+                    .font(.headline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(theme.accent, in: Capsule())
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(model.running ? Color.green : Color.red)
+                    .frame(width: 9, height: 9)
+                    .overlay(Circle().stroke(theme.surface, lineWidth: 2))
+                    .offset(x: 2, y: -2)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(cannotStart)
+        .accessibilityLabel(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                inputRow
-                optionsRow
-                sourceHintRow
-                userChipsRow
-                metricsRow
-                transferBarRow
-                statusRow
-                incompleteBanner
-                gallerySection
-            }
+            mainScreen
             // Transition l\u{e9}g\u{e8}re entre les options d'une source et celles d'une
             // autre ; aucune animation si R\u{e9}duire les animations est actif.
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.sourceKind)
@@ -880,9 +979,22 @@ private struct DownloadSettings: View {
     @State private var confirmDeleteAll = false
     @State private var diagnosticsPresented = false
     @Environment(\.dismiss) private var dismiss
+    /// Même clé que la racine : la modifier ici repeint l'app immédiatement,
+    /// puisque le thème est réinjecté depuis `RedditMediaPocketApp`.
+    @AppStorage(Theme.revisionKey) private var uiRevision = Theme.defaultRevision
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Toggle(L("Nouvelle interface", "New interface"), isOn: Binding(
+                        get: { uiRevision >= Theme.defaultRevision },
+                        set: { uiRevision = $0 ? Theme.defaultRevision : 1 }
+                    ))
+                } header: {
+                    Text(L("Apparence", "Appearance"))
+                } footer: {
+                    Text(L("Reviens à l'ancien affichage à tout moment ; le changement s'applique sans relancer l'app.", "Switch back to the previous look at any time; the change applies without relaunching."))
+                }
                 Section {
                     Picker(L("Langue", "Language"), selection: $language) {
                         Text("Français").tag("fr")
