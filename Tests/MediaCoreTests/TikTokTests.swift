@@ -341,11 +341,11 @@ final class TikTokTests: XCTestCase {
     /// expiré), `statusCode` non nul comme fenêtre sans `itemStruct`
     /// arrivent au même message — jamais une erreur de fil générique.
     func testParseVideoPageRejectsUnavailableVideo() {
-        let statusCode = #{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":10216}}}
+        let statusCode = #"{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":10216}}}"#
         XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(statusCode)) { error in
             XCTAssertEqual(error as? TikTokError, .videoUnavailable)
         }
-        let emptyItemInfo = #{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{}}}}
+        let emptyItemInfo = #"{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{}}}}"#
         XCTAssertThrowsError(try TikTokAPI.parseVideoDetail(emptyItemInfo)) { error in
             XCTAssertEqual(error as? TikTokError, .videoUnavailable)
         }
