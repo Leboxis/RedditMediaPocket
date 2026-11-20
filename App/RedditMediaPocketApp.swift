@@ -668,10 +668,8 @@ struct ContentView: View {
 }
 
 /// Source : face, libellé parlé et session requise — partagés par la
-/// pastille et la feuille-grille. Les deux entrées TikTok sont
-/// volontairement différenciées : compte public (`tt`, icône note de
-/// musique) et sauvegardés du compte connecté (`ts`, icône marque-page),
-/// avec des micro-libellés distincts.
+/// pastille et la feuille-grille. Les deux entrées TikTok partagent la marque
+/// du service et ne se distinguent que par leur micro-libellé.
 private enum SourceSelection {
     static let order: [SourceKind] = [.user, .subreddit, .redGifs, .saved,
                                       .xFetish, .twitter, .tiktok, .tiktokSaved, .instagram]
@@ -701,6 +699,22 @@ private enum SourceSelection {
         case .tiktok: return "music.note"
         case .tiktokSaved: return "bookmark.fill"
         case .instagram: return "camera"
+        }
+    }
+
+    /// Marque officielle du service, quand il en existe une.
+    ///
+    /// `nil` pour RedGifs et X-Fetish : aucun logo public exploitable, la carte
+    /// garde alors son symbole système. Les sauvegardés Reddit (`♥`) gardent
+    /// aussi leur cœur : trois fois la même tête de Reddit dans une grille de
+    /// neuf se lirait comme un défaut d'affichage.
+    static func mark(_ kind: SourceKind) -> SourceMark? {
+        switch kind {
+        case .user, .subreddit: return .reddit
+        case .twitter: return .x
+        case .tiktok, .tiktokSaved: return .tiktok
+        case .instagram: return .instagram
+        case .redGifs, .saved, .xFetish: return nil
         }
     }
 
@@ -809,8 +823,7 @@ private struct SourceGridCard: View {
         Button(action: pick) {
             VStack(spacing: 6) {
                 HStack(spacing: 4) {
-                    Image(systemName: SourceSelection.icon(kind))
-                        .font(.system(size: 20, weight: .semibold))
+                    glyph
                     if sessionMissing {
                         Circle().fill(.orange).frame(width: 7, height: 7)
                             .offset(x: 4, y: -6)
@@ -836,6 +849,20 @@ private struct SourceGridCard: View {
         .buttonStyle(.plain)
         .accessibilityLabel(SourceSelection.spoken(kind))
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+    }
+
+    /// Marque officielle quand le service en a une, symbole système sinon.
+    /// La hauteur est fixée dans les deux cas pour que les cartes d'une même
+    /// rangée restent alignées, quel que soit le glyphe.
+    @ViewBuilder private var glyph: some View {
+        if let mark = SourceSelection.mark(kind) {
+            SourceMarkView(mark: mark, tint: isCurrent ? .orange : .primary, size: 22)
+                .frame(height: 24)
+        } else {
+            Image(systemName: SourceSelection.icon(kind))
+                .font(.system(size: 20, weight: .semibold))
+                .frame(height: 24)
+        }
     }
 }
 
