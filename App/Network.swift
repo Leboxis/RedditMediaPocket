@@ -78,6 +78,14 @@ import MediaCore
                 request.setValue(value, forHTTPHeaderField: field)
             }
         }
+        // Reddit : `/user/<pseudo>/submitted.json` passe avec UA + Cookie, mais
+        // `/r/<sub>/<tri>.json` répond « blocked by network security » (403)
+        // sans les en-têtes d'un `fetch` du site. `headers` fourni par l'appelant
+        // garde la priorité (ajouté plus bas).
+        let provided = Set((headers ?? [:]).keys.map { $0.lowercased() })
+        for (field, value) in RedditListingHeaders.forListing(url) where !provided.contains(field.lowercased()) {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
         if let cookie = await RedditSession.shared.cookieHeader(for: url) { request.setValue(cookie, forHTTPHeaderField: "Cookie") }
         // La session X est distincte de la Reddit : `RedditCookiePolicy` refuse
         // x.com, il faut donc demander son en-tête à `XSession`. Les deux
