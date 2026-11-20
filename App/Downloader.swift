@@ -2040,22 +2040,46 @@ extension Notification.Name {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
         try Task.checkCancellation()
-        // Requête directe d'abord (rapide), puis repli WebView cachée :
-        // TikTok tient parfois à une URLSession un squelette sans JSON
-        // d'hydratation (vérification silencieuse, variante mobile), même
-        // avec les cookies de la session. La WebView fait ce que fait la
-        // page elle-même : charger, exécuter, servir son propre JSON.
+        // Résolution en cascade : URLSession directe avec l'UA desktop, puis
+        // WebView cachée branchée sur la session TikTok (présentée desktop,
+        // puis à l'UA iPhone). TikTok tient parfois à chaque client un
+        // squelette sans JSON d'hydratation (vérification silencieuse,
+        // variante mobile de la page) : la WebView fait ce que fait la page
+        // elle-même — charger, exécuter, servir son propre JSON. L'UA qui a
+        // obtenu la page sert aussi au transfert des médias : les URL CDN
+        // n'acceptent que l'UA qui les a obtenues.
+        var pageAgent = TikTokAPI.desktopUserAgent
         let detail: TikTokWeb.TikTokVideoDetail
         do {
-            let headers = TikTokAPI.headers(referer: ref.url)
+            let headers = TikTokAPI.headers(referer: ref.url, browserAgent: pageAgent)
             detail = try TikTokWeb.parseVideoPage(try await network.data(ref.url, headers: headers))
         } catch {
             LogCenter.info(L("TikTok : page vidéo illisible en direct, relecture dans la WebView cachée.",
                              "TikTok: video page unreadable directly, re-reading it in the hidden WebView."))
-            guard let data = await TikTokVideoPageReader().read(ref.url),
-                  let fallback = try? TikTokWeb.parseVideoDetail(String(decoding: data, as: UTF8.self)) else {
-                throw error
+            var fallbackError = error
+            var resolved: TikTokWeb.TikTokVideoDetail?
+            for desktop in [true, false] {
+                guard let data = await TikTokVideoPageReader().read(ref.url, desktopUserAgent: desktop) else {
+                    LogCenter.info(L(desktop ? "TikTok : WebView desktop sans JSON d'hydratation, essai suivant."
+                                             : "TikTok : WebView mobile sans JSON d'hydratation, essai suivant.",
+                                     desktop ? "TikTok: desktop WebView without hydration JSON, trying next."
+                                             : "TikTok: mobile WebView without hydration JSON, trying next."))
+                    continue
+                }
+                do {
+                    resolved = try TikTokWeb.parseVideoDetail(String(decoding: data, as: UTF8.self))
+                    if !desktop { pageAgent = TikTokAPI.userAgent }
+                    break
+                } catch {
+                    // Un échec de parsing reste la meilleure erreur disponible
+                    // (vidéo supprimée, fil tronqué) : le reporter de préférence
+                    // à celui, plus générique, de la tentative directe.
+                    fallbackError = error
+                    LogCenter.info(L("TikTok : JSON d'hydratation de la WebView illisible, essai suivant.",
+                                     "TikTok: hydration JSON from the WebView unreadable, trying next."))
+                }
             }
+            guard let fallback = resolved else { throw fallbackError }
             detail = fallback
         }
         await TikTokSession.shared.recordAPIAcceptance(true)
@@ -2071,9 +2095,10 @@ extension Notification.Name {
             let id = media.storageKey
             mediaOverrides[id] = [.direct(media.url)]
             // Anti-hotlink : `Referer` sur la page de la publication, UA du
-            // client qui a obtenu l'URL — la même règle que `runTikTok`.
-            mediaHeadersByMedia[id] = postPage.map { TikTokAPI.mediaHeaders(referer: $0) }
-                ?? TikTokAPI.mediaHeaders()
+            // client qui a obtenu l'URL (`pageAgent`) — la même règle que
+            // `runTikTok`.
+            mediaHeadersByMedia[id] = postPage.map { TikTokAPI.mediaHeaders(referer: $0, browserAgent: pageAgent) }
+                ?? TikTokAPI.mediaHeaders(browserAgent: pageAgent)
             mediaMirrorsByMedia[id] = media.mirrors
             if media.kind == .video { mediaExtensions[id] = "mp4" }
             posts.append(Post(id: id, title: detail.text, html: "",
