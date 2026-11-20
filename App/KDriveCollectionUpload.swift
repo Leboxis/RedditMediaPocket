@@ -95,10 +95,10 @@ private struct KDriveCollectionUploadFlow: View {
                             .font(.headline)
                         Text(targetFolderName)
                             .font(.subheadline.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Analyse des médias déjà présents…", "Scanning media already present…"))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                         Spacer()
                     }
                     .frame(maxWidth: .infinity)
@@ -111,13 +111,13 @@ private struct KDriveCollectionUploadFlow: View {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 44))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(DS.accentEmphasis)
                         Spacer()
                         Button(L("Réessayer", "Retry")) {
                             prepareCollectionFolder()
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(.orange)
+                        .tint(DS.accent)
                         Button(L("Annuler", "Cancel")) { dismiss() }
                             .padding(.bottom)
                     }
@@ -1044,26 +1044,26 @@ private struct KDriveContinuousUploadSheet: View {
                 if uploader.finished {
                     Image(systemName: uploader.wasCancelled ? "xmark.circle.fill" : (uploader.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
                         .font(.system(size: 54))
-                        .foregroundStyle(uploader.wasCancelled ? .orange : (uploader.failedCount == 0 ? .green : .orange))
+                        .foregroundStyle(uploader.wasCancelled ? DS.accentEmphasis : (uploader.failedCount == 0 ? DS.accentEmphasis : DS.error))
 
                     Text(uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (uploader.failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
                         .font(.headline)
 
                     Text(L("\(uploader.successCount) média(s) envoyé(s) vers « \(lot.directoryName) ».", "\(uploader.successCount) media file(s) uploaded to “\(lot.directoryName)”."))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                         .multilineTextAlignment(.center)
 
                     if lot.skippedCount > 0 {
                         Text(L("\(lot.skippedCount) déjà présent(s), ignoré(s).", "\(lot.skippedCount) already present, skipped."))
                             .font(.subheadline)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(DS.accentEmphasis)
                     }
 
                     if deletedCount > 0 || deleteFailures > 0 {
                         Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
                             .font(.subheadline)
-                            .foregroundStyle(deleteFailures > 0 ? .orange : .green)
+                            .foregroundStyle(deleteFailures > 0 ? DS.error : DS.accentEmphasis)
                             .multilineTextAlignment(.center)
                     } else if !uploader.uploadedFileURLs.isEmpty {
                         Button {
@@ -1072,7 +1072,7 @@ private struct KDriveContinuousUploadSheet: View {
                             Label(L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
-                        .tint(.red)
+                        .tint(DS.error)
                     }
 
                     if !alreadyOnDriveURLs.isEmpty {
@@ -1082,7 +1082,7 @@ private struct KDriveContinuousUploadSheet: View {
                             Label(L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive"), systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
-                        .tint(.red)
+                        .tint(DS.error)
                     }
                 } else {
                     ProgressView(value: uploader.progress)
@@ -1091,67 +1091,67 @@ private struct KDriveContinuousUploadSheet: View {
 
                     Image(systemName: "icloud.and.arrow.up.fill")
                         .font(.system(size: 44))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(DS.accentEmphasis)
 
                     Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
                         .font(.headline)
 
                     Text(L("\(uploader.completedCount) sur \(max(1, uploader.totalCount)) terminé(s)", "\(uploader.completedCount) of \(max(1, uploader.totalCount)) completed"))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
 
                     if uploader.activeUploadCount > 0 {
                         Text(L("\(uploader.activeUploadCount) envoi(s) en cours sur \(uploader.activeLimit)", "\(uploader.activeUploadCount) upload(s) in progress of \(uploader.activeLimit)"))
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                     }
 
                     if uploader.totalBytes > 0 {
                         Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
                             .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                     }
 
                     if lot.skippedCount > 0 {
                         Text(L("\(lot.skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(lot.skippedCount) already on the Drive, skipped."))
                             .font(.subheadline)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(DS.accentEmphasis)
                     }
 
                     Text(L("Jusqu’à \(uploader.activeLimit) uploads restent actifs en continu.", "Up to \(uploader.activeLimit) uploads stay active continuously."))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
 
                     Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
+                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? DS.accentEmphasis : DS.onSurfaceMuted)
 
                     if paceInfoSecondsRemaining > 0 {
                         let eta = paceInfoSecondsRemaining >= 60 ? "\(paceInfoSecondsRemaining / 60) min" : "\(paceInfoSecondsRemaining) s"
                         Text(L("Reste ≈ \(uploader.totalCount - uploader.completedCount) envoi(s) — ≈ \(eta) au plafond API", "\(uploader.totalCount - uploader.completedCount) upload(s) left — ≈ \(eta) at the API cap"))
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                     }
 
                     if rateLimit.nextSlotDelay > 3 {
                         Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(DS.accentEmphasis)
                     }
 
                     if !uploader.lastCompletedFileName.isEmpty {
                         Text(uploader.lastCompletedFileName)
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .padding(.horizontal)
                     }
                     }
                     }
-                    .padding(.vertical, 12)
+                    .padding(.vertical, DS.space(3))
                     .frame(maxWidth: .infinity)
                 }
 
@@ -1162,7 +1162,7 @@ private struct KDriveContinuousUploadSheet: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(DS.accent)
                 .padding(.horizontal)
                 .padding(.bottom)
 
@@ -1290,10 +1290,10 @@ struct KDriveUploadBanner: View {
                     Text(L("Envoi kDrive… \(uploader.completedCount)/\(max(1, uploader.totalCount))", "kDrive upload… \(uploader.completedCount)/\(max(1, uploader.totalCount))"))
                         .font(.caption.monospacedDigit())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, DS.space(3))
+                .padding(.vertical, DS.space(2))
                 .background(.regularMaterial, in: Capsule())
-                .overlay(Capsule().strokeBorder(.orange.opacity(0.4)))
+                .overlay(Capsule().strokeBorder(DS.accent.opacity(0.4)))
             }
             .buttonStyle(.plain)
             .sheet(isPresented: $presented) {

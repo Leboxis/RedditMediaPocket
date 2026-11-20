@@ -240,9 +240,9 @@ struct LibraryView: View {
                     if selectingMedia {
                         Image(systemName: picked ? "checkmark.circle.fill" : "circle")
                             .font(.system(size: 19, weight: .semibold))
-                            .foregroundStyle(picked ? DS.accent : Color.white)
-                            .shadow(color: .black.opacity(0.5), radius: 2)
-                            .padding(6)
+                            .foregroundStyle(picked ? DS.accent : DS.onSurface)
+                            .shadow(color: DS.shadowColor.opacity(0.5), radius: 2)
+                            .padding(DS.space(2))
                     }
                 }
                 .contentShape(Rectangle())

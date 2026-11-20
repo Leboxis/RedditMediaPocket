@@ -68,7 +68,7 @@ struct ActivityView: View {
                 .foregroundStyle(DS.onSurfaceMuted)
                 .accessibilityHidden(true)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, DS.space(1))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title) : \(detail)")
     }

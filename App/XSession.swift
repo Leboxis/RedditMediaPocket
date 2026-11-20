@@ -154,8 +154,8 @@ struct XLogin: View {
                     .buttonStyle(.bordered)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, DS.space(3))
+                .padding(.vertical, DS.space(2))
                 .background(.bar)
             }
             .navigationTitle(session.statusText)

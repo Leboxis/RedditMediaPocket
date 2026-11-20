@@ -134,7 +134,7 @@ struct SourceMarkShape: Shape {
 /// carte qui la contient, jamais par le glyphe seul.
 struct SourceMarkView: View {
     let mark: SourceMark
-    var tint: Color = .primary
+    var tint: Color = DS.onSurface
     var size: CGFloat = 22
 
     var body: some View {

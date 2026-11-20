@@ -35,7 +35,7 @@ struct ContentView: View {
         }
         .tint(DS.accent)
         .overlay(alignment: .top) {
-            KDriveUploadBanner().padding(.top, 8)
+            KDriveUploadBanner().padding(.top, DS.space(2))
         }
         .onChange(of: scenePhase) { phase in
             if phase == .active { model.reload() }

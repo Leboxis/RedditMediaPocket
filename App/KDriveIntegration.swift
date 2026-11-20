@@ -780,7 +780,7 @@ struct KDriveSettingsSection: View {
                     Spacer()
                     Text("ID: \(directoryId)")
                         .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                 }
             }
             .disabled(!configured)
@@ -799,26 +799,26 @@ struct KDriveSettingsSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Label(L("kDrive limité (rate limit actif)", "kDrive rate-limited"), systemImage: "hourglass")
                         .font(.footnote)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(DS.accentEmphasis)
                     Text(L("Reprise estimée : \(until.formatted(date: .omitted, time: .standard))", "Estimated resume: \(until.formatted(date: .omitted, time: .standard))"))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                 }
             } else {
                 Label(L("kDrive opérationnel (aucun rate limit)", "kDrive operational (no rate limit)"), systemImage: "checkmark.circle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(DS.accentEmphasis)
             }
             Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requêtes/min (limite officielle, abonnement 6 To inclus)", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requests/min (official limit, 6 TB plan included)"))
                 .font(.caption2.monospacedDigit())
-                .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? .orange : .secondary)
+                .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? DS.accentEmphasis : DS.onSurfaceMuted)
 
             if let status = connectionStatus {
                 switch status {
                 case .success(let name):
                     Label(L("Connecté : \(name)", "Connected: \(name)"), systemImage: "checkmark.circle.fill")
                         .font(.footnote)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(DS.accentEmphasis)
                 }
             }
         } header: {
@@ -905,7 +905,7 @@ struct KDriveFolderPickerView: View {
                             if index > 0 {
                                 Image(systemName: "chevron.right")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(DS.onSurfaceMuted)
                             }
                             Button(node.name) { navigateToBreadcrumb(at: index) }
                                 .font(index == pathStack.count - 1 ? .subheadline.bold() : .subheadline)
@@ -929,7 +929,7 @@ struct KDriveFolderPickerView: View {
 
                 if folders.isEmpty {
                     Text(L("Aucun sous-dossier ici.", "No subfolders here."))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                 } else {
                     ForEach(folders) { folder in
                         Button { enterFolder(folder) } label: {
@@ -938,7 +938,7 @@ struct KDriveFolderPickerView: View {
                                 Spacer()
                                 Image(systemName: "chevron.right")
                                     .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(DS.onSurfaceMuted)
                             }
                         }
                     }
@@ -978,10 +978,10 @@ struct KDriveFolderPickerView: View {
                      : L("Envoyer ici : « \(currentFolder.name) »", "Upload here: “\(currentFolder.name)”"))
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, DS.space(3))
             }
             .buttonStyle(.borderedProminent)
-            .tint(.orange)
+            .tint(DS.accent)
             .padding()
             .background(.bar)
         }
@@ -1129,20 +1129,20 @@ struct KDriveUploadSheet: View {
                 if finished {
                     Image(systemName: service.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
                         .font(.system(size: 54))
-                        .foregroundStyle(service.wasCancelled ? .orange : (failedCount == 0 ? .green : .orange))
+                        .foregroundStyle(service.wasCancelled ? DS.accentEmphasis : (failedCount == 0 ? DS.accentEmphasis : DS.error))
 
                     Text(service.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
                         .font(.headline)
 
                     Text(L("\(successCount) média(s) envoyé(s) vers « \(directoryName) ».", "\(successCount) media file(s) uploaded to “\(directoryName)”."))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                         .multilineTextAlignment(.center)
 
                     if deletedCount > 0 || deleteFailures > 0 {
                         Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
                             .font(.subheadline)
-                            .foregroundStyle(deleteFailures > 0 ? .orange : .green)
+                            .foregroundStyle(deleteFailures > 0 ? DS.error : DS.accentEmphasis)
                             .multilineTextAlignment(.center)
                     } else if !service.uploadedFileURLs.isEmpty {
                         Button {
@@ -1151,7 +1151,7 @@ struct KDriveUploadSheet: View {
                             Label(L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
-                        .tint(.red)
+                        .tint(DS.error)
                     }
                 } else {
                     ProgressView(value: service.currentProgress)
@@ -1160,38 +1160,38 @@ struct KDriveUploadSheet: View {
 
                     Image(systemName: "icloud.and.arrow.up.fill")
                         .font(.system(size: 44))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(DS.accentEmphasis)
 
                     Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
                         .font(.headline)
                     Text(L("\(service.currentFileIndex) sur \(max(1, service.totalFilesCount)) terminé(s)", "\(service.currentFileIndex) of \(max(1, service.totalFilesCount)) completed"))
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                     Text(L("Jusqu’à \(KDriveService.concurrentUploadLimit) fichiers sont envoyés simultanément.", "Up to \(KDriveService.concurrentUploadLimit) files are uploaded simultaneously."))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                         .multilineTextAlignment(.center)
 
                     Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? .orange : .secondary)
+                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? DS.accentEmphasis : DS.onSurfaceMuted)
 
                     if rateLimit.nextSlotDelay > 3 {
                         Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
                             .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(DS.accentEmphasis)
                     }
                     if !service.currentFileName.isEmpty {
                         Text(service.currentFileName)
                             .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(DS.onSurfaceMuted)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .padding(.horizontal)
                     }
                     }
                     }
-                    .padding(.vertical, 12)
+                    .padding(.vertical, DS.space(3))
                     .frame(maxWidth: .infinity)
                 }
 
@@ -1206,7 +1206,7 @@ struct KDriveUploadSheet: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(finished ? .orange : .red)
+                .tint(finished ? DS.accent : DS.error)
                 .padding(.horizontal)
                 .padding(.bottom)
             }

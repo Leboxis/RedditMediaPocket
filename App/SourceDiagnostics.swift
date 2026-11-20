@@ -150,25 +150,25 @@ private struct DiagnosticRow: View {
         HStack {
             switch check.state {
             case .pending:
-                Image(systemName: "circle.dotted").foregroundStyle(.secondary)
+                Image(systemName: "circle.dotted").foregroundStyle(DS.onSurfaceMuted)
             case .running:
                 ProgressView()
             case .ok:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accentEmphasis)
             case .fail:
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+                Image(systemName: "xmark.circle.fill").foregroundStyle(DS.error)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(check.title)
                     .font(.callout.weight(.medium))
                 switch check.state {
-                case .pending: Text(L("En attente.", "Pending.")).font(.caption).foregroundStyle(.secondary)
-                case .running: Text(L("Sonde en cours…", "Probing…")).font(.caption).foregroundStyle(.secondary)
-                case .ok(let message): Text(message).font(.caption).foregroundStyle(.green)
-                case .fail(let message): Text(message).font(.caption).foregroundStyle(.red)
+                case .pending: Text(L("En attente.", "Pending.")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
+                case .running: Text(L("Sonde en cours…", "Probing…")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
+                case .ok(let message): Text(message).font(.caption).foregroundStyle(DS.accentEmphasis)
+                case .fail(let message): Text(message).font(.caption).foregroundStyle(DS.error)
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.space(1))
     }
 }

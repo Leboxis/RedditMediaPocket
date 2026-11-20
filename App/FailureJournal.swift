@@ -101,9 +101,9 @@ struct FailureJournalButton: View {
                     if !journal.entries.isEmpty {
                         Text(String(journal.entries.count))
                             .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white)
-                            .padding(3)
-                            .background(Circle().fill(.red))
+                            .foregroundStyle(DS.onAccent)
+                            .padding(DS.space(1))
+                            .background(Circle().fill(DS.error))
                             .offset(x: 7, y: -7)
                     }
                 }
@@ -181,11 +181,11 @@ private struct FailureRow: View {
                 .lineLimit(1)
             Text(entry.collectionID)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DS.onSurfaceMuted)
             HStack {
                 Text(entry.error)
                     .font(.caption2)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DS.error)
                     .lineLimit(2)
                 Spacer()
                 if entry.sourceURL != nil {
@@ -197,10 +197,10 @@ private struct FailureRow: View {
                 } else {
                     Text(L("Nouvel essai par relance de la collection", "Retry by rescanning the collection"))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.onSurfaceMuted)
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.space(1))
     }
 }

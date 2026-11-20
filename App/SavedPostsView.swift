@@ -150,39 +150,39 @@ struct SavedPostsView: View {
                 if !session.hasSession {
                     VStack(spacing: 12) {
                         Image(systemName: "bookmark.badge.questionmark")
-                            .font(.system(size: 40)).foregroundStyle(.tertiary)
+                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Connecte-toi à Reddit dans les Réglages pour voir tes posts sauvegardés.",
                                "Sign in to Reddit in Settings to see your saved posts."))
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(24)
+                    .padding(DS.space(6))
                 } else if loading || (posts == nil && errorMessage == nil) {
                     VStack(spacing: 10) {
                         ProgressView()
                         Text(L("Chargement des sauvegardés…", "Loading saved posts…"))
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if errorMessage != nil {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(.orange)
+                            .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
                             .buttonStyle(.borderedProminent)
                     }
-                    .padding(24)
+                    .padding(DS.space(6))
                 } else if let posts {
                     if posts.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "bookmark.slash")
-                                .font(.system(size: 40)).foregroundStyle(.tertiary)
+                                .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
                             Text(L("Aucun post sauvegardé.",
                                    "No saved posts."))
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                                 .multilineTextAlignment(.center)
                         }
-                        .padding(24)
+                        .padding(DS.space(6))
                     } else {
                         VStack(spacing: 0) {
                             savedCountBanner
@@ -228,7 +228,7 @@ struct SavedPostsView: View {
                 }
             }
         }
-        .tint(.orange)
+        .tint(DS.accent)
         .errorAlert(errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, posts == nil { await load() }
@@ -261,10 +261,10 @@ struct SavedPostsView: View {
         formatter.unitsStyle = .short
         return savedCountText(count: snapshot.count, date: snapshot.computedAt, formatter: formatter)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(DS.onSurfaceMuted)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .background(Color(.systemGray6))
+            .padding(.vertical, DS.space(2))
+            .background(DS.surface)
     }
 
     private func savedCountText(count: Int, date: Date, formatter: RelativeDateTimeFormatter) -> Text {
@@ -286,16 +286,16 @@ struct SavedFeedView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            DS.background.ignoresSafeArea()
             if entries.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(.white.opacity(0.4))
+                        .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(DS.onSurface.opacity(0.4))
                     Text(L("Aucun média à afficher dans le feed.", "No media to show in the feed."))
-                        .font(.footnote).foregroundStyle(.white.opacity(0.6))
+                        .font(.footnote).foregroundStyle(DS.onSurface.opacity(0.6))
                         .multilineTextAlignment(.center)
                 }
-                .padding(24)
+                .padding(DS.space(6))
             } else {
                 PagedFeed(entries: entries, visibleID: $visibleID, preload: preload)
             }
@@ -373,7 +373,7 @@ private struct FeedCard: View, Equatable {
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
-            Color.black
+            DS.background
             if let videoURL {
                 AutoPlayVideo(url: videoURL, active: isActive)
                     .transition(.opacity.combined(with: .scale(0.98, anchor: .center)))
@@ -388,9 +388,9 @@ private struct FeedCard: View, Equatable {
                     if !failed {
                         VStack(spacing: 8) {
                             Spacer()
-                            ProgressView().tint(.white)
+                            ProgressView().tint(DS.onSurface)
                             Text(L("Chargement HD…", "Loading HD…"))
-                                .font(.caption2).foregroundStyle(.white.opacity(0.7))
+                                .font(.caption2).foregroundStyle(DS.onSurface.opacity(0.7))
                             Spacer()
                         }
                     }
@@ -398,30 +398,30 @@ private struct FeedCard: View, Equatable {
                 .transition(.opacity)
             } else if failed {
                 VStack(spacing: 8) {
-                    Image(systemName: "photo").font(.largeTitle).foregroundStyle(.white.opacity(0.4))
+                    Image(systemName: "photo").font(.largeTitle).foregroundStyle(DS.onSurface.opacity(0.4))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ProgressView().tint(.white)
+                ProgressView().tint(DS.onSurface)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.post.title)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(DS.onSurface)
                     .lineLimit(3)
                     .shadow(radius: 2)
                 if let date = entry.post.publishedAt {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(DS.onSurface.opacity(0.7))
                         .shadow(radius: 1)
                 }
             }
-            .padding(16)
+            .padding(DS.space(4))
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .top, endPoint: .bottom)
+                LinearGradient(colors: [.clear, DS.background.opacity(0.6)], startPoint: .top, endPoint: .bottom)
                     .frame(height: 120),
                 alignment: .bottom
             )
@@ -573,27 +573,27 @@ private struct SavedPostRow: View {
             HStack(spacing: 8) {
                 if let date = post.publishedAt {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(DS.onSurfaceMuted)
                 }
                 if media.isEmpty {
                     if gallery {
                         Label(L("Galerie", "Gallery"), systemImage: "photo.stack")
-                            .font(.caption2).foregroundStyle(.orange)
+                            .font(.caption2).foregroundStyle(DS.accentEmphasis)
                     } else {
                         Label(thumbnail == nil
                               ? L("Sans média pris en charge", "No supported media")
                               : L("Aperçu uniquement", "Preview only"), systemImage: "slash.circle")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(.caption2).foregroundStyle(DS.onSurfaceMuted)
                     }
                 } else {
                     Label(L("\(media.count) média\(media.count > 1 ? "s" : "")",
                             "\(media.count) media file\(media.count > 1 ? "s" : "")"),
                           systemImage: media.contains(where: mediaIsVideo) ? "video" : "photo")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(DS.accentEmphasis)
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.space(1))
     }
 
     private func mediaIsVideo(_ media: Media) -> Bool {
@@ -729,20 +729,20 @@ private struct SavedMediaCard: View {
 
     private var artwork: some View {
         ZStack {
-            Color(uiColor: .secondarySystemBackground)
+            DS.surface
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
             } else if !imageLoaded {
                 ProgressView()
             } else {
                 Label(L("Aperçu indisponible", "Preview unavailable"), systemImage: video ? "video" : "photo")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(DS.onSurfaceMuted)
             }
             if opening {
-                ProgressView().padding(12).background(.regularMaterial, in: Circle())
+                ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.system(size: 44))
-                    .foregroundStyle(.white).shadow(radius: 3)
+                    .foregroundStyle(DS.onSurface).shadow(radius: 3)
             }
         }
         .frame(maxWidth: .infinity).frame(height: 240)

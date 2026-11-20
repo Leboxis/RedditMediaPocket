@@ -188,8 +188,8 @@ struct LogsButton: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: "doc.text.magnifyingglass")
                 if logs.errorCount > 0 {
-                    Circle().fill(Color.red).frame(width: 9, height: 9)
-                        .overlay(Circle().stroke(.white, lineWidth: 1.5))
+                    Circle().fill(DS.error).frame(width: 9, height: 9)
+                        .overlay(Circle().stroke(DS.onAccent, lineWidth: 1.5))
                         .offset(x: 4, y: -4)
                 }
             }
@@ -216,17 +216,17 @@ struct LogsView: View {
                     Text(L("Tout", "All")).tag("all")
                     ForEach(LogLevel.allCases) { l in Text(l.label).tag(l.rawValue) }
                 }
-                .pickerStyle(.segmented).padding(.horizontal, 12).padding(.vertical, 8)
+                .pickerStyle(.segmented).padding(.horizontal, DS.space(3)).padding(.vertical, DS.space(2))
                 Text(L("\(logs.filtered(level: level, search: search).count) lignes", "\(logs.filtered(level: level, search: search).count) lines"))
-                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 12)
+                    .font(.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, DS.space(3))
                 ScrollViewReader { proxy in
                     List(logs.filtered(level: level, search: search)) { entry in
                         HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? .red : .secondary).frame(width: 22)
+                            Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? DS.error : DS.onSurfaceMuted).frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(entry.message).font(.caption).textSelection(.enabled)
-                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
                             }
                         }
                         .accessibilityElement(children: .combine)

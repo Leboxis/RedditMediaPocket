@@ -68,8 +68,8 @@ struct MediaThumbnail: View {
             .overlay(alignment: .bottomTrailing) {
                 if isVideo(url) {
                     Image(systemName: "play.fill").font(.caption2)
-                        .foregroundStyle(.white).padding(7)
-                        .background(.black.opacity(0.45), in: Circle()).padding(7)
+                        .foregroundStyle(DS.onSurface).padding(DS.space(2))
+                        .background(DS.background.opacity(0.45), in: Circle()).padding(DS.space(2))
                         .allowsHitTesting(false)
                 }
             }
@@ -98,7 +98,7 @@ struct MediaPreview: View {
     var body: some View {
         Group {
             if urls.isEmpty {
-                Text(L("Aucun média", "No media")).foregroundStyle(.gray)
+                Text(L("Aucun média", "No media")).foregroundStyle(DS.onSurfaceMuted)
             } else {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
@@ -112,7 +112,7 @@ struct MediaPreview: View {
                 VStack(spacing: 3) {
                     Text(urls[safeIndex].lastPathComponent).font(.subheadline.weight(.medium))
                         .lineLimit(1).truncationMode(.middle)
-                    Text("\(safeIndex + 1) / \(urls.count)").font(.caption).foregroundStyle(.gray).monospacedDigit()
+                    Text("\(safeIndex + 1) / \(urls.count)").font(.caption).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 Button {
                     if safeIndex < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index = safeIndex + 1 } }
@@ -122,13 +122,13 @@ struct MediaPreview: View {
                 ShareLink(item: urls[safeIndex]) {
                     Image(systemName: "square.and.arrow.up").frame(width: 44, height: 44)
                 }.accessibilityLabel(L("Partager ce média", "Share this media"))
-            }.padding(.horizontal, 8).padding(.vertical, 4)
+            }.padding(.horizontal, DS.space(2)).padding(.vertical, DS.space(1))
             MediaPager(urls: urls, index: $index)
         }
             }
         }
-        .background(Color.black.ignoresSafeArea())
-        .foregroundStyle(.white).tint(.white)
+        .background(DS.background.ignoresSafeArea())
+        .foregroundStyle(DS.onSurface).tint(DS.onSurface)
         .preferredColorScheme(.dark)
     }
 }
@@ -167,7 +167,7 @@ private struct MediaPager: View {
                         if abs(position - clampedIndex) <= 1 {
                             MediaPage(url: urls[position], active: position == clampedIndex, zoomed: zoomBinding(at: position))
                         } else {
-                            Color.black
+                            DS.background
                         }
                     }
                     .frame(width: width, height: proxy.size.height)
@@ -198,7 +198,7 @@ private struct MediaPager: View {
                 including: indexZoomed ? .subviews : .all
             )
         }
-        .background(Color.black)
+        .background(DS.background)
         .coordinateSpace(name: "mediaPager")
         .clipped()
         .onChange(of: indexZoomed) { _ in dragOffset = 0 }
@@ -237,7 +237,7 @@ struct MediaPage: View {
     @State private var failed = false
     var body: some View {
         ZStack {
-            Color.black
+            DS.background
             if isVideo(url) {
                 LocalVideoPlayer(url: url, active: active).id(url)
             } else if url.pathExtension.lowercased() == "gif" {
@@ -245,8 +245,8 @@ struct MediaPage: View {
             } else if let image {
                 ZoomImage(image: image, zoomed: $zoomed)
             } else if failed {
-                Image(systemName: "photo").foregroundStyle(.gray)
-            } else { ProgressView().tint(.white) }
+                Image(systemName: "photo").foregroundStyle(DS.onSurfaceMuted)
+            } else { ProgressView().tint(DS.onSurface) }
         }
         .task(id: url) {
             if !isVideo(url), url.pathExtension.lowercased() != "gif" {
@@ -313,7 +313,7 @@ private struct AnimatedImage: UIViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let view = WKWebView(frame: .zero, configuration: config)
-        view.isOpaque = false; view.backgroundColor = .black; view.scrollView.backgroundColor = .black
+        view.isOpaque = false; view.backgroundColor = UIColor(DS.background); view.scrollView.backgroundColor = UIColor(DS.background)
         view.scrollView.isScrollEnabled = false
         view.scrollView.panGestureRecognizer.isEnabled = false
         view.scrollView.bounces = false
@@ -350,7 +350,7 @@ private final class ImageScroll: UIScrollView, UIScrollViewDelegate {
     private var previousSize = CGSize.zero
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .black; delegate = self
+        backgroundColor = UIColor(DS.background); delegate = self
         minimumZoomScale = 1; maximumZoomScale = 4
         showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
         panGestureRecognizer.isEnabled = false

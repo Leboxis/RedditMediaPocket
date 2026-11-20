@@ -49,39 +49,39 @@ struct FollowingView: View {
                 if !session.hasSession {
                     VStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.badge.questionmark")
-                            .font(.system(size: 40)).foregroundStyle(.tertiary)
+                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Connecte-toi à Reddit dans les Réglages pour voir les comptes que tu suis.",
                                "Sign in to Reddit in Settings to see the accounts you follow."))
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(24)
+                    .padding(DS.space(6))
                 } else if loading || (friends == nil && errorMessage == nil) {
                     VStack(spacing: 10) {
                         ProgressView()
                         Text(L("Chargement des suivis…", "Loading followed accounts…"))
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if errorMessage != nil {
                     VStack(spacing: 12) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(.orange)
+                            .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
                             .buttonStyle(.borderedProminent)
                     }
-                    .padding(24)
+                    .padding(DS.space(6))
                 } else if let friends {
                     if friends.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "person.2")
-                                .font(.system(size: 40)).foregroundStyle(.tertiary)
+                                .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
                             Text(L("Aucun compte suivi (ou liste privée indisponible).",
                                    "No followed accounts (or the list is unavailable)."))
-                                .font(.footnote).foregroundStyle(.secondary)
+                                .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                                 .multilineTextAlignment(.center)
                         }
-                        .padding(24)
+                        .padding(DS.space(6))
                     } else {
                         List {
                             ForEach(friends, id: \.self) { name in
@@ -92,13 +92,13 @@ struct FollowingView: View {
                                     } label: {
                                         HStack(spacing: 10) {
                                             Image(systemName: "person.crop.circle.fill")
-                                                .font(.title3).foregroundStyle(.orange)
+                                                .font(.title3).foregroundStyle(DS.accentEmphasis)
                                             VStack(alignment: .leading, spacing: 2) {
                                                 Text(name).fontWeight(.medium).lineLimit(1)
                                                 if let folder = kDriveFolders?[name] {
                                                     Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
                                                         .font(.caption2)
-                                                        .foregroundStyle(.green)
+                                                        .foregroundStyle(DS.accentEmphasis)
                                                         .lineLimit(1)
                                                 }
                                             }
@@ -109,7 +109,7 @@ struct FollowingView: View {
                                     } label: {
                                         Image(systemName: isDownloaded ? "checkmark.circle.fill" : "circle")
                                             .font(.title3)
-                                            .foregroundStyle(isDownloaded ? Color.green : Color.secondary)
+                                            .foregroundStyle(isDownloaded ? DS.accentEmphasis : Color.secondary)
                                             .frame(minWidth: 44, minHeight: 44)
                                             .contentShape(Rectangle())
                                     }
@@ -157,7 +157,7 @@ struct FollowingView: View {
                     }
                 }
         }
-        .tint(.orange)
+        .tint(DS.accent)
         .errorAlert(kDriveError ?? errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, friends == nil { await load() }
@@ -226,28 +226,28 @@ struct FollowingUserPosts: View {
                 VStack(spacing: 10) {
                     ProgressView()
                     Text(L("Lecture des posts…", "Loading posts…"))
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if errorMessage != nil {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 36)).foregroundStyle(.orange)
+                        .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
                     Button(L("Réessayer", "Retry")) { retryCount += 1 }
                         .buttonStyle(.borderedProminent)
                 }
-                .padding(24)
+                .padding(DS.space(6))
             } else if let posts {
                 if posts.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "tray")
-                            .font(.system(size: 40)).foregroundStyle(.tertiary)
+                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Aucun post accessible (flux privé ou vide).",
                                "No accessible posts (private or empty feed)."))
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(24)
+                    .padding(DS.space(6))
                 } else {
                     List(posts) { post in
                         postRow(post)
@@ -297,27 +297,27 @@ struct FollowingUserPosts: View {
             HStack(spacing: 8) {
                 if let date = post.publishedAt {
                     Text(date.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(DS.onSurfaceMuted)
                 }
                 if media.isEmpty {
                     if gallery {
                         Label(L("Galerie", "Gallery"), systemImage: "photo.stack")
-                            .font(.caption2).foregroundStyle(.orange)
+                            .font(.caption2).foregroundStyle(DS.accentEmphasis)
                     } else {
                         Label(thumbnail == nil
                               ? L("Sans média pris en charge", "No supported media")
                               : L("Aperçu uniquement", "Preview only"), systemImage: "slash.circle")
-                            .font(.caption2).foregroundStyle(.tertiary)
+                            .font(.caption2).foregroundStyle(DS.onSurfaceMuted)
                     }
                 } else {
                     Label(L("\(media.count) média\(media.count > 1 ? "s" : "")",
                             "\(media.count) media file\(media.count > 1 ? "s" : "")"),
                           systemImage: media.contains(where: mediaIsVideo) ? "video" : "photo")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(.caption2).foregroundStyle(DS.accentEmphasis)
                 }
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, DS.space(1))
     }
 
     private func mediaIsVideo(_ media: Media) -> Bool {
@@ -473,20 +473,20 @@ private struct FollowingMediaCard: View {
 
     private var artwork: some View {
         ZStack {
-            Color(uiColor: .secondarySystemBackground)
+            DS.surface
             if let image {
                 Image(uiImage: image).resizable().scaledToFit()
             } else if !imageLoaded {
                 ProgressView()
             } else {
                 Label(L("Aperçu indisponible", "Preview unavailable"), systemImage: video ? "video" : "photo")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(DS.onSurfaceMuted)
             }
             if opening {
-                ProgressView().padding(12).background(.regularMaterial, in: Circle())
+                ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.system(size: 44))
-                    .foregroundStyle(.white).shadow(radius: 3)
+                    .foregroundStyle(DS.onSurface).shadow(radius: 3)
             }
         }
         .frame(maxWidth: .infinity).frame(height: 240)

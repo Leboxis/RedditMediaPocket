@@ -68,7 +68,7 @@ struct MediaInfoView: View {
             List {
                 Section {
                     Label(isVideo(url) ? L("Vidéo", "Video") : L("Image", "Image"), systemImage: isVideo(url) ? "film" : "photo")
-                        .font(.title3.weight(.semibold)).foregroundStyle(.orange)
+                        .font(.title3.weight(.semibold)).foregroundStyle(DS.accentEmphasis)
                     Text(url.lastPathComponent)
                         .font(.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 } header: { Text(L("Nom complet", "Full filename")) }
@@ -114,15 +114,15 @@ struct MediaInfoView: View {
                 details = result
             }
         }
-        .tint(.orange)
+        .tint(DS.accent)
     }
 
     private func row(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.caption).foregroundStyle(DS.onSurfaceMuted)
             Text(value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, DS.space(1))
         .accessibilityElement(children: .combine)
     }
 

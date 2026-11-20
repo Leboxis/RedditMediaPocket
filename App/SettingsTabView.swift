@@ -28,7 +28,7 @@ private struct ConnectionRow: View {
     let onConnect: () -> Void
     let onSignOut: () -> Void
 
-    private var statusColor: Color { connected ? Color.green : (rejected ? DS.error : DS.onSurfaceMuted) }
+    private var statusColor: Color { connected ? DS.accentEmphasis : (rejected ? DS.error : DS.onSurfaceMuted) }
 
     var body: some View {
         HStack(spacing: 11) {
@@ -36,7 +36,7 @@ private struct ConnectionRow: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 30, height: 30)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))
@@ -59,7 +59,7 @@ private struct ConnectionRow: View {
             .disabled(busy || clearing)
             .accessibilityLabel(L("Actions \(title)", "\(title) actions"))
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, DS.space(1))
         .contentShape(Rectangle())
         .onTapGesture {
             guard !busy, !clearing else { return }
@@ -104,7 +104,7 @@ private struct DownloadSettings: View {
                         HStack {
                             Text(L("Téléchargements simultanés", "Concurrent downloads"))
                             Spacer()
-                            Text("\(model.concurrentLimit)").monospacedDigit().foregroundStyle(.secondary)
+                            Text("\(model.concurrentLimit)").monospacedDigit().foregroundStyle(DS.onSurfaceMuted)
                         }
                     }
                 } footer: {

@@ -54,7 +54,7 @@ struct RedditLogin: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary).padding(10) }
+                if !message.isEmpty { Text(message).font(.caption).foregroundStyle(DS.onSurfaceMuted).padding(DS.space(3)) }
                 RedditWebLogin(errorMessage: $errorMessage, showsFeedPreferences: showsFeedPreferences)
                     .id(showsFeedPreferences)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
