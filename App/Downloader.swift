@@ -2040,8 +2040,24 @@ extension Notification.Name {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
         try Task.checkCancellation()
-        let headers = TikTokAPI.headers(referer: ref.url)
-        let detail = try TikTokWeb.parseVideoPage(try await network.data(ref.url, headers: headers))
+        // Requête directe d'abord (rapide), puis repli WebView cachée :
+        // TikTok tient parfois à une URLSession un squelette sans JSON
+        // d'hydratation (vérification silencieuse, variante mobile), même
+        // avec les cookies de la session. La WebView fait ce que fait la
+        // page elle-même : charger, exécuter, servir son propre JSON.
+        let detail: TikTokAPI.TikTokVideoDetail
+        do {
+            let headers = TikTokAPI.headers(referer: ref.url)
+            detail = try TikTokWeb.parseVideoPage(try await network.data(ref.url, headers: headers))
+        } catch {
+            LogCenter.info(L("TikTok : page vidéo illisible en direct, relecture dans la WebView cachée.",
+                             "TikTok: video page unreadable directly, re-reading it in the hidden WebView."))
+            guard let data = await TikTokVideoPageReader().read(ref.url),
+                  let fallback = try? TikTokWeb.parseVideoDetail(String(decoding: data, as: UTF8.self)) else {
+                throw error
+            }
+            detail = fallback
+        }
         await TikTokSession.shared.recordAPIAcceptance(true)
         LogCenter.info(L("TikTok : vidéo \(detail.id) résolue.", "TikTok: video \(detail.id) resolved."))
 
