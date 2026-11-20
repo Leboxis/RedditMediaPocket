@@ -40,10 +40,10 @@ import MediaCore
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         // Requête plus courte : une connexion morte libère son créneau au
         // bout de 30 s au lieu d'une minute, et le retry la reprend.
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = TimingPolicy.networkRequest
         // Filet de sécurité du watchdog : un transfert qui s'égoutte sans
         // jamais se bloquer franchit rarement 10 minutes utiles.
-        config.timeoutIntervalForResource = 600
+        config.timeoutIntervalForResource = TimingPolicy.networkResource
         config.httpMaximumConnectionsPerHost = ConcurrentDownloads.maximumLimit
         session = URLSession(configuration: config, delegate: SafeRedirects(), delegateQueue: nil)
     }

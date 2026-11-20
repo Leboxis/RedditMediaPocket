@@ -531,6 +531,11 @@ final class KDriveContinuousUploadController: ObservableObject {
                 driveId: driveId,
                 directoryId: directoryId
             )
+            // Dates/auteur/lien sur le Drive : le sidecar JSON du fichier
+            // rejoint le média. Le moins coûteux possible, sans impact sur
+            // le résultat : un échec de sidecar ne compte jamais comme un
+            // échec d'envoi.
+            await publishSidecar(for: fileURL, token: token, driveId: driveId, directoryId: directoryId)
             let elapsed = Date().timeIntervalSince(startedAt)
             let speed = elapsed > 0 ? Int64(Double(sizeBytes) / elapsed) : 0
             LogCenter.kdrive(L("kDrive : envoyé — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) Mo en \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) Ko/s).", "kDrive: uploaded — \(fileURL.lastPathComponent) (\(sizeBytes / 1_000_000) MB in \(String(format: "%.0f", elapsed)) s ≈ \(speed / 1_000) KB/s)."))
@@ -559,6 +564,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                         driveId: driveId,
                         directoryId: directoryId
                     )
+                    await publishSidecar(for: fileURL, token: token, driveId: driveId, directoryId: directoryId)
                     return KDriveContinuousUploadOutcome(
                         fileURL: fileURL,
                         fileName: fileURL.lastPathComponent,
@@ -575,6 +581,52 @@ final class KDriveContinuousUploadController: ObservableObject {
                 succeeded: false,
                 errorMessage: error.localizedDescription
             )
+        }
+    }
+
+    /// Publie le sidecar JSON du média (`MediaMetadata`) au côté du fichier,
+    /// sous `<média>.json` : les dates, l'auteur et le lien d'origine
+    /// deviennent visibles sur le Drive, sans y téléverser aucun cookie ni
+    /// adresse de flux privé. Sans sidecar (média hérité d'une ancienne
+    /// version), rien n'est envoyé. « Best effort » : un échec est
+    /// journalisé, jamais remonté comme échec d'envoi du média.
+    nonisolated private static func publishSidecar(
+        for fileURL: URL,
+        token: String,
+        driveId: String,
+        directoryId: String
+    ) async {
+        guard let metadata = MediaMetadata.read(for: fileURL),
+              let payload = metadata.payloadData() else { return }
+        let originalName = fileURL.lastPathComponent + ".json"
+        let safeName = FilenamePolicy.kDriveFileName(originalName)
+        do {
+            let tmpURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sidecar-\(UUID().uuidString)")
+                .appendingPathExtension("json")
+            try payload.write(to: tmpURL, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: tmpURL) }
+            do {
+                try await performSingleUpload(
+                    fileURL: tmpURL, remoteFileName: safeName, fileSize: Int64(payload.count),
+                    token: token, driveId: driveId, directoryId: directoryId
+                )
+            } catch let error as KDriveError {
+                if case .serverError(let code, _) = error, code == 422 {
+                    let fallback = FilenamePolicy.kDriveFallbackName(for: originalName)
+                    try await performSingleUpload(
+                        fileURL: tmpURL, remoteFileName: fallback, fileSize: Int64(payload.count),
+                        token: token, driveId: driveId, directoryId: directoryId
+                    )
+                    return
+                }
+                throw error
+            }
+            LogCenter.kdrive(L("kDrive : métadonnées envoyées — \(safeName).",
+                               "kDrive: metadata uploaded — \(safeName)."))
+        } catch {
+            LogCenter.kdrive(L("kDrive : sidecar non envoyé pour \(fileURL.lastPathComponent) (\(error.localizedDescription)).",
+                               "kDrive: sidecar not uploaded for \(fileURL.lastPathComponent) (\(error.localizedDescription))."))
         }
     }
 
@@ -1237,6 +1289,7 @@ private struct KDriveContinuousUploadSheet: View {
         for url in uploader.uploadedFileURLs where FileManager.default.fileExists(atPath: url.path) {
             do {
                 try FileManager.default.removeItem(at: url)
+                MediaMetadata.remove(for: url)
                 deleted += 1
             } catch {
                 failures += 1
@@ -1258,6 +1311,7 @@ private struct KDriveContinuousUploadSheet: View {
         for url in alreadyOnDriveURLs where FileManager.default.fileExists(atPath: url.path) {
             do {
                 try FileManager.default.removeItem(at: url)
+                MediaMetadata.remove(for: url)
                 deleted += 1
             } catch {
                 failures += 1

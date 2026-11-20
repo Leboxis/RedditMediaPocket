@@ -513,7 +513,7 @@ import MediaCore
         let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             loadContinuation = continuation
             watchdog = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
                 guard let self else { return }
                 self.finishLoad(false)
             }
@@ -594,7 +594,7 @@ import MediaCore
             .replacingOccurrences(of: "'", with: "\\'")
         return await withCheckedContinuation { (continuation: CheckedContinuation<APIResponse?, Never>) in
             let timeout = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 25_000_000_000)
+                try? await Task.sleep(for: .seconds(TimingPolicy.signedFetch))
                 guard let self, let call = self.apiCalls[id] else { return }
                 self.apiCalls[id] = nil
                 call.continuation.resume(returning: nil)
@@ -637,7 +637,7 @@ import MediaCore
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             loadContinuation = continuation
             watchdog = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
                 guard let self else { return }
                 self.finishLoad(false)
             }
@@ -772,7 +772,7 @@ import MediaCore
         let id = UUID().uuidString
         return await withCheckedContinuation { continuation in
             let timeout = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                try? await Task.sleep(for: .seconds(TimingPolicy.mediaTransfer))
                 guard let self, let transfer = self.mediaTransfers[id] else { return }
                 self.mediaTransfers[id] = nil
                 transfer.continuation.resume(returning: nil)

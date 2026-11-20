@@ -198,7 +198,9 @@ public enum FeedSource: Hashable, Sendable {
 
     /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
     /// `x/profil`, `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`,
-    /// `tt/pseudo` ou `reddit/posts`), utilisé comme clé de collection.
+    /// `tt/pseudo`, `ttv/videos` ou `reddit/posts`), utilisé comme clé de
+    /// collection. Les vidéos TikTok isolées partagent toutes `ttv/videos` :
+    /// un seul dossier, quel que soit le lien collé.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
@@ -210,7 +212,9 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
         case .tiktokUser(let name): return "tt/\(name)"
-        case .tiktokVideo(let video): return "ttv/\(video.stableID)"
+        // Vidéos isolées : un dossier global unique, quel que soit le lien
+        // collé — l'identifiant de la vidéo reste dans le nom du fichier.
+        case .tiktokVideo: return "ttv/videos"
         case .tiktokSaved(let name): return "ts/\(name)"
         case .instagramUser(let name): return "ig/\(name)"
         // Préfixe distinct de `r/` : sans lui, une sélection de posts et un
@@ -222,6 +226,7 @@ public enum FeedSource: Hashable, Sendable {
     public var displayName: String {
         switch self {
         case .saved: return "Saved"
+        case .tiktokVideo: return "Tiktok - Videos"
         default: return id
         }
     }
@@ -241,10 +246,10 @@ public enum FeedSource: Hashable, Sendable {
         case .twitterUser(let name): return "tw.\(name)"
         case .tiktokUser(let name): return "tk.\(name)"
         // `ttv.` est son propre préfixe : il ne peut pas recouvrir un dossier
-        // `tk.<pseudo>` (« tkv. » n'a pas le préfixe « tk. »), et l'identifiant
-        // d'une vidéo (chiffres, ou code de partage alphanumérique) ne peut pas
-        // être confondu avec un pseudo des autres sources.
-        case .tiktokVideo(let video): return "ttv.\(video.stableID)"
+        // `tk.<pseudo>` (« tkv. » n'a pas le préfixe « tk. »). Toutes les
+        // vidéos isolées partagent le même dossier global `ttv.videos` :
+        // le compte de l'auteur est porté par le début du nom de fichier.
+        case .tiktokVideo: return "ttv.videos"
         case .tiktokSaved(let name): return "ts.\(name)"
         case .instagramUser(let name): return "ig.\(name)"
         case .redditPosts: return "reddit.posts"

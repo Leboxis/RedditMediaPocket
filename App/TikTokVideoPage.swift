@@ -49,7 +49,7 @@ import MediaCore
         let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             loadContinuation = continuation
             watchdog = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
                 guard let self else { return }
                 self.finishLoad(false)
             }
@@ -70,10 +70,10 @@ import MediaCore
         })()
         """
         var blob = ""
-        for _ in 0..<20 {
+        for _ in 0..<TimingPolicy.webViewBlobAttempts {
             blob = await evaluateString(script) ?? ""
             if !blob.isEmpty { break }
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            try? await Task.sleep(for: .seconds(TimingPolicy.webViewBlobStep))
         }
         close()
         guard !blob.isEmpty else { return nil }

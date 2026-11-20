@@ -278,6 +278,13 @@ public enum FilenamePolicy {
         let parts = base.components(separatedBy: labelSeparators)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        // Dossier global des vidéos TikTok isolées : quel que soit le lien
+        // unitaire collé, l'envoi part vers le seul dossier « Tiktok - Videos ».
+        // Le compte de l'auteur est déjà au début du nom de fichier, et un nom
+        // de dossier stabilisé évite un dossier par identifiant de vidéo.
+        if parts.count == 2, parts.first?.lowercased() == "ttv", parts.last?.lowercased() == "videos" {
+            return "Tiktok - Videos"
+        }
         // Le préfixe de type est conservé : sans lui, `u/foo`
         // et `saved/foo` produiraient le même dossier `Foo` et leurs médias
         // se surécriraient dans kDrive. X-Fetish inclut un espace afin de ne

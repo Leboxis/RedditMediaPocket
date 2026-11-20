@@ -295,21 +295,85 @@ final class TikTokTests: XCTestCase {
         XCTAssertNil(TikTokAPI.videoRef("https://nasa:motdepasse@www.tiktok.com/@nasa/video/7301"))
     }
 
-    /// Identifiant et dossier dérivés de la vidéo seule, distincts de ceux
-    /// du compte au même pseudo ; `ttv.` ne recouvre jamais un dossier
-    /// `tk.` (compte) ni `tw.` (X).
+    /// Toutes les vidéos isolées partagent la collection `ttv/videos` et le
+    /// dossier global `ttv.videos` : quel que soit le lien (forme longue,
+    /// diaporama, lien court), la destination est la même.
     func testVideoSourceIdentity() throws {
-        let source = try FeedSource.parse("https://www.tiktok.com/@nasa/video/7350012345678901234")
-        XCTAssertEqual(source.id, "ttv/7350012345678901234")
-        XCTAssertEqual(source.folderName, "ttv.7350012345678901234")
-        XCTAssertEqual(source.displayName, "ttv/7350012345678901234")
-        XCTAssertEqual(source.feedURL().absoluteString,
+        let long = try FeedSource.parse("https://www.tiktok.com/@nasa/video/7350012345678901234")
+        let photo = try FeedSource.parse("https://www.tiktok.com/@nasa/photo/7350012345678901234")
+        let short = try FeedSource.parse("https://vm.tiktok.com/ZN8mePSUS/")
+        XCTAssertEqual(long.id, "ttv/videos")
+        XCTAssertEqual(photo.id, "ttv/videos")
+        XCTAssertEqual(short.id, "ttv/videos")
+        XCTAssertEqual(long.folderName, "ttv.videos")
+        XCTAssertEqual(photo.folderName, "ttv.videos")
+        XCTAssertEqual(short.folderName, "ttv.videos")
+        XCTAssertEqual(long.displayName, "Tiktok - Videos")
+        // L'adresse reste celle du lien : c'est elle que le parcours charge.
+        XCTAssertEqual(long.feedURL().absoluteString,
                        "https://www.tiktok.com/@nasa/video/7350012345678901234")
-        XCTAssertEqual(FilenamePolicy.kDriveFolderName("ttv/7350012345678901234"), "7350012345678901234 - TikTok")
-        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
-                          FilenamePolicy.kDriveFolderName("tk/nasa"))
-        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/7301"),
-                          FilenamePolicy.kDriveFolderName("tw/nasa"))
+        XCTAssertEqual(short.feedURL().absoluteString,
+                       "https://vm.tiktok.com/ZN8mePSUS/")
+    }
+
+    /// Le dossier kDrive des vidéos isolées est global et stabilisé :
+    /// « Tiktok - Videos », sans identifiant de vidéo — et toujours distinct
+    /// ici aussi des dossiers d'un compte TikTok (`tt/`) ou X (`tw/`) au même nom.
+    func testVideoKDriveFolderIsGlobal() {
+        XCTAssertEqual(FilenamePolicy.kDriveFolderName("ttv/videos"), "Tiktok - Videos")
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/videos"),
+                          FilenamePolicy.kDriveFolderName("tt/videos"))
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ttv/videos"),
+                          FilenamePolicy.kDriveFolderName("tw/videos"))
+    }
+
+    /// Cascade de résolution, testable hors macOS : tentative directe
+    /// desktop d'abord, puis WebView desktop, puis WebView iPhone. L'UA qui
+    /// obtient la page est celui des transferts média.
+    func testVideoResolutionCascade() {
+        let cascade = TikTokVideoResolution.cascade(directUserAgent: "UA-Desktop",
+                                                    mobileUserAgent: "UA-Mobile")
+        XCTAssertEqual(cascade.count, 3)
+        XCTAssertEqual(cascade[0], TikTokVideoResolution.Attempt(desktop: true, userAgent: "UA-Desktop"))
+        XCTAssertEqual(cascade[1], TikTokVideoResolution.Attempt(desktop: true, userAgent: "UA-Desktop"))
+        XCTAssertEqual(cascade[2], TikTokVideoResolution.Attempt(desktop: false, userAgent: "UA-Mobile"))
+        XCTAssertTrue(TikTokVideoResolution.isDirectAttempt(0))
+        XCTAssertFalse(TikTokVideoResolution.isDirectAttempt(1))
+        XCTAssertFalse(TikTokVideoResolution.isDirectAttempt(2))
+        XCTAssertEqual(TikTokVideoResolution.mediaUserAgent(for: cascade[0]), "UA-Desktop")
+        XCTAssertEqual(TikTokVideoResolution.mediaUserAgent(for: cascade[2]), "UA-Mobile")
+    }
+
+    /// Des garde-fous centralisés valent mieux que des littéraux dispersés :
+    /// les valeurs documentées restent celles en service.
+    func testTimingPolicyValues() {
+        XCTAssertEqual(TimingPolicy.webViewLoad, 30)
+        XCTAssertEqual(TimingPolicy.webViewBlobStep, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(TimingPolicy.webViewBlobAttempts, 20)
+        XCTAssertEqual(TimingPolicy.webViewBlobStep * Double(TimingPolicy.webViewBlobAttempts), 10, accuracy: 0.0001)
+        XCTAssertEqual(TimingPolicy.signedFetch, 25)
+        XCTAssertEqual(TimingPolicy.mediaTransfer, 120)
+        XCTAssertEqual(TimingPolicy.networkRequest, 30)
+        XCTAssertEqual(TimingPolicy.networkResource, 600)
+        XCTAssertEqual(TimingPolicy.mediaWebView, 300)
+    }
+
+    /// Charge utile du sidecar : JSON lisible (ISO 8601, clés triées) avec
+    /// les mêmes champs que le fichier local.
+    func testMediaMetadataPayload() throws {
+        let metadata = MediaMetadata(downloadedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                                     postDate: Date(timeIntervalSince1970: 1_700_000_000),
+                                     author: "nasa",
+                                     postLink: "https://www.tiktok.com/@nasa/video/7301")
+        let payload = try XCTUnwrap(metadata.payloadData())
+        let text = String(decoding: payload, as: UTF8.self)
+        XCTAssertTrue(text.contains("nasa"))
+        XCTAssertTrue(text.contains("2023-11-14"))
+        // Décodage retour : la charge utile reste un MediaMetadata.
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let round = try decoder.decode(MediaMetadata.self, from: payload)
+        XCTAssertEqual(round, metadata)
     }
 
     // MARK: - Page de la vidéo

@@ -15,7 +15,7 @@ import MediaCore
 @MainActor final class TikTokMediaWebView: NSObject, WKNavigationDelegate, WKDownloadDelegate {
     /// Garde de temps d'un transfert : vidéo longue sur réseau lent, le reste
     /// du lot ne doit pas attendre indéfiniment un média bloqué.
-    static let timeoutSeconds: UInt64 = 300
+    static var timeoutSeconds: UInt64 { UInt64(TimingPolicy.mediaWebView) }
 
     private var webView: WKWebView?
     private var continuation: CheckedContinuation<Data?, Never>?

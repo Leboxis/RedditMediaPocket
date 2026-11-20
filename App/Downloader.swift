@@ -34,10 +34,11 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var lastRun: Date?
     /// Clé canonique : `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
     /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo`,
-    /// `ttv/<id>` ou `r/posts`.
+    /// `ttv/videos` ou `r/posts`. Les vidéos TikTok isolées partagent
+    /// toutes la même clé : un seul dossier global.
     var id: String {
         if isTikTokSaved { return "ts/\(name)" }
-        if isTikTokVideo { return "ttv/\(name)" }
+        if isTikTokVideo { return "ttv/videos" }
         if isTikTok { return "tt/\(name)" }
         if isInstagram { return "ig/\(name)" }
         if isTwitter { return "tw/\(name)" }
@@ -49,13 +50,14 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isRedditPosts { return "reddit/posts" }
         return (isSubreddit ? "r/" : "u/") + name
     }
-    var displayName: String { isSaved ? "Saved" : id }
+    var displayName: String { isTikTokVideo ? "Tiktok - Videos" : (isSaved ? "Saved" : id) }
     /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…`,
     /// `redgifs.…`, `tw.…` et `tk.…` sont interdits dans les pseudos : aucune
-    /// collection existante ne peut entrer en collision.
+    /// collection existante ne peut entrer en collision. Les vidéos TikTok
+    /// isolées partagent toutes le dossier global `ttv.videos`.
     var folderName: String {
         if isTikTokSaved { return "ts.\(name)" }
-        if isTikTokVideo { return "ttv.\(name)" }
+        if isTikTokVideo { return "ttv.videos" }
         if isTikTok { return "tk.\(name)" }
         if isInstagram { return "ig.\(name)" }
         if isTwitter { return "tw.\(name)" }
@@ -122,7 +124,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
         case .tiktokUser(let name): self.init(name: name, isTikTok: true)
-        case .tiktokVideo(let ref): self.init(name: ref.stableID, isTikTokVideo: true)
+        case .tiktokVideo: self.init(name: "videos", isTikTokVideo: true)
         case .tiktokSaved(let name): self.init(name: name, isTikTokSaved: true)
         case .instagramUser(let name): self.init(name: name, isInstagram: true)
         case .redditPosts: self.init(name: "posts", isRedditPosts: true)
@@ -579,6 +581,11 @@ extension Notification.Name {
         "redditSelection.\(canonical)"
     }
 
+    /// Même besoin pour les vidéos TikTok isolées : toutes les collections
+    /// s'appellent `ttv/videos`, la dernière adresse collée est donc mémorisée
+    /// pour que « Reprendre » relise cette vidéo-là et non une adresse morte.
+    static let tikTokVideoSelectionKey = "tikTokVideoSelection.ttv/videos"
+
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
@@ -720,6 +727,12 @@ extension Notification.Name {
         guard !running else { return }
         if let collection = collections.first(where: { $0.id == id }) {
             display(collection)
+            if collection.isTikTokVideo {
+                // Collection globale partagée par tous les liens unitaires :
+                // le champ ne peut pas être reconstruit depuis son nom, on
+                // rétablit la dernière adresse collée.
+                username = UserDefaults.standard.string(forKey: Self.tikTokVideoSelectionKey) ?? ""
+            }
         } else if let source = try? FeedSource.parse(id) {
             switch source {
             case .user(let name): sourceKind = "u"; username = name
@@ -758,6 +771,51 @@ extension Notification.Name {
             collections.append(UserCollection(source: source))
         }
         saveCollections()
+    }
+
+    /// Vidéos TikTok isolées : les versions précédentes créaient un dossier
+    /// par lien (`ttv.<id>`, collection `ttv/<id>`). Depuis le dossier global
+    /// `ttv.videos`, tout est fusionné : fichiers, sidecars `.metadata`, puis
+    /// suppression des dossiers vides et de leurs collections héritées. Un
+    /// fichier déjà présent sous le même nom (même vidéo relancée) écrase sa
+    /// copie identique ; les autres noms sont uniques par clé média du titre.
+    static func migrateLegacyTikTokVideoFolders(root: URL, into globalFolder: URL) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return }
+        let legacyFolders = entries.filter { entry in
+            entry.lastPathComponent.hasPrefix("ttv.")
+                && entry.lastPathComponent != "ttv.videos"
+                && ((try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true)
+        }
+        guard !legacyFolders.isEmpty else { return }
+        let metadataName = ".metadata"
+        for legacy in legacyFolders {
+            guard let contents = try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
+            var moved = 0
+            for item in contents {
+                let target = globalFolder.appendingPathComponent(item.lastPathComponent)
+                do {
+                    if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                    try fm.moveItem(at: item, to: target)
+                    moved += 1
+                } catch {
+                    LogCenter.err(L("Fusion TikTok : \(item.lastPathComponent) non déplacé (\(error.localizedDescription)).",
+                                    "TikTok merge: \(item.lastPathComponent) not moved (\(error.localizedDescription))."))
+                }
+                // Sidecar du fichier : mêmes nom et destination.
+                MediaMetadata.move(from: legacy.appendingPathComponent(metadataName)
+                                        .appendingPathComponent("\(item.lastPathComponent).json"),
+                                    to: globalFolder.appendingPathComponent(metadataName)
+                                        .appendingPathComponent("\(item.lastPathComponent).json"))
+            }
+            if (try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.isEmpty ?? true {
+                try? fm.removeItem(at: legacy)
+            }
+            if moved > 0 {
+                LogCenter.info(L("TikTok : \(moved) fichier(s) du dossier \(legacy.lastPathComponent) déplacés vers \(globalFolder.lastPathComponent).",
+                                 "TikTok: \(moved) file(s) from \(legacy.lastPathComponent) moved to \(globalFolder.lastPathComponent)."))
+            }
+        }
     }
 
     func deleteDownloads(for id: String) {
@@ -1272,6 +1330,14 @@ extension Notification.Name {
             } else { privateFeed = nil }
         }
         let canonical = source.id
+        if case .tiktokVideo(let video) = source {
+            // La collection est partagée par tous les liens unitaires :
+            // on retient l'adresse exacte pour le bouton « Reprendre ».
+            UserDefaults.standard.set(video.url.absoluteString, forKey: Self.tikTokVideoSelectionKey)
+            // Collections héritées `ttv/<id>` (un dossier par lien) : retirées
+            // dès que le dossier global a repris le service.
+            collections.removeAll { $0.isTikTokVideo && $0.id != canonical }
+        }
         UserDefaults.standard.set(canonical, forKey: "lastUsername")
         activeUser = canonical
         upsertCollection(source)
@@ -2034,21 +2100,27 @@ extension Notification.Name {
                                 usedFilenames: inout Set<String>,
                                 preparedCount: inout Int) async throws {
         status = L("Résolution de la vidéo TikTok…", "Resolving TikTok video…")
+        // Fusion des dossiers hérités (`ttv.<id>` d'avant le dossier global)
+        // avant la lecture : les fichiers déjà là jouent leur rôle de
+        // dédoublonnage dans le dossier partagé.
+        Self.migrateLegacyTikTokVideoFolders(root: root, into: folder)
         // Clés déjà sur disque : une clé média suffit, comme dans le parcours
         // `tt/` — la même vidéo relancée ne retélécharge rien.
         let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
         try Task.checkCancellation()
-        // Résolution en cascade : URLSession directe avec l'UA desktop, puis
-        // WebView cachée branchée sur la session TikTok (présentée desktop,
-        // puis à l'UA iPhone). TikTok tient parfois à chaque client un
-        // squelette sans JSON d'hydratation (vérification silencieuse,
-        // variante mobile de la page) : la WebView fait ce que fait la page
-        // elle-même — charger, exécuter, servir son propre JSON. L'UA qui a
-        // obtenu la page sert aussi au transfert des médias : les URL CDN
-        // n'acceptent que l'UA qui les a obtenues.
-        var pageAgent = TikTokAPI.desktopUserAgent
+        // Résolution en cascade (`TikTokVideoResolution`, MediaCore testé) :
+        // URLSession directe avec l'UA desktop, puis WebView cachée branchée
+        // sur la session TikTok (présentée desktop, puis à l'UA iPhone). TikTok
+        // tient parfois à chaque client un squelette sans JSON d'hydratation
+        // (vérification silencieuse, variante mobile de la page) : la WebView
+        // fait ce que fait la page elle-même — charger, exécuter, servir son
+        // propre JSON. L'UA qui a obtenu la page sert aussi au transfert des
+        // médias : les URL CDN n'acceptent que l'UA qui les a obtenues.
+        let cascade = TikTokVideoResolution.cascade(directUserAgent: TikTokAPI.desktopUserAgent,
+                                                    mobileUserAgent: TikTokAPI.userAgent)
+        var pageAgent = TikTokVideoResolution.mediaUserAgent(for: cascade[0])
         let detail: TikTokWeb.TikTokVideoDetail
         do {
             let headers = TikTokAPI.headers(referer: ref.url, browserAgent: pageAgent)
@@ -2058,18 +2130,17 @@ extension Notification.Name {
                              "TikTok: video page unreadable directly, re-reading it in the hidden WebView."))
             var fallbackError = error
             var resolved: TikTokWeb.TikTokVideoDetail?
-            for desktop in [true, false] {
-                guard let data = await TikTokVideoPageReader().read(ref.url, desktopUserAgent: desktop) else {
-                    LogCenter.info(L(desktop ? "TikTok : WebView desktop sans JSON d'hydratation, essai suivant."
-                                             : "TikTok : WebView mobile sans JSON d'hydratation, essai suivant.",
-                                     desktop ? "TikTok: desktop WebView without hydration JSON, trying next."
-                                             : "TikTok: mobile WebView without hydration JSON, trying next."))
+            for attempt in cascade.dropFirst() where resolved == nil {
+                guard let data = await TikTokVideoPageReader().read(ref.url, desktopUserAgent: attempt.desktop) else {
+                    LogCenter.info(L(attempt.desktop ? "TikTok : WebView desktop sans JSON d'hydratation, essai suivant."
+                                                     : "TikTok : WebView mobile sans JSON d'hydratation, essai suivant.",
+                                     attempt.desktop ? "TikTok: desktop WebView without hydration JSON, trying next."
+                                                     : "TikTok: mobile WebView without hydration JSON, trying next."))
                     continue
                 }
                 do {
                     resolved = try TikTokWeb.parseVideoDetail(String(decoding: data, as: UTF8.self))
-                    if !desktop { pageAgent = TikTokAPI.userAgent }
-                    break
+                    pageAgent = TikTokVideoResolution.mediaUserAgent(for: attempt)
                 } catch {
                     // Un échec de parsing reste la meilleure erreur disponible
                     // (vidéo supprimée, fil tronqué) : le reporter de préférence
@@ -2085,6 +2156,10 @@ extension Notification.Name {
         await TikTokSession.shared.recordAPIAcceptance(true)
         LogCenter.info(L("TikTok : vidéo \(detail.id) résolue.", "TikTok: video \(detail.id) resolved."))
 
+        // Dossier global partagé par tous les liens unitaires : le compte de
+        // l'auteur passe au début du titre du média, sans lui le fichier
+        // serait impossible à rattacher à un compte sur le Drive.
+        let mediaTitle = [detail.author, detail.text].filter { !$0.isEmpty }.joined(separator: " - ")
         let postPage = TikTokAPI.postPageURL(author: detail.author, postID: detail.id)
         var posts: [Post] = []
         var mediaOverrides: [String: [Media]] = [:]
@@ -2101,13 +2176,16 @@ extension Notification.Name {
                 ?? TikTokAPI.mediaHeaders(browserAgent: pageAgent)
             mediaMirrorsByMedia[id] = media.mirrors
             if media.kind == .video { mediaExtensions[id] = "mp4" }
-            posts.append(Post(id: id, title: detail.text, html: "",
+            posts.append(Post(id: id, title: mediaTitle, html: "",
                               publishedAt: detail.publishedAt,
                               link: postPage?.absoluteString))
         }
         let downloads = try await prepareDownloads(posts, folder: folder,
             seenMedia: &seenMedia, usedFilenames: &usedFilenames,
-            author: canonical, mediaOverrides: mediaOverrides,
+            // Métadonnées (sidecar et tags binaires) : le vrai pseudo du compte
+            // plutôt que la clé de collection partagée `ttv/videos`.
+            author: detail.author.isEmpty ? canonical : detail.author,
+            mediaOverrides: mediaOverrides,
             mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
             mediaExtensions: mediaExtensions)
         beginTransferUnit(total: downloads.count)
