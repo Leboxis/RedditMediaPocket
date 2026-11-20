@@ -45,9 +45,11 @@ final class GalleryFeedTests: XCTestCase {
 
     func testParsesOrderedOriginals() throws {
         let media = try GalleryFeed.parse(Data(fixture.utf8))
+        // URL signées `s.u` exactes (vraie extension, query conservée) ; le
+        // gif retombe sur `s.gif` (i.redd.it) ; la vidéo sur v.redd.it.
         XCTAssertEqual(media, [
-            .direct(URL(string: "https://i.redd.it/bbb222.jpg")!),
-            .direct(URL(string: "https://i.redd.it/aaa111.png")!),
+            .direct(URL(string: "https://preview.redd.it/bbb222.jpg?width=3024&format=pjpg&auto=webp&s=bb")!),
+            .direct(URL(string: "https://preview.redd.it/aaa111.png?width=1080&format=png&auto=webp&s=aa")!),
             .redditVideo(URL(string: "https://v.redd.it/ddd444")!),
             .direct(URL(string: "https://i.redd.it/eee555.gif")!),
             .direct(URL(string: "https://i.redd.it/fff666.jpg")!)
@@ -78,7 +80,7 @@ final class GalleryFeedTests: XCTestCase {
         ]
         """
         XCTAssertEqual(try GalleryFeed.parse(Data(json.utf8)),
-                       [.direct(URL(string: "https://i.redd.it/aaa111.jpg")!)])
+                       [.direct(URL(string: "https://preview.redd.it/aaa111.jpg?width=640")!)])
     }
 
     func testPostWithoutGalleryYieldsEmptyList() throws {

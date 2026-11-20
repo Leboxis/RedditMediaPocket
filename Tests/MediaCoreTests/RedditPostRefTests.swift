@@ -115,8 +115,8 @@ final class RedditPostRefTests: XCTestCase {
         let fallback = RedditPostRef.Post(id: "t3_gal123", url: URL(string: "https://redd.it/gal123")!)
         let detail = try RedditPostRef.parsePost(data, fallback: fallback)
         XCTAssertEqual(detail.media, [
-            .direct(URL(string: "https://i.redd.it/a.jpg")!),
-            .direct(URL(string: "https://i.redd.it/b.png")!)
+            .direct(URL(string: "https://preview.redd.it/a.jpg?width=1080")!),
+            .direct(URL(string: "https://preview.redd.it/b.png")!)
         ])
     }
 
