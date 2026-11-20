@@ -2159,7 +2159,7 @@ extension Notification.Name {
         // Dossier global partagé par tous les liens unitaires : le compte de
         // l'auteur passe au début du titre du média, sans lui le fichier
         // serait impossible à rattacher à un compte sur le Drive.
-        let mediaTitle = [detail.author, detail.text].filter { !$0.isEmpty }.joined(separator: " - ")
+        let mediaTitle = [detail.author ?? "", detail.text].filter { !$0.isEmpty }.joined(separator: " - ")
         let postPage = TikTokAPI.postPageURL(author: detail.author, postID: detail.id)
         var posts: [Post] = []
         var mediaOverrides: [String: [Media]] = [:]
@@ -2184,7 +2184,7 @@ extension Notification.Name {
             seenMedia: &seenMedia, usedFilenames: &usedFilenames,
             // Métadonnées (sidecar et tags binaires) : le vrai pseudo du compte
             // plutôt que la clé de collection partagée `ttv/videos`.
-            author: detail.author.isEmpty ? canonical : detail.author,
+            author: detail.author.flatMap { $0.isEmpty ? nil : $0 } ?? canonical,
             mediaOverrides: mediaOverrides,
             mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
             mediaExtensions: mediaExtensions)
