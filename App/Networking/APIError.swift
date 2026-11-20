@@ -1,4 +1,5 @@
 import Foundation
+import MediaCore
 
 /// Erreurs du client API, sans dépendance tierce.
 public enum APIError: Error, Sendable {

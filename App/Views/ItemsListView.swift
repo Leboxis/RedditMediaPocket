@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 
 /// Vue simple des éléments stockés dans le Worker. Tout appel réseau part de `.task`,
 /// jamais du `init` ni du `body`.

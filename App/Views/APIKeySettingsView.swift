@@ -1,4 +1,5 @@
 import SwiftUI
+import MediaCore
 
 /// Écran minimal pour enregistrer la clé API dans le Keychain de l'iPhone.
 struct APIKeySettingsView: View {

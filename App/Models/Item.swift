@@ -1,4 +1,5 @@
 import Foundation
+import MediaCore
 
 /// Catégories d'éléments stockés dans la base, adaptées à RedditMediaPocket.
 public enum TypeItem: String, Codable, Sendable {
