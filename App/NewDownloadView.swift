@@ -24,9 +24,7 @@ struct NewDownloadView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: DS.space(3)) {
-                    inputRow
-                    optionsRow
-                    sourceHintRow
+                    commandCard
                     transferConsole
                 }
                 .padding(DS.space(4))
@@ -72,48 +70,63 @@ struct NewDownloadView: View {
 
     // MARK: - Commande
 
-    private var inputRow: some View {
+    /// Carte commande : la source, le champ, les options de la source et les
+    /// indices occupent toute la zone au-dessus du bouton principal.
+    private var commandCard: some View {
         VStack(spacing: DS.space(3)) {
-            HStack(spacing: DS.space(3)) {
-                SourceKindButton(kind: SourceKind(rawValue: model.sourceKind) ?? .user) {
-                    guard !model.running else { return }
-                    sourceGridPresented = true
-                }
-                if model.sourceKind == "saved" {
-                    Text(L("Compte Reddit connecté", "Signed-in Reddit account"))
-                        .font(.callout)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, DS.space(3))
-                        .frame(minHeight: 44)
-                } else {
-                    TextField(placeholder, text: $model.username)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.go).focused($editing)
-                        .disabled(model.running)
-                        .onSubmit { start() }
-                        .padding(DS.space(3))
-                        .frame(minHeight: 44)
-                        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
-                }
-            }
-            Button {
-                if model.running { model.stop() } else { start() }
-            } label: {
-                HStack(spacing: DS.space(2)) {
-                    Image(systemName: model.running ? "stop.fill" : "arrow.down")
-                        .font(.system(size: 19, weight: .semibold))
-                    Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
-                        .font(DS.headline)
-                }
-                .foregroundStyle(DS.onAccent)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .background(DS.accent, in: RoundedRectangle(cornerRadius: DS.radiusM))
-            }
-            .disabled(cannotStart)
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel(model.running ? L("Arrêter le téléchargement", "Stop download") : L("Télécharger", "Download"))
+            sourceFieldRow
+            optionsRow
+            sourceHintRow
+            downloadButton
         }
+        .padding(DS.space(4))
+        .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusL))
+        .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
+    }
+
+    private var sourceFieldRow: some View {
+        HStack(spacing: DS.space(3)) {
+            SourceKindButton(kind: SourceKind(rawValue: model.sourceKind) ?? .user) {
+                guard !model.running else { return }
+                sourceGridPresented = true
+            }
+            if model.sourceKind == "saved" {
+                Text(L("Compte Reddit connecté", "Signed-in Reddit account"))
+                    .font(.callout)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DS.space(3))
+                    .frame(minHeight: 44)
+            } else {
+                TextField(placeholder, text: $model.username)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .submitLabel(.go).focused($editing)
+                    .disabled(model.running)
+                    .onSubmit { start() }
+                    .padding(DS.space(3))
+                    .frame(minHeight: 44)
+                    .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
+            }
+        }
+    }
+
+    private var downloadButton: some View {
+        Button {
+            if model.running { model.stop() } else { start() }
+        } label: {
+            HStack(spacing: DS.space(2)) {
+                Image(systemName: model.running ? "stop.fill" : "arrow.down")
+                    .font(.system(size: 19, weight: .semibold))
+                Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
+                    .font(DS.headline)
+            }
+            .foregroundStyle(DS.onAccent)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(DS.accent, in: RoundedRectangle(cornerRadius: DS.radiusM))
+        }
+        .disabled(cannotStart)
+        .buttonStyle(DSPressableButtonStyle())
+        .accessibilityLabel(model.running ? L("Arrêter le téléchargement", "Stop download") : L("Télécharger", "Download"))
     }
 
     private var placeholder: String {
@@ -218,7 +231,9 @@ struct NewDownloadView: View {
         return VStack(alignment: .leading, spacing: DS.space(2)) {
             HStack(spacing: 0) {
                 consoleMetric("\(model.files.count)", label: L("médias", "media"))
-                consoleMetric(model.totalSize, label: "")
+                metricDivider
+                consoleMetric(model.totalSize, label: L("poids", "size"))
+                metricDivider
                 consoleMetric("\(model.count)/\(model.discovered)", label: L("repérés", "found"))
                     .opacity(showProgress ? 1 : 0)
                     .accessibilityHidden(!showProgress)
@@ -258,13 +273,25 @@ struct NewDownloadView: View {
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
     }
 
+    /// Grande métrique de la console : valeur monospaced en title3, libellé
+    /// en caption sous la valeur, centrée dans sa colonne.
     private func consoleMetric(_ value: String, label: String) -> some View {
-        HStack(spacing: DS.space(1)) {
-            Text(value).font(DS.monoCaption).foregroundStyle(DS.onSurface)
-            if !label.isEmpty { Text(label).font(.caption2).foregroundStyle(DS.onSurfaceMuted) }
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(.title3, design: .monospaced, weight: .semibold))
+                .foregroundStyle(DS.onSurface)
+                .lineLimit(1).minimumScaleFactor(0.65)
+            Text(label)
+                .font(DS.caption2)
+                .foregroundStyle(DS.onSurfaceMuted)
         }
-        .lineLimit(1).minimumScaleFactor(0.65)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var metricDivider: some View {
+        DS.separator
+            .frame(width: 1, height: 30)
+            .padding(.vertical, DS.space(1))
     }
 
     private func start() {

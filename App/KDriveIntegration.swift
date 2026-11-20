@@ -716,7 +716,9 @@ private enum KDriveConnectionStatus {
     case success(String)
 }
 
-struct KDriveSettingsSection: View {
+/// Détail de la connexion kDrive, poussé depuis la ligne kDrive de la zone
+/// Connexions des Réglages (même habillage que les autres services).
+struct KDriveSettingsDetailView: View {
     @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
     @State private var now = Date()
     private let rateLimitTicker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -736,7 +738,8 @@ struct KDriveSettingsSection: View {
     }
 
     var body: some View {
-        Section {
+        Form {
+            Section {
             HStack {
                 Group {
                     if showToken {
@@ -821,11 +824,14 @@ struct KDriveSettingsSection: View {
                         .foregroundStyle(DS.accentEmphasis)
                 }
             }
-        } header: {
-            Text("Infomaniak kDrive")
-        } footer: {
-            Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
+            } header: {
+                Text("Infomaniak kDrive")
+            } footer: {
+                Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
+            }
         }
+        .navigationTitle(L("Infomaniak kDrive", "Infomaniak kDrive"))
+        .navigationBarTitleDisplayMode(.inline)
         .errorAlert(connectionError)
         .onReceive(rateLimitTicker) { tick in now = tick }
         .onChange(of: token) { _ in connectionStatus = nil }
