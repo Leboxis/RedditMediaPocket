@@ -27,9 +27,11 @@ public enum RedditListing {
             throw FeedError.invalidFeed
         }
         var posts: [Post] = []
-        for child in children where (child["kind"] as? String) == "t3",
-            let d = child["data"] as? [String: Any] {
-            if let post = post(from: d) { posts.append(post) }
+        for child in children {
+            guard (child["kind"] as? String) == "t3",
+                  let d = child["data"] as? [String: Any],
+                  let post = post(from: d) else { continue }
+            posts.append(post)
         }
         return posts
     }
@@ -48,7 +50,10 @@ public enum RedditListing {
         let link = (d["permalink"] as? String).map {
             $0.hasPrefix("http") ? $0 : "https://www.reddit.com" + $0
         }
-        let publishedAt = (d["created_utc"] as? NSNumber)?.doubleValue.map { Date(timeIntervalSince1970: $0) }
+        let publishedAt: Date? = {
+            guard let created = d["created_utc"] as? NSNumber else { return nil }
+            return Date(timeIntervalSince1970: created.doubleValue)
+        }()
 
         // HTML synthétisé : mêmes motifs (href média, href galerie, img
         // d'aperçu signé) que le `content:encoded` d'un flux Atom.
