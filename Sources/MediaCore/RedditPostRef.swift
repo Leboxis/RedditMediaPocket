@@ -142,14 +142,16 @@ public extension RedditPostRef {
         // média — sinon une seule adresse morte annulerait toute la sélection.
         var media = (try? GalleryFeed.parse(data)) ?? []
         if media.isEmpty {
-            media = extractSinglePostMedia(from: post)
-            if media.isEmpty, let parents = post["crosspost_parent_list"] as? [[String: Any]] {
-                for parent in parents.reversed() {
-                    let parentMedia = extractSinglePostMedia(from: parent)
-                    if !parentMedia.isEmpty {
-                        media = parentMedia
-                        break
-                    }
+            // Post à média unique : `url_overridden_by_dest` porte l'original.
+            if let raw = post["url_overridden_by_dest"] as? String,
+               let url = URL(string: raw), url.scheme == "https",
+               let host = url.host?.lowercased(),
+               ["i.redd.it", "i.imgur.com", "v.redd.it"].contains(host) {
+                if host == "v.redd.it", let id = url.pathComponents.dropFirst().first, !id.isEmpty,
+                   let base = URL(string: "https://v.redd.it/\(id)") {
+                    media = [.redditVideo(base)]
+                } else if ["jpg", "jpeg", "png", "gif", "webp", "mp4"].contains(url.pathExtension.lowercased()) {
+                    media = [.direct(QualityPolicy.originalImageURL(url))]
                 }
             }
         }
@@ -161,33 +163,5 @@ public extension RedditPostRef {
             publishedAt: created.map { Date(timeIntervalSince1970: $0) },
             media: media
         )
-    }
-
-    private static func extractSinglePostMedia(from post: [String: Any]) -> [Media] {
-        var candidates: [String] = []
-        if (post["is_video"] as? Bool) == true,
-           let fallback = ((post["media"] as? [String: Any])?["reddit_video"] as? [String: Any])?["fallback_url"] as? String {
-            candidates.append(fallback)
-        }
-        if let raw = post["url_overridden_by_dest"] as? String ?? post["url"] as? String {
-            candidates.append(raw)
-        }
-        for raw in candidates {
-            guard let url = URL(string: raw), url.scheme == "https",
-                  let host = url.host?.lowercased() else { continue }
-            if host == "v.redd.it", let id = url.pathComponents.dropFirst().first, !id.isEmpty,
-               let base = URL(string: "https://v.redd.it/\(id)") {
-                return [.redditVideo(base)]
-            }
-            if host == "redgifs.com" || host == "www.redgifs.com",
-               let id = RedgifsAPI.gifID(raw) {
-                return [.redgifs(id)]
-            }
-            if ["i.redd.it", "i.imgur.com"].contains(host),
-               ["jpg", "jpeg", "png", "gif", "webp", "mp4"].contains(url.pathExtension.lowercased()) {
-                return [.direct(QualityPolicy.originalImageURL(url))]
-            }
-        }
-        return []
     }
 }

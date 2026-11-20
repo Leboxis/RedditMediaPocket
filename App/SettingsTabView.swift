@@ -83,16 +83,16 @@ private struct DownloadSettings: View {
                 Section {
                     SettingsRow(
                         symbol: "person.crop.circle",
-                        tint: reddit.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        tint: reddit.hasSession ? DS.success : DS.warning,
                         title: L("Reddit", "Reddit"),
                         status: reddit.hasSession ? L("Session détectée", "Session detected") : L("Sans session", "Signed out"),
-                        statusColor: reddit.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        statusColor: reddit.hasSession ? DS.success : DS.warning,
                         tap: { loginPresented = true },
                         enabled: !(model.running || reddit.clearing),
                         menuItems: redditMenuItems)
                     SettingsRow(
                         symbol: "bird",
-                        tint: xSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        tint: sessionStatusColor(hasSession: xSession.hasSession, rejected: xSession.apiRejected),
                         title: "X",
                         status: sessionStatus(hasSession: xSession.hasSession, rejected: xSession.apiRejected),
                         statusColor: sessionStatusColor(hasSession: xSession.hasSession, rejected: xSession.apiRejected),
@@ -101,7 +101,7 @@ private struct DownloadSettings: View {
                         menuItems: xMenuItems)
                     SettingsRow(
                         symbol: "music.note",
-                        tint: tikTokSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        tint: sessionStatusColor(hasSession: tikTokSession.hasSession, rejected: tikTokSession.apiRejected),
                         title: "TikTok",
                         status: sessionStatus(hasSession: tikTokSession.hasSession, rejected: tikTokSession.apiRejected),
                         statusColor: sessionStatusColor(hasSession: tikTokSession.hasSession, rejected: tikTokSession.apiRejected),
@@ -110,7 +110,7 @@ private struct DownloadSettings: View {
                         menuItems: tikTokMenuItems)
                     SettingsRow(
                         symbol: "camera",
-                        tint: instagramSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        tint: sessionStatusColor(hasSession: instagramSession.hasSession, rejected: instagramSession.apiRejected),
                         title: "Instagram",
                         status: sessionStatus(hasSession: instagramSession.hasSession, rejected: instagramSession.apiRejected),
                         statusColor: sessionStatusColor(hasSession: instagramSession.hasSession, rejected: instagramSession.apiRejected),
@@ -122,12 +122,12 @@ private struct DownloadSettings: View {
                     } label: {
                         SettingsRow(
                             symbol: "icloud",
-                            tint: kDriveConfigured ? DS.accentEmphasis : DS.onSurfaceMuted,
+                            tint: kDriveConfigured ? DS.success : DS.warning,
                             title: "Infomaniak kDrive",
                             status: kDriveConfigured
                                 ? L("Configuré · \(kDriveFolderLabel)", "Configured · \(kDriveFolderLabel)")
                                 : L("Non configuré", "Not configured"),
-                            statusColor: kDriveConfigured ? DS.accentEmphasis : DS.onSurfaceMuted,
+                            statusColor: kDriveConfigured ? DS.success : DS.warning,
                             tap: nil)
                     }
                     SettingsRow(
@@ -218,7 +218,7 @@ private struct DownloadSettings: View {
 
     private func sessionStatusColor(hasSession: Bool, rejected: Bool) -> Color {
         if rejected { return DS.error }
-        return hasSession ? DS.accentEmphasis : DS.onSurfaceMuted
+        return hasSession ? DS.success : DS.warning
     }
 
     private var redditMenuItems: [SettingsRow.MenuItem] {

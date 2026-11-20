@@ -137,28 +137,4 @@ final class RedditPostRefTests: XCTestCase {
             Data("pas du json".utf8),
             fallback: RedditPostRef.Post(id: "t3_x", url: URL(string: "https://redd.it/x")!)))
     }
-
-    func testRedgifsAndCrosspostSingleMediaAreResolved() throws {
-        let redgifsData = try listing([
-            "id": "rg123",
-            "title": "GIF",
-            "url_overridden_by_dest": "https://www.redgifs.com/watch/DelectableIncompleteShorebird"
-        ])
-        let rgDetail = try RedditPostRef.parsePost(
-            redgifsData,
-            fallback: RedditPostRef.Post(id: "t3_rg123", url: URL(string: "https://redd.it/rg123")!))
-        XCTAssertEqual(rgDetail.media, [.redgifs("delectableincompleteshorebird")])
-
-        let crosspostData = try listing([
-            "id": "xp123",
-            "title": "Crosspost",
-            "crosspost_parent_list": [
-                ["id": "orig1", "url_overridden_by_dest": "https://i.redd.it/cross.jpg"]
-            ]
-        ])
-        let xpDetail = try RedditPostRef.parsePost(
-            crosspostData,
-            fallback: RedditPostRef.Post(id: "t3_xp123", url: URL(string: "https://redd.it/xp123")!))
-        XCTAssertEqual(xpDetail.media, [.direct(URL(string: "https://i.redd.it/cross.jpg")!)])
-    }
 }

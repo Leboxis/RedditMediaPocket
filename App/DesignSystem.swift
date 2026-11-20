@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Design system de la refonte « Console d'archive » (direction A).
 ///
@@ -22,6 +23,18 @@ enum DS {
     /// Texte posé sur `accent` (paire approuvée accent/fond, contraste ≥ 4,5:1).
     static let onAccent = Color("OnAccent")
     static let error = Color("Error")
+    /// Statut « connecté / opérationnel » : vert (contraste ≥ 4,5:1 sur fond clair et sombre).
+    static let success = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.30, green: 0.85, blue: 0.45, alpha: 1)
+            : UIColor(red: 0.08, green: 0.50, blue: 0.20, alpha: 1)
+    })
+    /// Statut « absent / non configuré » : orange (contraste ≥ 4,5:1).
+    static let warning = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.00, green: 0.70, blue: 0.25, alpha: 1)
+            : UIColor(red: 0.70, green: 0.38, blue: 0.00, alpha: 1)
+    })
     static let separator = Color("Separator")
 
     // MARK: - Espacement (pas de 4 pt)

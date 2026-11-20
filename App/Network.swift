@@ -250,10 +250,6 @@ import MediaCore
     /// `www.reddit.com/user/<pseudo>/saved.json` (les flux `.rss` privés sont
     /// coupés depuis le 13/11/2026). Nécessite la session Reddit.
     func savedPosts(_ feed: SavedFeed, after: String?) async throws -> [Post] {
-        try await savedPostsPage(feed, after: after).posts
-    }
-
-    func savedPostsPage(_ feed: SavedFeed, after: String?) async throws -> (posts: [Post], after: String?) {
         var components = URLComponents(string: "https://www.reddit.com/user/\(feed.username)/saved.json")!
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
         if let after { items.append(URLQueryItem(name: "after", value: after)) }
@@ -264,7 +260,7 @@ import MediaCore
         do {
             let body = try await data(url)
             try Task.checkCancellation()
-            return try RedditListing.parsePage(body)
+            return try RedditListing.parse(body)
         } catch {
             try Task.checkCancellation()
             if error is CancellationError { throw error }

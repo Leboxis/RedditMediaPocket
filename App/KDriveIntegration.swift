@@ -893,11 +893,11 @@ struct KDriveSettingsDetailView: View {
                 } else if configured {
                     Label(L("kDrive opérationnel (aucun rate limit)", "kDrive operational (no rate limit)"), systemImage: "checkmark.circle.fill")
                         .font(.footnote)
-                        .foregroundStyle(DS.accentEmphasis)
+                        .foregroundStyle(DS.success)
                 } else {
                     Label(L("Token API ou ID du Drive manquant", "API token or Drive ID missing"), systemImage: "gearshape")
                         .font(.footnote)
-                        .foregroundStyle(DS.onSurfaceMuted)
+                        .foregroundStyle(DS.warning)
                 }
 
                 if configured || rateLimit.requestsLastMinute > 0 {
@@ -911,7 +911,7 @@ struct KDriveSettingsDetailView: View {
                     case .success(let name):
                         Label(L("Connecté : \(name)", "Connected: \(name)"), systemImage: "checkmark.circle.fill")
                             .font(.footnote)
-                            .foregroundStyle(DS.accentEmphasis)
+                            .foregroundStyle(DS.success)
                     }
                 }
             } header: {

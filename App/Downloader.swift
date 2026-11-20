@@ -1395,11 +1395,7 @@ extension Notification.Name {
         }
         // Do not let a response from an earlier session populate the current cache.
         guard RedditSession.shared.revision == revision else { return media }
-        if galleryCache.count >= 50 {
-            for key in Array(galleryCache.keys.prefix(10)) {
-                galleryCache.removeValue(forKey: key)
-            }
-        }
+        if galleryCache.count >= 50 { galleryCache.removeAll() }
         galleryCache[feedID] = media
         return media
     }
@@ -1738,22 +1734,22 @@ extension Notification.Name {
         var pageNumber = 0
         let completed = try await FeedTraversal.run(checkpoint: checkpoint,
             validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
-            fetchPage: { after in
+            fetch: { after in
                 self.status = L("Recherche…", "Searching…")
                 pageNumber += 1
                 let shownAfter = after.map { String($0.suffix(8)) } ?? "début"
                 LogCenter.net(L("Page \(pageNumber) demandée après \(shownAfter)…", "Page \(pageNumber) requested after \(shownAfter)…"))
-                let page: (posts: [Post], after: String?)
+                let posts: [Post]
                 do {
-                    page = try await self.fetchPage(source: source, privateFeed: privateFeed, after: after)
+                    posts = try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
                 } catch {
                     if !(error is CancellationError) {
                         LogCenter.err(L("Page \(pageNumber) interrompue après \(shownAfter) : \(error.localizedDescription). Reprise conservée au dernier point validé.", "Page \(pageNumber) failed after \(shownAfter): \(error.localizedDescription). Checkpoint kept at the last completed page."))
                     }
                     throw error
                 }
-                LogCenter.net(L("Page \(pageNumber) reçue : \(page.posts.count) posts.", "Page \(pageNumber) received: \(page.posts.count) posts."))
-                return page
+                LogCenter.net(L("Page \(pageNumber) reçue : \(posts.count) posts.", "Page \(pageNumber) received: \(posts.count) posts."))
+                return posts
             }, process: { posts in
                 LogCenter.info(L("Page \(pageNumber) : préparation de \(posts.count) posts…", "Page \(pageNumber): preparing \(posts.count) posts…"))
                 // Plafond d'espace vérifié à chaque page : `prepareDownloads`
@@ -3303,25 +3299,20 @@ extension Notification.Name {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    private func fetchPage(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> (posts: [Post], after: String?) {
+    private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
         if let privateFeed {
-            return try await network.savedPostsPage(privateFeed, after: after)
+            return try await network.savedPosts(privateFeed, after: after)
         }
         let url = source.feedURL(sort: subSort, after: after)
         do {
             let body = try await network.data(url)
             // Reddit sert des listings JSON depuis la coupure des flux RSS
             // (13/11/2026) ; les autres sources restent en Atom.
-            if url.path.hasSuffix(".json") { return try RedditListing.parsePage(body) }
-            let posts = try FeedParser.parse(body)
-            return (posts, posts.last?.id)
+            if url.path.hasSuffix(".json") { return try RedditListing.parse(body) }
+            return try FeedParser.parse(body)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
             throw FeedError.loginRequired
         }
-    }
-
-    private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
-        try await fetchPage(source: source, privateFeed: privateFeed, after: after).posts
     }
 
     private static func validPageCursor(_ id: String, privateFeed: SavedFeed?) -> Bool {
@@ -4257,11 +4248,11 @@ extension Notification.Name {
             LogCenter.net(L("Vidéo + son : assemblage…", "Video + audio: merging…"))
             let audio = try await network.download(audioURL)
             defer { try? fm.removeItem(at: audio) }
-            let merged = try await merge(video: video, audio: audio, author: author, postLink: postLink)
-            return (merged, true)
+            let merged = try await merge(video: video, audio: audio)
+            return (merged, false)
         }
     }
-    nonisolated private func merge(video: URL, audio: URL, author: String = "", postLink: String? = nil) async throws -> URL {
+    nonisolated private func merge(video: URL, audio: URL) async throws -> URL {
         let fm = FileManager.default
         let composition = AVMutableComposition()
         let v = AVURLAsset(url: video), a = AVURLAsset(url: audio)
@@ -4276,9 +4267,6 @@ extension Notification.Name {
         let output = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
         guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw NetworkError.invalid(L("Assemblage vidéo indisponible.", "Video merging unavailable.")) }
         export.outputURL = output; export.outputFileType = .mp4
-        let payload = BinaryMetadata.payload(author: author, postLink: postLink)
-        let items = Self.movieMetadataItems(author: payload.author, comment: payload.comment)
-        if !items.isEmpty { export.metadata = items }
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
         } onCancel: {

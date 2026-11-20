@@ -9,8 +9,6 @@ import MediaCore
     @Published private(set) var hasSession = false
     @Published private(set) var revision = 0
     @Published private(set) var clearing = false
-    private var cachedCookies: [HTTPCookie] = []
-    private var sessionIdentity: [String] = []
     private override init() {
         super.init()
         store.httpCookieStore.add(self)
@@ -26,31 +24,23 @@ import MediaCore
     }
     func refresh() async {
         let cookies = await allCookies()
-        cachedCookies = cookies
-        let identity = cookies.filter { $0.name == "reddit_session" }
-            .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
-        let ready = !clearing && cookies.contains {
+        hasSession = cookies.contains {
             $0.name == "reddit_session" && RedditCookiePolicy.header(cookies: [$0], for: URL(string: "https://www.reddit.com/")!) != nil
         }
-        let changed = identity != sessionIdentity || hasSession != ready
-        sessionIdentity = identity
-        if hasSession != ready { hasSession = ready }
-        if changed { revision += 1 }
+        revision += 1
     }
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, RedditCookiePolicy.allows(url) else { return nil }
-        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
+        let cookies = await allCookies()
         guard !clearing else { return nil }
-        return RedditCookiePolicy.header(cookies: cachedCookies, for: url)
+        return RedditCookiePolicy.header(cookies: cookies, for: url)
     }
     func logout() async {
         clearing = true
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
-        cachedCookies = []; sessionIdentity = []
-        if hasSession { hasSession = false }
-        revision += 1; clearing = false
+        hasSession = false; revision += 1; clearing = false
     }
 }
 

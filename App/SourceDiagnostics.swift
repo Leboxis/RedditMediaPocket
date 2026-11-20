@@ -176,9 +176,9 @@ private struct DiagnosticRow: View {
                 case .running:
                     ProgressView()
                 case .ok:
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accentEmphasis)
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.success)
                 case .unconfigured:
-                    Image(systemName: "minus.circle").foregroundStyle(DS.onSurfaceMuted)
+                    Image(systemName: "minus.circle").foregroundStyle(DS.warning)
                 case .fail:
                     Image(systemName: "xmark.circle.fill").foregroundStyle(DS.error)
                 }
@@ -190,8 +190,8 @@ private struct DiagnosticRow: View {
                 switch check.state {
                 case .pending: Text(L("En attente.", "Pending.")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
                 case .running: Text(L("Sonde en cours…", "Probing…")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
-                case .ok(let message): Text(message).font(.caption).foregroundStyle(DS.accentEmphasis)
-                case .unconfigured(let message): Text(message).font(.caption).foregroundStyle(DS.onSurfaceMuted)
+                case .ok(let message): Text(message).font(.caption).foregroundStyle(DS.success)
+                case .unconfigured(let message): Text(message).font(.caption).foregroundStyle(DS.warning)
                 case .fail(let message): Text(message).font(.caption).foregroundStyle(DS.error)
                 }
             }
