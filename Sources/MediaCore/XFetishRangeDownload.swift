@@ -162,15 +162,13 @@ private final class RangeSession: NSObject, URLSessionDataDelegate, @unchecked S
     private let lock = NSLock()
     private var streams: [Int: RangeStream] = [:]
     private var invalidated = false
-    private let session: URLSession
+    private var session: URLSession!
 
     init(configuration: URLSessionConfiguration) {
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
-        var createdSession: URLSession!
         super.init()
-        createdSession = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
-        self.session = createdSession
+        self.session = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
     }
 
     func fetch(_ request: URLRequest, file: URL? = nil, range: ClosedRange<Int64>? = nil, total: Int64? = nil,
