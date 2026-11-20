@@ -32,6 +32,16 @@ enum KDriveError: LocalizedError {
     }
 }
 
+extension KDriveError {
+    /// Erreur d'envoi passagère (timeout 408, 429, 5xx, réseau coupé) : le
+    /// fichier n'a pas été écrit côté serveur, une relance est sûre.
+    static func isTransientUploadError(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        if case .serverError(let code, _) = error { return code == 408 || code == 429 || code >= 500 }
+        return false
+    }
+}
+
 private struct KDriveDriveInfo: Codable {
     let id: Int
     let name: String
@@ -619,6 +629,21 @@ guard (200..<300).contains(httpResponse.statusCode) else {
                                 )
                                 return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
                             } catch {
+                                if KDriveError.isTransientUploadError(error), !Task.isCancelled {
+                                    LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
+                                    try? await Task.sleep(for: .seconds(2))
+                                    do {
+                                        try await KDriveService.performUpload(
+                                            fileURL: fileURL,
+                                            token: token,
+                                            driveId: driveId,
+                                            directoryId: directoryId
+                                        )
+                                        return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
+                                    } catch {
+                                        return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
+                                    }
+                                }
                                 return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
                             }
                         }

@@ -34,6 +34,8 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "leboxis"))
         XCTAssertTrue(FilenamePolicy.kDriveNameMatch("Leboxis", "Léboxis"))
         XCTAssertFalse(FilenamePolicy.kDriveNameMatch("Leboxis", "Autre"))
+        // Forme décomposée (NFD) vs composée (NFC) : même nom visible.
+        XCTAssertTrue(FilenamePolicy.kDriveNameMatch("café.jpeg", "café.jpeg"))
     }
 
     func testKDriveRemoteCandidateNames() {

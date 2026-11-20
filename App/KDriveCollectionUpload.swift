@@ -545,16 +545,12 @@ final class KDriveContinuousUploadController: ObservableObject {
             )
         } catch {
             // Une erreur réseau (timeout, connexion coupée) ou un refus
-            // transitoire du serveur (429, 5xx) mérite une relance : le fichier
-            // n'a jamais été écrit côté serveur, réessayer une fois évite un
-            // échec définitif sur un incident passager.
-            let retryable: Bool = {
-                if error is URLError { return true }
-                if case KDriveError.serverError(let code, _) = error { return code == 429 || code >= 500 }
-                return false
-            }()
-            if retryable, !Task.isCancelled {
+            // transitoire du serveur (408, 429, 5xx) mérite une relance : le
+            // fichier n'a jamais été écrit côté serveur, réessayer une fois
+            // évite un échec définitif sur un incident passager.
+            if KDriveError.isTransientUploadError(error), !Task.isCancelled {
                 LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
+                try? await Task.sleep(for: .seconds(2))
                 do {
                     try await performUpload(
                         fileURL: fileURL,
@@ -869,7 +865,7 @@ final class KDriveContinuousUploadController: ObservableObject {
             let remoteId = (file["id"] as? NSNumber)?.stringValue ?? "?"
             LogCenter.kdrive(L("kDrive : session close — \(remoteFileName) assemblé côté serveur en \(remoteName) (id \(remoteId), \(totalChunks) chunks).", "kDrive: session closed — \(remoteFileName) assembled server-side as \(remoteName) (id \(remoteId), \(totalChunks) chunks)."))
             if remoteName != remoteFileName {
-                LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
+                LogCenter.kdrive(L("kDrive : « \(remoteFileName) » existe déjà sur le Drive, enregistré sous « \(remoteName) ».", "kDrive: “\(remoteFileName)” already exists on the Drive, saved as “\(remoteName)”."))
             }
         }
         sessionClosed = true
@@ -994,7 +990,7 @@ final class KDriveContinuousUploadController: ObservableObject {
             let remoteId = (file["id"] as? NSNumber)?.stringValue ?? "?"
             LogCenter.kdrive(L("kDrive : fichier créé sur le Drive — \(remoteName) (id \(remoteId)).", "kDrive: file created on Drive — \(remoteName) (id \(remoteId))."))
             if remoteName != remoteFileName {
-                LogCenter.err(L("kDrive : le serveur a renommé \(remoteFileName) en \(remoteName).", "kDrive: server renamed \(remoteFileName) to \(remoteName)."))
+                LogCenter.kdrive(L("kDrive : « \(remoteFileName) » existe déjà sur le Drive, enregistré sous « \(remoteName) ».", "kDrive: “\(remoteFileName)” already exists on the Drive, saved as “\(remoteName)”."))
             }
         }
     }

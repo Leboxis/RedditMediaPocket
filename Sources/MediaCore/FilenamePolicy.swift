@@ -256,7 +256,8 @@ public enum FilenamePolicy {
     /// Comparaison de noms de dossiers kDrive : insensible à la casse et aux
     /// diacritiques, comme la recherche dans `prepareCollectionFolder`.
     public static func kDriveNameMatch(_ lhs: String, _ rhs: String) -> Bool {
-        lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        lhs.precomposedStringWithCanonicalMapping
+            .compare(rhs.precomposedStringWithCanonicalMapping, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
     }
 
     /// Noms distants possibles d'un fichier local : le nom assaini envoyé en
