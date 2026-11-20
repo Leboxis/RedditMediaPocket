@@ -53,6 +53,20 @@ struct ContentView: View {
 
     @Environment(\.theme) private var theme
 
+    /// Ce que le champ attend, selon la source. Partagé par les deux mises en
+    /// page : le composeur moderne ne doit pas appauvrir la consigne.
+    private var sourcePlaceholder: String {
+        switch model.sourceKind {
+        case "r": return L("sub, ou lien de post", "sub, or post link")
+        case "rg": return L("pseudo, #tag ou lien", "username, #tag or link")
+        case "x": return L("nom, lien vidéo/album", "name, video/album link")
+        case "tw": return L("compte X", "X account")
+        case "tt": return L("compte TikTok", "TikTok account")
+        case "ig": return L("compte Instagram", "Instagram account")
+        default: return L("pseudo", "username")
+        }
+    }
+
     /// La mise en page classique, extraite telle quelle : aucune valeur n'a
     /// changé, seul son emplacement change. C'est le point de bascule entre les
     /// deux révisions.
@@ -101,7 +115,12 @@ struct ContentView: View {
                 guard !model.running else { return }
                 sourceGridPresented = true
             }
-            TextField(L("pseudo, lien ou compte", "username, link or account"), text: $model.username)
+            if model.sourceKind == "saved" {
+                // Les sauvegardés Reddit ne se nomment pas : le compte vient de
+                // la session. Un champ éditable laisserait croire l'inverse.
+                Spacer()
+            } else {
+            TextField(sourcePlaceholder, text: $model.username)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .submitLabel(.go)
@@ -111,6 +130,7 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 9)
                 .background(theme.background, in: RoundedRectangle(cornerRadius: theme.cornerField))
+            }
             actionPill
         }
         .padding(10)
@@ -132,11 +152,12 @@ struct ContentView: View {
                 Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
                     .font(.headline)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.6)
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
-            .frame(height: 44)
+            .frame(minHeight: 44)
+            .layoutPriority(1)
             .background(theme.accent, in: Capsule())
             .overlay(alignment: .topTrailing) {
                 Circle()
@@ -268,12 +289,7 @@ struct ContentView: View {
             if model.sourceKind == "saved" {
                 Spacer()
             } else {
-                TextField(model.sourceKind == "r" ? L("sub, ou lien de post", "sub, or post link") :
-                          (model.sourceKind == "rg" ? L("pseudo, #tag ou lien", "username, #tag or link") :
-                            (model.sourceKind == "x" ? L("nom, lien vidéo/album", "name, video/album link") :
-                              (model.sourceKind == "tw" ? L("compte X", "X account") :
-                                (model.sourceKind == "tt" ? L("compte TikTok", "TikTok account") :
-                                  (model.sourceKind == "ig" ? L("compte Instagram", "Instagram account") : L("pseudo", "username")))))), text: $model.username)
+                TextField(sourcePlaceholder, text: $model.username)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .submitLabel(.go).focused($editing)
                     .disabled(model.running)
@@ -861,16 +877,28 @@ private struct SourceKindButton: View {
     let kind: SourceKind
     let open: () -> Void
 
+    @Environment(\.theme) private var theme
+
     var body: some View {
         Button {
             SourceSelection.haptic()
             open()
         } label: {
-            Text(SourceSelection.face(kind))
-                .font(.system(size: 17, weight: .semibold))
-                .frame(width: 52, height: 48)
-                .foregroundStyle(.orange)
-                .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            Group {
+                if theme.usesFloatingToolbar, let mark = SourceSelection.mark(kind) {
+                    // Le code `u/` n'a plus de sens à côté d'un logo, et un fond
+                    // de surface identique à celui de la carte rendrait la zone
+                    // tactile invisible : le bouton prend le fond de l'écran.
+                    SourceMarkView(mark: mark, tint: theme.primaryText, size: 22)
+                } else {
+                    Text(SourceSelection.face(kind))
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(theme.usesFloatingToolbar ? theme.primaryText : .orange)
+                }
+            }
+            .frame(width: 52, height: 48)
+            .background(theme.usesFloatingToolbar ? theme.background : Color(uiColor: .secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: theme.usesFloatingToolbar ? theme.cornerField : 14))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(L("Source : \(SourceSelection.spoken(kind)). Touchez pour choisir parmi toutes les sources.", "Source: \(SourceSelection.spoken(kind)). Tap to choose among all sources."))
@@ -971,7 +999,10 @@ private struct SourceGridCard: View {
             .scaleEffect(theme.usesFloatingToolbar && isCurrent ? 1.03 : 1)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
-            .foregroundStyle(isCurrent ? .orange : .primary)
+            // En moderne, le glyphe et le libellé gardent leur teinte à la
+            // sélection : seuls le fond et le contour la signalent. Sans cette
+            // ligne, les trois sources sans marque passaient encore à l'orange.
+            .foregroundStyle(theme.usesFloatingToolbar ? theme.primaryText : (isCurrent ? .orange : .primary))
             .background(isCurrent ? Color.orange.opacity(0.12) : theme.surface,
                         in: RoundedRectangle(cornerRadius: theme.cornerCard))
             .overlay(RoundedRectangle(cornerRadius: theme.cornerCard).strokeBorder(isCurrent ? .orange : .clear, lineWidth: 1.5))
