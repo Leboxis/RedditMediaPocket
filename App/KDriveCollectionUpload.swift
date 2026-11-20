@@ -1038,149 +1038,55 @@ private struct KDriveContinuousUploadSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
+            VStack(spacing: DS.space(3)) {
                 ScrollView {
-                    VStack(spacing: 20) {
-                if uploader.finished {
-                    Image(systemName: uploader.wasCancelled ? "xmark.circle.fill" : (uploader.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
-                        .font(.system(size: 54))
-                        .foregroundStyle(uploader.wasCancelled ? DS.accentEmphasis : (uploader.failedCount == 0 ? DS.accentEmphasis : DS.error))
-
-                    Text(uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (uploader.failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
-                        .font(.headline)
-
-                    Text(L("\(uploader.successCount) média(s) envoyé(s) vers « \(lot.directoryName) ».", "\(uploader.successCount) media file(s) uploaded to “\(lot.directoryName)”."))
-                        .font(.subheadline)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .multilineTextAlignment(.center)
-
-                    if lot.skippedCount > 0 {
-                        Text(L("\(lot.skippedCount) déjà présent(s), ignoré(s).", "\(lot.skippedCount) already present, skipped."))
-                            .font(.subheadline)
-                            .foregroundStyle(DS.accentEmphasis)
-                    }
-
-                    if deletedCount > 0 || deleteFailures > 0 {
-                        Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
-                            .font(.subheadline)
-                            .foregroundStyle(deleteFailures > 0 ? DS.error : DS.accentEmphasis)
-                            .multilineTextAlignment(.center)
-                    } else if !uploader.uploadedFileURLs.isEmpty {
-                        Button {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label(L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
+                    Group {
+                        if uploader.finished {
+                            UploadConsoleCard(
+                                icon: uploader.wasCancelled ? "xmark.circle.fill" : (uploader.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"),
+                                iconColor: uploader.wasCancelled ? DS.accentEmphasis : (uploader.failedCount == 0 ? DS.accentEmphasis : DS.error),
+                                title: uploader.wasCancelled ? L("Upload annulé", "Upload cancelled") : (uploader.failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")),
+                                status: L("« \(lot.directoryName) »", "“\(lot.directoryName)”"),
+                                counter: nil,
+                                progress: nil,
+                                stats: finishedStats,
+                                summary: L("\(uploader.successCount) média(s) envoyé(s).", "\(uploader.successCount) media file(s) uploaded."))
+                        } else {
+                            UploadConsoleCard(
+                                icon: "icloud.and.arrow.up.fill",
+                                iconColor: DS.accentEmphasis,
+                                title: L("Envoi vers kDrive…", "Uploading to kDrive…"),
+                                status: L("« \(lot.directoryName) »", "“\(lot.directoryName)”"),
+                                counter: "\(uploader.completedCount) / \(max(1, uploader.totalCount))",
+                                progress: uploader.progress,
+                                stats: progressStats,
+                                summary: nil)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(DS.error)
                     }
+                    .padding(.horizontal, DS.space(4))
+                    .padding(.top, DS.space(2))
+                }
 
-                    if !alreadyOnDriveURLs.isEmpty {
-                        Button {
-                            showDuplicateDeleteConfirm = true
-                        } label: {
-                            Label(L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive"), systemImage: "trash")
+                VStack(spacing: DS.space(2)) {
+                    if uploader.isUploading {
+                        UploadActionButton(title: L("Continuer en arrière-plan", "Continue in background"), systemImage: "icloud.and.arrow.up", prominent: true) { dismiss() }
+                        UploadActionButton(title: L("Annuler l'envoi", "Cancel upload"), systemImage: "xmark.circle", destructive: true) { uploader.cancel() }
+                    } else {
+                        UploadActionButton(title: L("Fermer", "Close"), systemImage: "checkmark", prominent: true) { dismiss() }
+                        if deletedCount == 0 && deleteFailures == 0 && !uploader.uploadedFileURLs.isEmpty {
+                            UploadActionButton(title: L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash", destructive: true) {
+                                showDeleteConfirm = true
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .tint(DS.error)
+                        if duplicateDeletedCount == 0 && duplicateDeleteFailures == 0 && !alreadyOnDriveURLs.isEmpty {
+                            UploadActionButton(title: L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive du téléphone", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive from the phone"), systemImage: "trash", destructive: true) {
+                                showDuplicateDeleteConfirm = true
+                            }
+                        }
                     }
-                } else {
-                    ProgressView(value: uploader.progress)
-                        .progressViewStyle(.linear)
-                        .tint(DS.accent)
-                        .padding(.horizontal, DS.space(4))
-
-                    Image(systemName: "icloud.and.arrow.up.fill")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(DS.accentEmphasis)
-                        .frame(width: 44, height: 44)
-                        .background(DS.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusM))
-
-                    Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
-                        .font(DS.headline)
-                        .foregroundStyle(DS.onSurface)
-
-                    Text(L("\(uploader.completedCount) sur \(max(1, uploader.totalCount)) terminé(s)", "\(uploader.completedCount) of \(max(1, uploader.totalCount)) completed"))
-                        .font(.system(.title2, design: .monospaced, weight: .semibold))
-                        .foregroundStyle(DS.onSurface)
-
-                    if uploader.activeUploadCount > 0 {
-                        Text(L("\(uploader.activeUploadCount) envoi(s) en cours sur \(uploader.activeLimit)", "\(uploader.activeUploadCount) upload(s) in progress of \(uploader.activeLimit)"))
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(DS.onSurfaceMuted)
-                    }
-
-                    if uploader.totalBytes > 0 {
-                        Text(L("\(Self.formatBytes(uploader.uploadedBytes)) envoyés sur \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s", "\(Self.formatBytes(uploader.uploadedBytes)) sent of \(Self.formatBytes(uploader.totalBytes)) — ≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(DS.onSurfaceMuted)
-                    }
-
-                    if lot.skippedCount > 0 {
-                        Text(L("\(lot.skippedCount) déjà présent(s) sur le Drive, ignoré(s).", "\(lot.skippedCount) already on the Drive, skipped."))
-                            .font(.subheadline)
-                            .foregroundStyle(DS.accentEmphasis)
-                    }
-
-                    Text(L("Jusqu’à \(uploader.activeLimit) uploads restent actifs en continu.", "Up to \(uploader.activeLimit) uploads stay active continuously."))
-                        .font(.caption)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
-                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? DS.accentEmphasis : DS.onSurfaceMuted)
-
-                    if paceInfoSecondsRemaining > 0 {
-                        let eta = paceInfoSecondsRemaining >= 60 ? "\(paceInfoSecondsRemaining / 60) min" : "\(paceInfoSecondsRemaining) s"
-                        Text(L("Reste ≈ \(uploader.totalCount - uploader.completedCount) envoi(s) — ≈ \(eta) au plafond API", "\(uploader.totalCount - uploader.completedCount) upload(s) left — ≈ \(eta) at the API cap"))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(DS.onSurfaceMuted)
-                    }
-
-                    if rateLimit.nextSlotDelay > 3 {
-                        Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(DS.accentEmphasis)
-                    }
-
-                    if !uploader.lastCompletedFileName.isEmpty {
-                        Text(uploader.lastCompletedFileName)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.horizontal)
-                    }
-                    }
-                    }
-                    .padding(.vertical, DS.space(3))
-                    .frame(maxWidth: .infinity)
                 }
-
-                Button {
-                    dismiss()
-                } label: {
-                    Text(uploader.isUploading ? L("Continuer en arrière-plan", "Continue in background") : L("Fermer", "Close"))
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(DS.accent)
-                .padding(.horizontal)
-                .padding(.bottom)
-
-                if uploader.isUploading {
-                    Button(role: .destructive) {
-                        uploader.cancel()
-                    } label: {
-                        Text(L("Annuler l'envoi", "Cancel upload"))
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                    .padding(.horizontal)
-                    .padding(.bottom)
-                }
+                .padding(.horizontal, DS.space(4))
+                .padding(.bottom, DS.space(3))
             }
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
@@ -1208,6 +1114,46 @@ private struct KDriveContinuousUploadSheet: View {
         .errorAlert(uploader.finalError)
         .presentationDetents([.medium])
         .onAppear { startUploadIfNeeded() }
+    }
+
+
+    private var progressStats: [(label: String, value: String)] {
+        var stats: [(label: String, value: String)] = []
+        if uploader.totalBytes > 0 {
+            stats.append((L("Envoyé", "Sent"), "\(Self.formatBytes(uploader.uploadedBytes)) / \(Self.formatBytes(uploader.totalBytes))"))
+            stats.append((L("Débit", "Speed"), "≈ \(Self.formatBytes(Int64(uploader.speedBytesPerSecond)))/s"))
+        }
+        if uploader.activeUploadCount > 0 {
+            stats.append((L("En cours", "Active"), "\(uploader.activeUploadCount) / \(uploader.activeLimit)"))
+        }
+        if lot.skippedCount > 0 {
+            stats.append((L("Déjà sur le Drive", "Already on Drive"), "\(lot.skippedCount)"))
+        }
+        stats.append((L("API", "API"), "\(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) req/min"))
+        if paceInfoSecondsRemaining > 0 {
+            let eta = paceInfoSecondsRemaining >= 60 ? "\(paceInfoSecondsRemaining / 60) min" : "\(paceInfoSecondsRemaining) s"
+            stats.append((L("Reste estimé", "Est. remaining"), "≈ \(eta)"))
+        } else if rateLimit.nextSlotDelay > 3 {
+            stats.append((L("Cadence API", "API pacing"), "\(Int(rateLimit.nextSlotDelay.rounded())) s"))
+        }
+        if !uploader.lastCompletedFileName.isEmpty {
+            stats.append((L("Dernier fichier", "Last file"), uploader.lastCompletedFileName))
+        }
+        return stats
+    }
+
+    private var finishedStats: [(label: String, value: String)] {
+        var stats: [(label: String, value: String)] = []
+        if lot.skippedCount > 0 {
+            stats.append((L("Déjà présents, ignorés", "Already present, skipped"), "\(lot.skippedCount)"))
+        }
+        if deletedCount > 0 || deleteFailures > 0 {
+            stats.append((L("Supprimés du téléphone", "Deleted from phone"), "\(deletedCount)"))
+        }
+        if duplicateDeletedCount > 0 || duplicateDeleteFailures > 0 {
+            stats.append((L("Doublons supprimés", "Duplicates deleted"), "\(duplicateDeletedCount)"))
+        }
+        return stats
     }
 
     private static func formatBytes(_ bytes: Int64) -> String {

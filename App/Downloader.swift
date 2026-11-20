@@ -665,6 +665,15 @@ extension Notification.Name {
         }
     }
 
+    /// Vrai quand le dossier racine contient au moins un média (tout fichier
+    /// non caché hors sidecars `.metadata`).
+    private static func folderHasMedia(_ folderName: String) -> Bool {
+        let fm = FileManager.default
+        let url = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName, isDirectory: true)
+        guard let entries = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return false }
+        return entries.contains { $0.lastPathComponent != ".metadata" }
+    }
+
     private func migrateFolders() {
         let known = Set(collections.map(\.folderName))
         let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
@@ -672,6 +681,10 @@ extension Notification.Name {
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
         guard !fresh.isEmpty else { return }
         for folder in fresh {
+            // Un dossier vide (fichiers supprimés localement après envoi
+            // kDrive, ou dossier hérité sans média) ne doit pas ressusciter
+            // une collection au lancement : on l'ignore.
+            guard Self.folderHasMedia(folder) else { continue }
             // Les dossiers `r.…`, `saved.…`, `x.…`, `redgifs.…`, `tw.…` et
             // `reddit.…` viennent des subreddits, sauvegardés, profils X-Fetish,
             // comptes RedGifs, comptes X et sélections de posts (le point est

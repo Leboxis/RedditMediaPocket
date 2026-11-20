@@ -1129,92 +1129,51 @@ struct KDriveUploadSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 22) {
+            VStack(spacing: DS.space(3)) {
                 ScrollView {
-                    VStack(spacing: 22) {
-                if finished {
-                    Image(systemName: service.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"))
-                        .font(.system(size: 54))
-                        .foregroundStyle(service.wasCancelled ? DS.accentEmphasis : (failedCount == 0 ? DS.accentEmphasis : DS.error))
-
-                    Text(service.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")))
-                        .font(.headline)
-
-                    Text(L("\(successCount) média(s) envoyé(s) vers « \(directoryName) ».", "\(successCount) media file(s) uploaded to “\(directoryName)”."))
-                        .font(.subheadline)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .multilineTextAlignment(.center)
-
-                    if deletedCount > 0 || deleteFailures > 0 {
-                        Text(L("\(deletedCount) fichier(s) envoyé(s) supprimé(s) du téléphone (\(deleteFailures) échec(s)).", "\(deletedCount) uploaded file(s) deleted from the device (\(deleteFailures) failure(s))."))
-                            .font(.subheadline)
-                            .foregroundStyle(deleteFailures > 0 ? DS.error : DS.accentEmphasis)
-                            .multilineTextAlignment(.center)
-                    } else if !service.uploadedFileURLs.isEmpty {
-                        Button {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label(L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash")
+                    Group {
+                        if finished {
+                            UploadConsoleCard(
+                                icon: service.wasCancelled ? "xmark.circle.fill" : (failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"),
+                                iconColor: service.wasCancelled ? DS.accentEmphasis : (failedCount == 0 ? DS.accentEmphasis : DS.error),
+                                title: service.wasCancelled ? L("Upload annulé", "Upload cancelled") : (failedCount == 0 ? L("Upload terminé", "Upload complete") : L("Upload terminé avec avertissements", "Upload completed with warnings")),
+                                status: L("« \(directoryName) »", "“\(directoryName)”"),
+                                counter: nil,
+                                progress: nil,
+                                stats: finishedStats,
+                                summary: L("\(successCount) média(s) envoyé(s).", "\(successCount) media file(s) uploaded."))
+                        } else {
+                            UploadConsoleCard(
+                                icon: "icloud.and.arrow.up.fill",
+                                iconColor: DS.accentEmphasis,
+                                title: L("Envoi vers kDrive…", "Uploading to kDrive…"),
+                                status: L("« \(directoryName) »", "“\(directoryName)”"),
+                                counter: "\(service.currentFileIndex) / \(max(1, service.totalFilesCount))",
+                                progress: service.currentProgress,
+                                stats: progressStats,
+                                summary: nil)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(DS.error)
                     }
-                } else {
-                    ProgressView(value: service.currentProgress)
-                        .progressViewStyle(.linear)
-                        .padding(.horizontal)
-
-                    Image(systemName: "icloud.and.arrow.up.fill")
-                        .font(.system(size: 44))
-                        .foregroundStyle(DS.accentEmphasis)
-
-                    Text(L("Envoi vers kDrive…", "Uploading to kDrive…"))
-                        .font(.headline)
-                    Text(L("\(service.currentFileIndex) sur \(max(1, service.totalFilesCount)) terminé(s)", "\(service.currentFileIndex) of \(max(1, service.totalFilesCount)) completed"))
-                        .font(.subheadline)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                    Text(L("Jusqu’à \(KDriveService.concurrentUploadLimit) fichiers sont envoyés simultanément.", "Up to \(KDriveService.concurrentUploadLimit) files are uploaded simultaneously."))
-                        .font(.caption)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .multilineTextAlignment(.center)
-
-                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requêtes/min (limite officielle : \(KDriveRateLimitCenter.officialLimitPerMinute))", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) requests/min (official limit: \(KDriveRateLimitCenter.officialLimitPerMinute))"))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(rateLimit.requestsLastMinute >= KDriveRateLimitCenter.pacingLimitPerMinute - 2 ? DS.accentEmphasis : DS.onSurfaceMuted)
-
-                    if rateLimit.nextSlotDelay > 3 {
-                        Text(L("Cadence API : prochaine requête dans \(Int(rateLimit.nextSlotDelay.rounded())) s", "API pacing: next request in \(Int(rateLimit.nextSlotDelay.rounded())) s"))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(DS.accentEmphasis)
-                    }
-                    if !service.currentFileName.isEmpty {
-                        Text(service.currentFileName)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .padding(.horizontal)
-                    }
-                    }
-                    }
-                    .padding(.vertical, DS.space(3))
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, DS.space(4))
+                    .padding(.top, DS.space(2))
                 }
 
-                Button {
-                    if service.isUploading {
-                        service.cancelUpload()
+                VStack(spacing: DS.space(2)) {
+                    if !finished {
+                        UploadActionButton(title: L("Annuler l'envoi", "Cancel upload"), systemImage: "xmark.circle", destructive: true) {
+                            service.cancelUpload()
+                        }
                     } else {
-                        dismiss()
+                        UploadActionButton(title: L("Fermer", "Close"), systemImage: "checkmark", prominent: true) { dismiss() }
+                        if deletedCount == 0 && deleteFailures == 0 && !service.uploadedFileURLs.isEmpty {
+                            UploadActionButton(title: L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash", destructive: true) {
+                                showDeleteConfirm = true
+                            }
+                        }
                     }
-                } label: {
-                    Text(finished ? L("Fermer", "Close") : L("Annuler", "Cancel"))
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(finished ? DS.accent : DS.error)
-                .padding(.horizontal)
-                .padding(.bottom)
+                .padding(.horizontal, DS.space(4))
+                .padding(.bottom, DS.space(3))
             }
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
@@ -1239,6 +1198,32 @@ struct KDriveUploadSheet: View {
                 KDriveRateLimitCenter.shared.refreshPacingInfo()
             }
         }
+    }
+
+
+    private var progressStats: [(label: String, value: String)] {
+        var stats: [(label: String, value: String)] = [
+            (L("Simultanés", "Concurrent"), "\(KDriveService.concurrentUploadLimit)")
+        ]
+        if !service.currentFileName.isEmpty {
+            stats.append((L("Fichier en cours", "Current file"), service.currentFileName))
+        }
+        stats.append((L("API", "API"), "\(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) req/min"))
+        if rateLimit.nextSlotDelay > 3 {
+            stats.append((L("Cadence API", "API pacing"), "\(Int(rateLimit.nextSlotDelay.rounded())) s"))
+        }
+        return stats
+    }
+
+    private var finishedStats: [(label: String, value: String)] {
+        var stats: [(label: String, value: String)] = []
+        if failedCount > 0 {
+            stats.append((L("Échecs", "Failures"), "\(failedCount)"))
+        }
+        if deletedCount > 0 || deleteFailures > 0 {
+            stats.append((L("Supprimés du téléphone", "Deleted from phone"), "\(deletedCount)"))
+        }
+        return stats
     }
 
     private func startUploadIfNeeded() {
