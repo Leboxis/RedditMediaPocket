@@ -37,7 +37,7 @@ extension KDriveError {
     /// fichier n'a pas été écrit côté serveur, une relance est sûre.
     static func isTransientUploadError(_ error: Error) -> Bool {
         if error is URLError { return true }
-        if case .serverError(let code, _) = error { return code == 408 || code == 429 || code >= 500 }
+        if case KDriveError.serverError(let code, _) = error { return code == 408 || code == 429 || code >= 500 }
         return false
     }
 }
