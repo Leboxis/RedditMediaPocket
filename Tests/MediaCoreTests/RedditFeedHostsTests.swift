@@ -1,10 +1,12 @@
 import XCTest
 @testable import MediaCore
 
-/// Reddit ne sert plus `/user/<nom>/submitted.rss` ni `/r/<sub>/.rss` sur
-/// `www.reddit.com` : ces adresses répondent un document Atom « Not Found »
-/// émis par `rss.reddit.com` (HTTP 404 constaté). Le repli doit exister pour
-/// ces deux formes, et seulement elles.
+/// Deux refus Reddit sont couverts par le repli `www → old` :
+/// - le 404 des flux `.rss` (`/user/<nom>/submitted.rss`, `/r/<sub>/.rss`),
+///   coupés depuis le 13/11/2026 ;
+/// - le 403 « blocked by network security » que `www.reddit.com` renvoie sur
+///   les listings `.json` de subreddit, alors que les listings d'utilisateur
+///   répondent 200 avec la même session et le même User-Agent.
 final class RedditFeedHostsTests: XCTestCase {
     func testProfileFeedFallsBackToOldReddit() {
         let url = URL(string: "https://www.reddit.com/user/spez/submitted.rss?limit=100")!
@@ -24,35 +26,56 @@ final class RedditFeedHostsTests: XCTestCase {
     func testNoFallbackFromOldReddit() {
         XCTAssertNil(RedditFeedHosts.fallback(
             from: URL(string: "https://old.reddit.com/user/spez/submitted.rss")!))
+        XCTAssertNil(RedditFeedHosts.fallback(
+            from: URL(string: "https://old.reddit.com/r/pics/new.json?limit=100")!, status: 403))
     }
 
-    /// Seules les adresses `.rss` sont concernées : un appel JSON ou une page
-    /// HTML n'ont pas à être rejoués sur l'ancien hôte.
+    /// Seules les adresses de flux sont concernées : une page HTML n'a pas à
+    /// être rejouée sur l'ancien hôte.
     func testNoFallbackForNonFeedPaths() {
         XCTAssertNil(RedditFeedHosts.fallback(
             from: URL(string: "https://www.reddit.com/user/spez/")!))
         XCTAssertNil(RedditFeedHosts.fallback(
-            from: URL(string: "https://www.reddit.com/comments/abc123.json")!))
+            from: URL(string: "https://www.reddit.com/comments/abc123.json")!, status: 403))
     }
 
-    /// Les listings `.json` (chemin retenu depuis la coupure RSS du
-    /// 13/11/2026) ne doivent jamais être rejoués sur `old.reddit.com`.
-    func testNoFallbackForJsonListings() {
-        XCTAssertNil(RedditFeedHosts.fallback(
-            from: URL(string: "https://www.reddit.com/r/pics/new.json?limit=100")!))
-        XCTAssertNil(RedditFeedHosts.fallback(
-            from: URL(string: "https://www.reddit.com/user/spez/submitted.json?limit=100")!))
+    /// Sans statut (ou sur 404), les listings `.json` ne sont pas rejoués :
+    /// c'est le comportement historique, réservé aux `.rss` coupés.
+    func testJsonListingNeedsAnExplicitForbiddenStatus() {
+        let subreddit = URL(string: "https://www.reddit.com/r/pics/new.json?limit=100")!
+        let profile = URL(string: "https://www.reddit.com/user/spez/submitted.json?limit=100")!
+        XCTAssertNil(RedditFeedHosts.fallback(from: subreddit))
+        XCTAssertNil(RedditFeedHosts.fallback(from: profile, status: 404))
+    }
+
+    /// Un 403 sur un listing `.json` rejoue l'adresse sur `old.reddit.com` en
+    /// conservant tri, limit et curseur : c'est le correctif du refus des
+    /// subreddits (`/r/<sub>/new.json` → 403 alors que `/user/…` → 200).
+    func testJsonListingFallsBackOnForbidden() {
+        let url = URL(string: "https://www.reddit.com/r/pics/new.json?limit=100&after=t3_abc")!
+        XCTAssertEqual(RedditFeedHosts.fallback(from: url, status: 403)?.absoluteString,
+                       "https://old.reddit.com/r/pics/new.json?limit=100&after=t3_abc")
+        XCTAssertEqual(RedditFeedHosts.fallback(
+            from: URL(string: "https://www.reddit.com/r/pics/top.json?t=month&limit=100")!, status: 403)?.absoluteString,
+                       "https://old.reddit.com/r/pics/top.json?t=month&limit=100")
+        XCTAssertEqual(RedditFeedHosts.fallback(
+            from: URL(string: "https://www.reddit.com/user/spez/submitted.json?limit=100")!, status: 403)?.host,
+                       "old.reddit.com")
     }
 
     /// Un hôte tiers n'est jamais réécrit : le repli reste dans Reddit.
     func testNoFallbackForForeignHost() {
         XCTAssertNil(RedditFeedHosts.fallback(
-            from: URL(string: "https://example.com/r/pics/new.rss")!))
+            from: URL(string: "https://example.com/r/pics/new.rss")!, status: 403))
+        XCTAssertNil(RedditFeedHosts.fallback(
+            from: URL(string: "https://i.redd.it/image.jpeg")!, status: 403))
     }
 
     func testNoFallbackForNonHTTPS() {
         XCTAssertNil(RedditFeedHosts.fallback(
             from: URL(string: "http://www.reddit.com/r/pics/new.rss")!))
+        XCTAssertNil(RedditFeedHosts.fallback(
+            from: URL(string: "http://www.reddit.com/r/pics/new.json")!, status: 403))
     }
 
     /// Le jeton privé des sauvegardés voyage en paramètre : le repli doit le

@@ -3311,7 +3311,15 @@ extension Notification.Name {
             if url.path.hasSuffix(".json") { return try RedditListing.parse(body) }
             return try FeedParser.parse(body)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            throw FeedError.loginRequired
+            // Un 401, ou un 403 sans session, signifie « connecte-toi ». Un 403
+            // avec session est un refus du listing par Reddit (le repli
+            // `old.reddit.com` vient d'échouer) : dire « connecte-toi » serait
+            // faux puisque u/ et ♥ passent avec la même session.
+            if code == 401 || !RedditSession.shared.hasSession {
+                throw FeedError.loginRequired
+            }
+            throw NetworkError.invalid(L("Reddit refuse ce listing (HTTP \(code)) : la session est détectée mais le repli a échoué. Réessaie plus tard ou vérifie la connexion dans les Réglages.",
+                                         "Reddit refused this listing (HTTP \(code)): the session is detected but the fallback failed. Try again later or check the connection in Settings."))
         }
     }
 

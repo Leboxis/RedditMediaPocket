@@ -144,20 +144,20 @@ import MediaCore
                        body: Data?, includeHeaders: Bool) async throws -> (data: Data, headers: [String: String]) {
         do {
             return try await fetchOnce(url, bearer: bearer, headers: headers, body: body, includeHeaders: includeHeaders)
-        } catch NetworkError.refused(let code) where code == 404 {
-            // Les flux `.rss` de Reddit sont coupés depuis le 13/11/2026 (404
-            // sur www.reddit.com ET old.reddit.com). Le repli historique sur
-            // `old.reddit.com` est conservé pour un éventuel `.rss` restant ;
-            // l'hôte des préférences privées et sert le même chemin : une
-            // seule nouvelle tentative, et le journal dit laquelle a réussi —
-            // c'est ainsi que le repli sera confirmé ou remplacé.
-            guard let fallback = RedditFeedHosts.fallback(from: url) else { throw NetworkError.refused(code) }
-            LogCenter.info(L("Flux Reddit refusé (HTTP 404) sur \(LogDiagnostics.requestSummary(url)) — nouvel essai sur \(LogDiagnostics.requestSummary(fallback)).",
-                             "Reddit feed refused (HTTP 404) on \(LogDiagnostics.requestSummary(url)) — retrying on \(LogDiagnostics.requestSummary(fallback))."))
+        } catch NetworkError.refused(let code) where code == 404 || code == 403 {
+            // Deux refus Reddit sont connus ici : le 404 des flux `.rss`
+            // coupés depuis le 13/11/2026, et le 403 « blocked by network
+            // security » que `www.reddit.com` renvoie sur les listings JSON
+            // de subreddit (`/r/<sub>/<tri>.json`) alors que les listings
+            // d'utilisateur passent. Dans les deux cas, une seule nouvelle
+            // tentative est faite sur `old.reddit.com` (qui ne boucle pas).
+            guard let fallback = RedditFeedHosts.fallback(from: url, status: code) else { throw NetworkError.refused(code) }
+            LogCenter.info(L("Listing Reddit refusé (HTTP \(code)) sur \(LogDiagnostics.requestSummary(url)) — nouvel essai sur \(LogDiagnostics.requestSummary(fallback)).",
+                             "Reddit listing refused (HTTP \(code)) on \(LogDiagnostics.requestSummary(url)) — retrying on \(LogDiagnostics.requestSummary(fallback))."))
             do {
                 let result = try await fetchOnce(fallback, bearer: bearer, headers: headers, body: body, includeHeaders: includeHeaders)
-                LogCenter.info(L("Repli \(fallback.host ?? "") : flux servi (\(result.data.count) octets).",
-                                 "Fallback \(fallback.host ?? ""): feed served (\(result.data.count) bytes)."))
+                LogCenter.info(L("Repli \(fallback.host ?? "") : listing servi (\(result.data.count) octets).",
+                                 "Fallback \(fallback.host ?? ""): listing served (\(result.data.count) bytes)."))
                 return result
             } catch {
                 LogCenter.err(L("Repli \(fallback.host ?? "") refusé : \(error.localizedDescription)",
