@@ -27,8 +27,11 @@ struct LibraryView: View {
     @State private var bulkDeletePending = false
     @State private var savingToGallery = false
     @State private var gallerySaveMessage: String?
-    @FocusState private var editing: Bool
     private let columns = Array(repeating: GridItem(.flexible(), spacing: DS.gridGap), count: 3)
+
+    private var visibleSelection: [URL] {
+        orderedSelection()
+    }
 
     var body: some View {
         NavigationStack {
@@ -48,6 +51,15 @@ struct LibraryView: View {
                         .accessibilityLabel(L("Comptes suivis", "Followed accounts"))
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        if selectingMedia { exitSelection() } else { selectingMedia = true }
+                    } label: {
+                        Image(systemName: selectingMedia ? "checkmark.circle.fill" : "checkmark.circle")
+                    }
+                    .disabled(model.displayedFiles.isEmpty && !selectingMedia)
+                    .accessibilityLabel(selectingMedia ? L("Quitter la sélection", "Exit selection") : L("Sélectionner des médias", "Select media"))
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Button { export = ExportSelection(files: model.files) } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
@@ -59,10 +71,11 @@ struct LibraryView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     KDriveCollectionUploadAction(
                         files: model.files,
-                        collectionLabel: model.activeCollection.map { ($0.isXFetish || $0.isRedGifs || $0.isTwitter || $0.isTikTok || $0.isInstagram) ? $0.id : $0.name } ?? "Pocket"
+                        collectionLabel: model.activeCollection?.kDriveLabel ?? "Pocket"
                     )
                 }
             }
+            .onChange(of: model.activeUser) { _ in exitSelection() }
             .sheet(isPresented: $savedPostsPresented) {
                 SavedPostsView(model: model) { _ in
                     savedPostsPresented = false
@@ -113,9 +126,9 @@ struct LibraryView: View {
             } message: { url in
                 Text(L("\(url.lastPathComponent) sera définitivement supprimé. Les autres médias seront conservés.", "\(url.lastPathComponent) will be permanently deleted. Other media will be kept."))
             }
-            .confirmationDialog(L("Supprimer \(selectedMedia.count) média(s) ?", "Delete \(selectedMedia.count) media?"), isPresented: $bulkDeletePending, titleVisibility: .visible) {
+            .confirmationDialog(L("Supprimer \(visibleSelection.count) média(s) ?", "Delete \(visibleSelection.count) media?"), isPresented: $bulkDeletePending, titleVisibility: .visible) {
                 Button(L("Supprimer", "Delete"), role: .destructive) {
-                    model.deleteMedia(orderedSelection())
+                    model.deleteMedia(visibleSelection)
                     exitSelection()
                 }
                 Button(L("Annuler", "Cancel"), role: .cancel) { }
@@ -133,7 +146,7 @@ struct LibraryView: View {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DS.space(2)) {
-                        ForEach(model.collections.sorted { $0.displayName < $1.displayName }, id: \.id) { collection in
+                        ForEach(model.collections, id: \.id) { collection in
                             userChip(collection)
                         }
                     }
@@ -150,7 +163,7 @@ struct LibraryView: View {
         let fresh = model.lastRunCount(for: collection.id)
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
-                Image(systemName: collection.isSaved ? "bookmark.fill" : (collection.isXFetish ? "photo.on.rectangle" : (collection.isRedGifs ? "film" : (collection.isTwitter ? "bird" : (collection.isTikTok ? "music.note" : (collection.isInstagram ? "camera" : (collection.isSubreddit ? "person.3" : "person.crop.circle")))))))
+                Image(systemName: collection.icon)
                 Text(collection.displayName).lineLimit(1)
                 // Ce qui a réellement été ajouté au passage précédent : l'état
                 // existait déjà (`lastRun`) mais n'était affiché nulle part.
@@ -169,8 +182,12 @@ struct LibraryView: View {
             .background(active ? DS.accent : DS.surface, in: Capsule())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? [.isSelected] : [])
         .contextMenu {
-            Button { model.download(user: collection.id) } label: {
+            Button {
+                goToDownload()
+                model.download(user: collection.id)
+            } label: {
                 Label(L("Reprendre le téléchargement", "Resume download"), systemImage: "arrow.clockwise")
             }
             Button(role: .destructive) { collectionPendingDeletion = collection } label: {
@@ -201,7 +218,7 @@ struct LibraryView: View {
                 Text(model.activeCollection.map { L("Aucun média pour \($0.displayName)", "No media for \($0.displayName)") } ?? L("Choisis une source dans l'onglet Nouveau", "Choose a source in the New tab"))
             } actions: {
                 Button(L("Choisir une source", "Choose a source")) { goToDownload() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(DSPrimaryButtonStyle())
             }
         } else {
             galleryToolbar
@@ -209,7 +226,18 @@ struct LibraryView: View {
                 selectionBar
             }
             if model.displayedFiles.isEmpty {
-                ContentUnavailableView.search(text: model.gallerySearch)
+                if model.gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.galleryKindFilter != .all {
+                    ContentUnavailableView {
+                        Label(L("Aucun résultat pour ce filtre", "No media for this filter"), systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text(L("Aucun média de type « \(model.galleryKindFilter.label) » dans cette collection.", "No “\(model.galleryKindFilter.label)” media in this collection."))
+                    } actions: {
+                        Button(L("Tout afficher", "Show all")) { model.galleryKindFilter = .all }
+                            .buttonStyle(DSPrimaryButtonStyle())
+                    }
+                } else {
+                    ContentUnavailableView.search(text: model.gallerySearch)
+                }
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: DS.gridGap) {
@@ -231,7 +259,6 @@ struct LibraryView: View {
             if selectingMedia {
                 toggleMediaSelection(url)
             } else {
-                editing = false
                 selection = Selection(url: url, files: model.displayedFiles)
             }
         } label: {
@@ -249,7 +276,9 @@ struct LibraryView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .accessibilityLabel(isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l'image", "Open image"))
+        .accessibilityLabel(selectingMedia
+                            ? (isVideo(url) ? L("Sélectionner la vidéo", "Select video") : L("Sélectionner l'image", "Select image"))
+                            : (isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l'image", "Open image")))
         .accessibilityAddTraits(picked && selectingMedia ? .isSelected : [])
         .contextMenu {
             if !selectingMedia {
@@ -273,8 +302,9 @@ struct LibraryView: View {
     /// Barre de la sélection multiple : tout cocher, enregistrer le lot dans
     /// Photos, supprimer le lot, quitter le mode.
     private var selectionBar: some View {
-        let allPicked = !model.displayedFiles.isEmpty && selectedMedia.count == model.displayedFiles.count
-        return HStack(spacing: 14) {
+        let selectedVisible = visibleSelection
+        let allPicked = !model.displayedFiles.isEmpty && selectedVisible.count == model.displayedFiles.count
+        return HStack(spacing: DS.space(1)) {
             Button {
                 if allPicked {
                     selectedMedia.removeAll()
@@ -283,41 +313,50 @@ struct LibraryView: View {
                 }
             } label: {
                 Image(systemName: allPicked ? "checkmark.circle.fill" : "circle.dashed")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(allPicked ? L("Tout désélectionner", "Deselect all") : L("Tout sélectionner", "Select all"))
 
-            Text(selectedMedia.isEmpty
+            Text(selectedVisible.isEmpty
                  ? L("Sélection", "Selection")
-                 : L("\(selectedMedia.count) sélectionné(s)", "\(selectedMedia.count) selected"))
+                 : L("\(selectedVisible.count) sélectionné(s)", "\(selectedVisible.count) selected"))
                 .font(.caption.weight(.medium))
                 .monospacedDigit()
-                .foregroundStyle(selectedMedia.isEmpty ? DS.onSurfaceMuted : DS.onSurface)
+                .foregroundStyle(selectedVisible.isEmpty ? DS.onSurfaceMuted : DS.onSurface)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Button { saveSelectionToGallery() } label: {
-                if savingToGallery {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "square.and.arrow.down")
+                Group {
+                    if savingToGallery {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.down")
+                    }
                 }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
             }
-            .disabled(selectedMedia.isEmpty || savingToGallery)
+            .disabled(selectedVisible.isEmpty || savingToGallery)
             .accessibilityLabel(L("Enregistrer la sélection dans Photos", "Save selection to Photos"))
 
             Button(role: .destructive) { bulkDeletePending = true } label: {
                 Image(systemName: "trash")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
-            .disabled(selectedMedia.isEmpty || model.running)
+            .disabled(selectedVisible.isEmpty || model.running)
             .accessibilityLabel(L("Supprimer la sélection", "Delete selection"))
 
             Button { exitSelection() } label: {
                 Image(systemName: "xmark")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(L("Quitter la sélection", "Exit selection"))
         }
         .font(.system(size: 17, weight: .semibold))
-        .padding(.horizontal, DS.space(3))
-        .padding(.vertical, DS.space(2))
+        .padding(.horizontal, DS.space(2))
         .background(DS.surfaceElevated, in: Capsule())
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
         .padding(.horizontal, DS.space(4))

@@ -97,9 +97,10 @@ public enum XFetishAlbums {
         let parts = XFetishHTML.pathParts(url)
         guard parts.count >= 2, parts[0] == "video", XFetishHTML.numeric(parts[1]) else { return nil }
         let slug = parts.count >= 3 ? parts[2] : ""
+        guard slug.isEmpty || XFetishHTML.pathComponent(slug) else { return nil }
         let title = XFetishHTML.decoded(slug.replacingOccurrences(of: "-", with: " "))
-        return XFetishVideos.Video(id: parts[1], title: title.isEmpty ? "Vidéo \(parts[1])" : title,
-                                    url: URL(string: "https://x-fetish.tube/video/\(parts[1])/\(slug.isEmpty ? "" : slug + "/")")!)
+        guard let pageURL = URL(string: "https://x-fetish.tube/video/\(parts[1])/\(slug.isEmpty ? "" : slug + "/")") else { return nil }
+        return XFetishVideos.Video(id: parts[1], title: title.isEmpty ? "Vidéo \(parts[1])" : title, url: pageURL)
     }
 
     /// Une page `/albums/<id>/<titre>/` désigne un album précis, pas un modèle.

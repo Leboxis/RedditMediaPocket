@@ -54,7 +54,7 @@ private struct KDriveCollectionUploadFlow: View {
     let collectionLabel: String
 
     @AppStorage("kDriveDirectoryId") private var configuredDirectoryId = "1"
-    @AppStorage("kDriveDirectoryName") private var configuredDirectoryName = "Racine (kDrive)"
+    @AppStorage("kDriveDirectoryName") private var configuredDirectoryName = ""
 
     @Environment(\.dismiss) private var dismiss
     @State private var uploadDirectoryId: String?
@@ -64,6 +64,7 @@ private struct KDriveCollectionUploadFlow: View {
     @State private var activeLot: KDriveUploadLot?
     @State private var skippedCount = 0
     @State private var skippedExistingURLs: [URL] = []
+    @State private var prepareTask: Task<Void, Never>?
 
     /// Dossier parent : celui choisi dans Réglages > Infomaniak kDrive.
     private var parentDirectoryId: String {
@@ -104,21 +105,37 @@ private struct KDriveCollectionUploadFlow: View {
                     .frame(maxWidth: .infinity)
                     .navigationTitle("Infomaniak kDrive")
                     .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button(L("Annuler", "Cancel")) {
+                                prepareTask?.cancel()
+                                prepareTask = nil
+                                isPreparing = false
+                                dismiss()
+                            }
+                        }
+                    }
                 }
-            } else if errorMessage != nil {
+            } else if let errorMessage {
                 NavigationStack {
-                    VStack(spacing: 18) {
+                    VStack(spacing: DS.space(4)) {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 44))
-                            .foregroundStyle(DS.accentEmphasis)
+                            .foregroundStyle(DS.error)
+                        Text(errorMessage)
+                            .font(DS.body)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, DS.space(6))
                         Spacer()
                         Button(L("Réessayer", "Retry")) {
                             prepareCollectionFolder()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(DS.accent)
+                        .buttonStyle(DSPrimaryButtonStyle())
+                        .padding(.horizontal, DS.space(4))
                         Button(L("Annuler", "Cancel")) { dismiss() }
+                            .tint(DS.accentEmphasis)
                             .padding(.bottom)
                     }
                     .navigationTitle("Infomaniak kDrive")
@@ -136,6 +153,10 @@ private struct KDriveCollectionUploadFlow: View {
         .task {
             prepareCollectionFolder()
         }
+        .onDisappear {
+            prepareTask?.cancel()
+            prepareTask = nil
+        }
     }
 
     private func prepareCollectionFolder() {
@@ -148,7 +169,9 @@ private struct KDriveCollectionUploadFlow: View {
         errorMessage = nil
 
         let parentId = parentDirectoryId
-        Task { @MainActor in
+        prepareTask?.cancel()
+        prepareTask = Task { @MainActor in
+            defer { prepareTask = nil }
             do {
                 LogCenter.kdrive(L("kDrive : préparation du dossier « \(targetFolderName) » (parent \(parentId)).", "kDrive: preparing folder “\(targetFolderName)” (parent \(parentId))."))
                 let service = KDriveService.shared
@@ -172,6 +195,7 @@ private struct KDriveCollectionUploadFlow: View {
                             folderName: targetFolderName
                         )
                     } catch {
+                        if error is CancellationError { throw error }
                         // Si deux créations se croisent, on relit les dossiers et on
                         // réutilise celui qui vient d'être créé plutôt que d'échouer.
                         let refreshed = try await service.fetchSubdirectories(
@@ -189,6 +213,7 @@ private struct KDriveCollectionUploadFlow: View {
                     }
                 }
 
+                try Task.checkCancellation()
                 uploadDirectoryId = String(folder.id)
                 uploadDirectoryName = folder.name
 
@@ -199,34 +224,43 @@ private struct KDriveCollectionUploadFlow: View {
                     driveId: driveId,
                     directoryId: String(folder.id)
                 )
-                let filtered = files.filter { localURL in
-                    let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: localURL.lastPathComponent)
-                    return !candidates.contains { candidate in
-                        remoteNames.contains { remote in
-                            FilenamePolicy.kDriveNameMatch(remote, candidate)
+                try Task.checkCancellation()
+                let filesSnapshot = files
+                let (filtered, matchedDuplicates) = await Task.detached(priority: .utility) {
+                    let normalizedRemote = Set(remoteNames.map { FilenamePolicy.kDriveNormalizedName($0) })
+                    var toUpload: [URL] = []
+                    var duplicates: [URL] = []
+                    for localURL in filesSnapshot {
+                        if Task.isCancelled { break }
+                        let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: localURL.lastPathComponent)
+                        let alreadyPresent = candidates.contains {
+                            normalizedRemote.contains(FilenamePolicy.kDriveNormalizedName($0))
+                        }
+                        if alreadyPresent {
+                            duplicates.append(localURL)
+                        } else {
+                            toUpload.append(localURL)
                         }
                     }
-                }
+                    return (toUpload, duplicates)
+                }.value
+                try Task.checkCancellation()
                 skippedCount = files.count - filtered.count
                 LogCenter.kdrive(L("kDrive : \(remoteNames.count) fichier(s) distant(s) analysé(s) — \(skippedCount) ignoré(s), \(filtered.count) à envoyer.", "kDrive: \(remoteNames.count) remote file(s) scanned — \(skippedCount) skipped, \(filtered.count) to upload."))
                 if filtered.isEmpty {
                     LogCenter.kdrive(L("kDrive : rien à envoyer, tous les médias sont déjà présents.", "kDrive: nothing to upload, all media already present."))
                 }
-                skippedExistingURLs = files.filter { localURL in
-                    let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: localURL.lastPathComponent)
-                    return !filtered.contains { $0 == localURL } && candidates.contains { candidate in
-                        remoteNames.contains { remote in
-                            FilenamePolicy.kDriveNameMatch(remote, candidate)
-                        }
-                    }
-                }
+                skippedExistingURLs = matchedDuplicates
                 activeLot = KDriveUploadLot(
                     files: filtered,
                     directoryId: uploadDirectoryId ?? String(folder.id),
                     directoryName: uploadDirectoryName.isEmpty ? folder.name : uploadDirectoryName,
                     skippedCount: skippedCount,
-                    alreadyOnDriveURLs: skippedExistingURLs
+                    alreadyOnDriveURLs: matchedDuplicates
                 )
+                isPreparing = false
+            } catch is CancellationError {
+                uploadDirectoryId = nil
                 isPreparing = false
             } catch {
                 uploadDirectoryId = nil
@@ -256,11 +290,7 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// taskIdentifier -> octets envoyés. Les tâches réussies y restent
     /// jusqu'au lot suivant : leurs octets comptent dans la progression.
     private var sent: [Int: Int64] = [:]
-    private var lastActivity: [Int: Date] = [:]
-    private var expectedBytes: [Int: Int64] = [:]
-    /// Tâches en vol, suivies par le délégué : `URLSession.allTasks` est
-    /// un accès asynchrone dans les SDK récents, on s'en passe.
-    private var inflight: [Int: URLSessionTask] = [:]
+    private var totalSentBytes: Int64 = 0
 
     /// `static let` : initialisation thread-safe, au contraire d'un `lazy var`
     /// accessible depuis plusieurs uploads concurrents. 8 connexions par hôte,
@@ -275,20 +305,17 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend totalBytesExpected: Int64) {
         lock.lock()
+        let previous = sent[task.taskIdentifier] ?? 0
         sent[task.taskIdentifier] = totalBytesSent
-        lastActivity[task.taskIdentifier] = Date()
-        expectedBytes[task.taskIdentifier] = totalBytesExpected
-        inflight[task.taskIdentifier] = task
+        totalSentBytes += totalBytesSent - previous
         lock.unlock()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard error != nil else { return }
         lock.lock()
-        inflight.removeValue(forKey: task.taskIdentifier)
-        lastActivity.removeValue(forKey: task.taskIdentifier)
-        expectedBytes.removeValue(forKey: task.taskIdentifier)
-        if error != nil {
-            sent.removeValue(forKey: task.taskIdentifier)
+        if let removed = sent.removeValue(forKey: task.taskIdentifier) {
+            totalSentBytes -= removed
         }
         lock.unlock()
     }
@@ -297,16 +324,14 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     func sentTotal() -> Int64 {
         lock.lock()
         defer { lock.unlock() }
-        return sent.values.reduce(0, +)
+        return totalSentBytes
     }
 
     /// Nouveau lot : on repart de zéro.
     func reset() {
         lock.lock()
         sent.removeAll()
-        lastActivity.removeAll()
-        expectedBytes.removeAll()
-        inflight.removeAll()
+        totalSentBytes = 0
         lock.unlock()
     }
 
@@ -348,6 +373,7 @@ final class KDriveContinuousUploadController: ObservableObject {
     @Published private(set) var failedCount = 0
 
     private var activeTask: Task<Void, Never>?
+    private var uploadGeneration = UUID()
 
     func start(
         lot: KDriveUploadLot,
@@ -357,6 +383,8 @@ final class KDriveContinuousUploadController: ObservableObject {
         let files = lot.files
         let directoryId = lot.directoryId
         cancel()
+        let generation = UUID()
+        uploadGeneration = generation
         wasCancelled = false
         finished = false
         finalError = nil
@@ -368,17 +396,27 @@ final class KDriveContinuousUploadController: ObservableObject {
         completedCount = 0
         startedCount = 0
         totalCount = files.count
+        successCount = 0
+        failedCount = 0
         progress = 0
         lastCompletedFileName = ""
         uploadedBytes = 0
         speedBytesPerSecond = 0
-        totalBytes = files.reduce(0) { $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0) }
+        totalBytes = 0
         // 4 fichiers en parallèle : avec 4 chunks par fichier
         // et 8 connexions/hôte, on reste sous la limite officielle de 60
         // req/min (pacing global espacé à 58) et sous le seuil de bridage edge.
         activeLimit = Self.concurrentLimit
 
         activeTask = Task {
+            let computedBytes = await Task.detached(priority: .utility) {
+                files.reduce(Int64(0)) {
+                    $0 + ((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? NSNumber)?.int64Value ?? 0)
+                }
+            }.value
+            guard self.uploadGeneration == generation, !Task.isCancelled else { return }
+            totalBytes = computedBytes
+
             // Supervision : progression par octets + vitesse. Sans elle, la
             // fenêtre reste bloquée à « 0 sur N » tant qu'aucun fichier
             // n'est terminé.
@@ -386,6 +424,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                 var lastBytes: Int64 = 0
                 var lastDate = Date()
                 while !Task.isCancelled {
+                    guard self.uploadGeneration == generation else { return }
                     let bytes = KDriveUploadSession.shared.sentTotal()
                     let now = Date()
                     let elapsed = now.timeIntervalSince(lastDate)
@@ -425,7 +464,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                 }
 
                 while let outcome = await group.next() {
-                    if Task.isCancelled {
+                    if Task.isCancelled || self.uploadGeneration != generation {
                         group.cancelAll()
                         break
                     }
@@ -447,7 +486,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                     // File glissante : dès qu’une connexion se libère, le fichier
                     // suivant démarre immédiatement. On n’attend jamais la fin
                     // des trois autres uploads du groupe initial.
-                    if nextIndex < files.count && !Task.isCancelled {
+                    if nextIndex < files.count && !Task.isCancelled && self.uploadGeneration == generation {
                         let fileURL = files[nextIndex]
                         nextIndex += 1
                         startedCount = nextIndex
@@ -463,6 +502,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                 }
             }
 
+            guard self.uploadGeneration == generation else { return }
             isUploading = false
             activeTask = nil
 
@@ -475,27 +515,29 @@ final class KDriveContinuousUploadController: ObservableObject {
                 return L("\(failed) échec(s) sur \(files.count). Exemples :\n\(examples)", "\(failed) failure(s) out of \(files.count). Examples:\n\(examples)")
             }()
 
-            if Task.isCancelled {
+            if Task.isCancelled || wasCancelled {
                 LogCenter.kdrive(L("Envoi kDrive annulé.", "kDrive upload cancelled."))
             } else {
                 if failed > 0 { LogCenter.err(L("Envoi kDrive : \(success) réussis, \(failed) échoués.", "kDrive upload: \(success) ok, \(failed) failed.")) }
                 else { LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files.")) }
+                progress = files.isEmpty ? 0 : 1
             }
             finished = true
             finalError = summaryMessage
             successCount = success
             failedCount = failed
-            progress = files.isEmpty ? 0 : 1
         }
     }
 
     func cancel() {
+        uploadGeneration = UUID()
         wasCancelled = true
         activeTask?.cancel()
         activeTask = nil
         isUploading = false
         // État final immédiat : la feuille repasse en « terminé » et les médias
         // déjà uploadés restent supprimables. `start()` remet finished à false.
+        successCount = uploadedFileURLs.count
         finished = true
     }
 
@@ -551,6 +593,14 @@ final class KDriveContinuousUploadController: ObservableObject {
             if KDriveError.isTransientUploadError(error), !Task.isCancelled {
                 LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
                 try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else {
+                    return KDriveContinuousUploadOutcome(
+                        fileURL: fileURL,
+                        fileName: fileURL.lastPathComponent,
+                        succeeded: false,
+                        errorMessage: KDriveError.cancelled.localizedDescription
+                    )
+                }
                 do {
                     try await performUpload(
                         fileURL: fileURL,
@@ -739,11 +789,24 @@ final class KDriveContinuousUploadController: ObservableObject {
             let offset = Int64(chunkIndex) * chunkSize
             let length = min(chunkSize, fileSize - offset)
             let chunkStarted = Date()
-            // Chunk extrait dans un fichier temporaire avec son hash SHA256
-            // (comme Orvian-IOS) : upload en streaming depuis le disque, la
-            // RAM ne dépend pas de la taille des chunks.
-            let chunk = try Self.extractChunkToTempFile(fileURL: fileURL, offset: offset, length: length)
-            defer { try? FileManager.default.removeItem(at: chunk.url) }
+            // Si le fichier tient en 1 chunk (95 Mio–250 Mo), on le streame
+            // directement sans copie temporaire ; sinon extrait par chunk.
+            let chunkURLToUpload: URL
+            let chunkSHA256: String
+            let deleteTempChunk: Bool
+            if totalChunks == 1 {
+                chunkURLToUpload = fileURL
+                chunkSHA256 = try Self.sha256Hex(fileURL: fileURL)
+                deleteTempChunk = false
+            } else {
+                let chunk = try Self.extractChunkToTempFile(fileURL: fileURL, offset: offset, length: length)
+                chunkURLToUpload = chunk.url
+                chunkSHA256 = chunk.sha256
+                deleteTempChunk = true
+            }
+            defer {
+                if deleteTempChunk { try? FileManager.default.removeItem(at: chunkURLToUpload) }
+            }
 
             // Chemin canonique /3/drive/.../chunk, hôte = upload_url de
             // confiance (sinon api.infomaniak.com), paramètres conservés.
@@ -753,7 +816,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                 sessionToken: sessionToken,
                 chunkNumber: chunkIndex + 1,
                 chunkSize: length,
-                chunkHash: chunk.sha256
+                chunkHash: chunkSHA256
             ) else { throw KDriveError.invalidURL }
             var chunkRequest = URLRequest(url: chunkURL)
             chunkRequest.httpMethod = "POST"
@@ -770,7 +833,7 @@ final class KDriveContinuousUploadController: ObservableObject {
                 if Task.isCancelled { throw KDriveError.cancelled }
                 await KDriveRateLimitCenter.waitForRequestSlot()
                 do {
-                    let (chunkData, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, fromFile: chunk.url)
+                    let (chunkData, chunkResponse) = try await KDriveUploadSession.session.upload(for: chunkRequest, fromFile: chunkURLToUpload)
                     guard let chunkHTTP = chunkResponse as? HTTPURLResponse else {
                         throw KDriveError.serverError(0, L("Réponse réseau inattendue", "Unexpected network response"))
                     }
@@ -876,6 +939,21 @@ final class KDriveContinuousUploadController: ObservableObject {
     /// (`upload(for:fromFile:)`) sans charger tout le chunk en mémoire.
     /// Renvoie l'URL temporaire et le hash SHA256 du chunk (envoyé en
     /// `chunk_hash=sha256:…`, comme Orvian-IOS).
+    nonisolated private static func sha256Hex(fileURL: URL) throws -> String {
+        let src = try FileHandle(forReadingFrom: fileURL)
+        defer { try? src.close() }
+        var digest = SHA256()
+        while true {
+            let count: Int = try autoreleasepool {
+                guard let data = try src.read(upToCount: 4_000_000), !data.isEmpty else { return 0 }
+                digest.update(data: data)
+                return data.count
+            }
+            if count == 0 { break }
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
     nonisolated private static func extractChunkToTempFile(fileURL: URL, offset: Int64, length: Int64) throws -> (url: URL, sha256: String) {
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kdrive-chunk-\(UUID().uuidString).bin")
@@ -894,12 +972,15 @@ final class KDriveContinuousUploadController: ObservableObject {
         var remaining = length
         while remaining > 0 {
             let block = Int(min(remaining, 4_000_000))
-            guard let data = try src.read(upToCount: block), !data.isEmpty else {
-                throw KDriveError.uploadFailed(L("Lecture impossible du chunk à l'offset \(offset) de \(fileURL.lastPathComponent).", "Could not read chunk at offset \(offset) of \(fileURL.lastPathComponent)."))
+            let written: Int64 = try autoreleasepool {
+                guard let data = try src.read(upToCount: block), !data.isEmpty else {
+                    throw KDriveError.uploadFailed(L("Lecture impossible du chunk à l'offset \(offset) de \(fileURL.lastPathComponent).", "Could not read chunk at offset \(offset) of \(fileURL.lastPathComponent)."))
+                }
+                digest.update(data: data)
+                try dst.write(contentsOf: data)
+                return Int64(data.count)
             }
-            digest.update(data: data)
-            try dst.write(contentsOf: data)
-            remaining -= Int64(data.count)
+            remaining -= written
         }
         return (tmpURL, digest.finalize().map { String(format: "%02x", $0) }.joined())
     }
@@ -1031,6 +1112,7 @@ private struct KDriveContinuousUploadSheet: View {
     @State private var showDuplicateDeleteConfirm = false
     @State private var duplicateDeletedCount = 0
     @State private var duplicateDeleteFailures = 0
+    @State private var isDeleting = false
 
     /// Médias locaux déjà présents sur le Drive, prêts à la suppression.
     var alreadyOnDriveURLs: [URL] { lot.alreadyOnDriveURLs }
@@ -1073,14 +1155,16 @@ private struct KDriveContinuousUploadSheet: View {
                     } else {
                         UploadActionButton(title: L("Fermer", "Close"), systemImage: "checkmark", prominent: true) { dismiss() }
                         if deletedCount == 0 && deleteFailures == 0 && !uploader.uploadedFileURLs.isEmpty {
-                            UploadActionButton(title: L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash", destructive: true) {
+                            UploadActionButton(title: L("Supprimer \(uploader.uploadedFileURLs.count) envoyés du téléphone", "Delete \(uploader.uploadedFileURLs.count) uploaded from device"), systemImage: "trash", destructive: true) {
                                 showDeleteConfirm = true
                             }
+                            .disabled(isDeleting)
                         }
                         if duplicateDeletedCount == 0 && duplicateDeleteFailures == 0 && !alreadyOnDriveURLs.isEmpty {
-                            UploadActionButton(title: L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive du téléphone", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive from the phone"), systemImage: "trash", destructive: true) {
+                            UploadActionButton(title: L("Supprimer \(alreadyOnDriveURLs.count) doublons du téléphone", "Delete \(alreadyOnDriveURLs.count) duplicates from phone"), systemImage: "trash", destructive: true) {
                                 showDuplicateDeleteConfirm = true
                             }
+                            .disabled(isDeleting)
                         }
                     }
                 }
@@ -1089,6 +1173,7 @@ private struct KDriveContinuousUploadSheet: View {
             }
             .navigationTitle("Infomaniak kDrive")
             .navigationBarTitleDisplayMode(.inline)
+            .tint(DS.accentEmphasis)
         }
         .confirmationDialog(
             L("Supprimer les \(uploader.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone ?", "Delete the \(uploader.uploadedFileURLs.count) uploaded file(s) from the device?"),
@@ -1155,11 +1240,14 @@ private struct KDriveContinuousUploadSheet: View {
         return stats
     }
 
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter
+    }()
+
     private static func formatBytes(_ bytes: Int64) -> String {
-        if bytes >= 1_000_000_000 { return String(format: "%.2f Go", Double(bytes) / 1_000_000_000) }
-        if bytes >= 1_000_000 { return String(format: "%.1f Mo", Double(bytes) / 1_000_000) }
-        if bytes >= 1_000 { return String(format: "%.0f Ko", Double(bytes) / 1_000) }
-        return "\(bytes) o"
+        byteFormatter.string(fromByteCount: bytes)
     }
 
     /// Durée restante estimée au plafond API (0 masque la ligne aux petits lots).
@@ -1181,82 +1269,157 @@ private struct KDriveContinuousUploadSheet: View {
     }
 
     private func deleteUploadedFiles() {
-        var deleted = 0
-        var failures = 0
-        for url in uploader.uploadedFileURLs where FileManager.default.fileExists(atPath: url.path) {
-            do {
-                try FileManager.default.removeItem(at: url)
-                MediaMetadata.remove(for: url)
-                deleted += 1
-            } catch {
-                failures += 1
-                LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+        guard !isDeleting else { return }
+        isDeleting = true
+        let urls = uploader.uploadedFileURLs
+        Task { @MainActor in
+            let (deleted, failures) = await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                var deleted = 0
+                var failures = 0
+                for url in urls where fm.fileExists(atPath: url.path) {
+                    do {
+                        try fm.removeItem(at: url)
+                        MediaMetadata.remove(for: url)
+                        deleted += 1
+                    } catch {
+                        failures += 1
+                        LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+                    }
+                }
+                return (deleted, failures)
+            }.value
+            deletedCount = deleted
+            deleteFailures = failures
+            isDeleting = false
+            if deleted > 0 {
+                // La galerie et les compteurs relisent la collection active.
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
             }
+            LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
         }
-        deletedCount = deleted
-        deleteFailures = failures
-        if deleted > 0 {
-            // La galerie et les compteurs relisent la collection active.
-            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
-        }
-        LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
     }
 
     private func deleteAlreadyOnDriveFiles() {
-        var deleted = 0
-        var failures = 0
-        for url in alreadyOnDriveURLs where FileManager.default.fileExists(atPath: url.path) {
-            do {
-                try FileManager.default.removeItem(at: url)
-                MediaMetadata.remove(for: url)
-                deleted += 1
-            } catch {
-                failures += 1
+        guard !isDeleting else { return }
+        isDeleting = true
+        let urls = alreadyOnDriveURLs
+        Task { @MainActor in
+            let (deleted, failures) = await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                var deleted = 0
+                var failures = 0
+                for url in urls where fm.fileExists(atPath: url.path) {
+                    do {
+                        try fm.removeItem(at: url)
+                        MediaMetadata.remove(for: url)
+                        deleted += 1
+                    } catch {
+                        failures += 1
+                    }
+                }
+                return (deleted, failures)
+            }.value
+            duplicateDeletedCount = deleted
+            duplicateDeleteFailures = failures
+            isDeleting = false
+            if deleted > 0 {
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
             }
+            LogCenter.info(L("\(deleted) média(s) déjà sur le Drive supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) media file(s) already on the Drive deleted from the device (\(failures) failure(s))."))
         }
-        duplicateDeletedCount = deleted
-        duplicateDeleteFailures = failures
-        if deleted > 0 {
-            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
-        }
-        LogCenter.info(L("\(deleted) média(s) déjà sur le Drive supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) media file(s) already on the Drive deleted from the device (\(failures) failure(s))."))
     }
 }
 
-/// Bandeau d'état : visible tant qu'un envoi kDrive tourne. Tap = réaffiche
-/// la feuille de progression (l'envoi continue en arrière-plan).
+/// Bandeau d'état : visible tant qu'un envoi kDrive tourne ou jusqu'à fermeture
+/// après complétion. Tap = réaffiche la feuille de progression.
 struct KDriveUploadBanner: View {
     @ObservedObject private var uploader = KDriveContinuousUploadController.shared
     @State private var presented = false
+    @State private var dismissed = false
+
+    private var visible: Bool {
+        guard uploader.activeLot != nil else { return false }
+        return uploader.isUploading || presented || (uploader.finished && !dismissed)
+    }
 
     var body: some View {
-        if (uploader.isUploading || presented), let lot = uploader.activeLot {
-            Button {
-                presented = true
-            } label: {
-                HStack(spacing: DS.space(2)) {
-                    Image(systemName: "icloud.and.arrow.up.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(DS.accentEmphasis)
-                        .frame(width: 28, height: 28)
-                        .background(DS.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                    Text(L("Envoi kDrive… \(uploader.completedCount)/\(max(1, uploader.totalCount))", "kDrive upload… \(uploader.completedCount)/\(max(1, uploader.totalCount))"))
-                        .font(DS.monoCaption)
-                        .foregroundStyle(DS.onSurface)
+        if visible, let lot = uploader.activeLot {
+            HStack(spacing: DS.space(2)) {
+                Button {
+                    presented = true
+                } label: {
+                    HStack(spacing: DS.space(2)) {
+                        Image(systemName: bannerIcon)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(bannerColor)
+                            .frame(width: 28, height: 28)
+                            .background(bannerColor.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                        Text(bannerText)
+                            .font(DS.monoCaption)
+                            .foregroundStyle(DS.onSurface)
+                            .lineLimit(1)
+                    }
+                    .frame(minHeight: 44)
                 }
-                .padding(.horizontal, DS.space(3))
-                .padding(.vertical, DS.space(2))
-                .frame(minHeight: 44)
-                .background(DS.surfaceElevated, in: Capsule())
-                .overlay(Capsule().strokeBorder(DS.accent.opacity(0.4)))
-                .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
+                .buttonStyle(DSPressableButtonStyle())
+                .accessibilityLabel(bannerAccessibilityLabel)
+
+                if uploader.finished && !uploader.isUploading {
+                    Button {
+                        dismissed = true
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .frame(width: 36, height: 36)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L("Masquer le bandeau kDrive", "Dismiss kDrive banner"))
+                }
             }
-            .buttonStyle(DSPressableButtonStyle())
-            .accessibilityLabel(L("Envoi kDrive en cours : \(uploader.completedCount) sur \(max(1, uploader.totalCount)). Touchez pour voir la progression.", "kDrive upload in progress: \(uploader.completedCount) of \(max(1, uploader.totalCount)). Tap to see progress."))
+            .padding(.horizontal, DS.space(3))
+            .background(DS.surfaceElevated, in: Capsule())
+            .overlay(Capsule().strokeBorder(bannerColor.opacity(0.4)))
+            .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
             .sheet(isPresented: $presented) {
                 KDriveContinuousUploadSheet(lot: lot, token: kDriveToken, driveId: kDriveId)
             }
+            .onChange(of: uploader.activeLot?.id) { _ in
+                dismissed = false
+            }
         }
+    }
+
+    private var bannerIcon: String {
+        if uploader.isUploading { return "icloud.and.arrow.up.fill" }
+        if uploader.wasCancelled { return "xmark.circle.fill" }
+        return uploader.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+    }
+
+    private var bannerColor: Color {
+        if uploader.isUploading || uploader.wasCancelled { return DS.accentEmphasis }
+        return uploader.failedCount == 0 ? DS.accentEmphasis : DS.error
+    }
+
+    private var bannerText: String {
+        if uploader.isUploading {
+            return L("Envoi kDrive… \(uploader.completedCount)/\(max(1, uploader.totalCount))", "kDrive upload… \(uploader.completedCount)/\(max(1, uploader.totalCount))")
+        }
+        if uploader.wasCancelled {
+            return L("Envoi kDrive annulé (\(uploader.successCount) envoyés)", "kDrive upload cancelled (\(uploader.successCount) sent)")
+        }
+        if uploader.failedCount > 0 {
+            return L("kDrive : \(uploader.successCount) OK, \(uploader.failedCount) échec(s)", "kDrive: \(uploader.successCount) OK, \(uploader.failedCount) failed")
+        }
+        return L("kDrive terminé (\(uploader.successCount))", "kDrive done (\(uploader.successCount))")
+    }
+
+    private var bannerAccessibilityLabel: String {
+        if uploader.isUploading {
+            return L("Envoi kDrive en cours : \(uploader.completedCount) sur \(max(1, uploader.totalCount)). Touchez pour voir la progression.", "kDrive upload in progress: \(uploader.completedCount) of \(max(1, uploader.totalCount)). Tap to see progress.")
+        }
+        return L("\(bannerText). Touchez pour ouvrir les actions de nettoyage.", "\(bannerText). Tap to open cleanup actions.")
     }
 
     @AppStorage("kDriveApiToken") private var kDriveToken = ""

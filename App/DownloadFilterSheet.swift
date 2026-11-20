@@ -38,6 +38,7 @@ struct DownloadFilterSheet: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(DS.onSurface)
+                        .accessibilityAddTraits(kinds.contains(kind) ? [.isSelected] : [])
                     }
                 } header: {
                     Text(L("Types de médias", "Media types"))
@@ -57,11 +58,15 @@ struct DownloadFilterSheet: View {
                 }
 
                 Section {
-                    Stepper(value: $minimumMB, in: 0...5000, step: 250) {
+                    Stepper(value: $minimumMB, in: 0...5000, step: 10) {
                         HStack {
                             Text(L("Taille minimale", "Minimum size"))
                             Spacer()
-                            Text(minimumMB == 0 ? L("Sans", "None") : "\(minimumMB) Mo").monospacedDigit().foregroundStyle(DS.onSurfaceMuted)
+                            Text(minimumMB == 0
+                                 ? L("Sans", "None")
+                                 : ByteCountFormatter.string(fromByteCount: Int64(minimumMB) * 1_000_000, countStyle: .file))
+                                .monospacedDigit()
+                                .foregroundStyle(DS.onSurfaceMuted)
                         }
                     }
                 } footer: {
@@ -101,7 +106,7 @@ struct DownloadFilterSheet: View {
                 }
             }
             .onAppear(perform: load)
-            .tint(DS.accent)
+            .tint(DS.accentEmphasis)
         }
     }
 

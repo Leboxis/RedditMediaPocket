@@ -3,7 +3,7 @@ import MediaCore
 
 /// État d'une sonde de diagnostic.
 enum DiagnosticState: Equatable {
-    case pending, running, ok(String), fail(String)
+    case pending, running, ok(String), unconfigured(String), fail(String)
 }
 
 /// Une sonde : interroge une source et dit ce qui marche et ce qui est cassé
@@ -48,6 +48,7 @@ struct SourceDiagnosticsView: View {
             }
             .task { if checks.isEmpty { await run() } }
         }
+        .tint(DS.accentEmphasis)
     }
 
     private func run() async {
@@ -64,7 +65,7 @@ struct SourceDiagnosticsView: View {
             DiagnosticCheck(id: "redgifs", title: L("RedGifs : jeton temporaire", "RedGifs: temporary token")),
             DiagnosticCheck(id: "x-session", title: L("X : session locale", "X: local session")),
             DiagnosticCheck(id: "tiktok-session", title: L("TikTok : session locale", "TikTok: local session")),
-            DiagnosticCheck(id: "instagram", title: L("Instagram : API web anonyme", "Instagram: anonymous web API")),
+            DiagnosticCheck(id: "instagram", title: L("Instagram : page de profil et API web", "Instagram: profile page & web API")),
             DiagnosticCheck(id: "xfetish", title: L("X-Fetish : site public", "X-Fetish: public site"))
         ]
         for index in checks.indices {
@@ -100,7 +101,7 @@ struct SourceDiagnosticsView: View {
 
     /// Une session absente n'est pas une panne : l'état le dit sans erreur.
     private func sessionState(_ present: Bool, ok: String, missing: String) -> DiagnosticState {
-        present ? .ok(ok) : .fail(missing)
+        present ? .ok(ok) : .unconfigured(missing)
     }
 
     /// Sonde le listing JSON public de Reddit (`/r/pics/new.json`). Depuis le
@@ -130,17 +131,20 @@ struct SourceDiagnosticsView: View {
         }
     }
 
-    /// Instagram n'a plus d'API anonyme : la sonde vérifie le chemin qui la
-    /// remplace — page du profil lue, jetons d'API GraphQL présents.
+    /// Instagram : vérifie le chemin utilisé par les téléchargements — page du
+    /// profil lue (avec cookies de session si présents), jetons d'API GraphQL présents.
     private func probeInstagram(_ network: Network) async -> DiagnosticState {
         let pageURL = InstagramAPI.profilePageURL(username: "instagram")
+        let sessionCookies = await InstagramSession.shared.cookieHeader(for: pageURL)
         do {
-            let page = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL))
+            let page = try await network.dataAndHeaders(pageURL, headers: InstagramAPI.pageHeaders(referer: pageURL, sessionCookies: sessionCookies))
             guard InstagramAPI.tokens(inHTML: page.data, cookies: page.headers["set-cookie"]) != nil else {
                 return .fail(L("Page de profil servie sans jeton d'API (interface modifiée).",
                                "Profile page served without an API token (interface changed)."))
             }
-            return .ok(L("Page de profil et jetons anonymes servis.", "Anonymous profile page and tokens served."))
+            return .ok(sessionCookies != nil
+                       ? L("Page de profil et jetons servis (avec session).", "Profile page and tokens served (signed in).")
+                       : L("Page de profil et jetons anonymes servis.", "Anonymous profile page and tokens served."))
         } catch {
             return .fail(error.localizedDescription)
         }
@@ -164,17 +168,22 @@ private struct DiagnosticRow: View {
     let check: DiagnosticCheck
 
     var body: some View {
-        HStack {
-            switch check.state {
-            case .pending:
-                Image(systemName: "circle.dotted").foregroundStyle(DS.onSurfaceMuted)
-            case .running:
-                ProgressView()
-            case .ok:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accentEmphasis)
-            case .fail:
-                Image(systemName: "xmark.circle.fill").foregroundStyle(DS.error)
+        HStack(alignment: .center, spacing: DS.space(3)) {
+            Group {
+                switch check.state {
+                case .pending:
+                    Image(systemName: "circle.dotted").foregroundStyle(DS.onSurfaceMuted)
+                case .running:
+                    ProgressView()
+                case .ok:
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.accentEmphasis)
+                case .unconfigured:
+                    Image(systemName: "minus.circle").foregroundStyle(DS.onSurfaceMuted)
+                case .fail:
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(DS.error)
+                }
             }
+            .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(check.title)
                     .font(.callout.weight(.medium))
@@ -182,10 +191,12 @@ private struct DiagnosticRow: View {
                 case .pending: Text(L("En attente.", "Pending.")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
                 case .running: Text(L("Sonde en cours…", "Probing…")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
                 case .ok(let message): Text(message).font(.caption).foregroundStyle(DS.accentEmphasis)
+                case .unconfigured(let message): Text(message).font(.caption).foregroundStyle(DS.onSurfaceMuted)
                 case .fail(let message): Text(message).font(.caption).foregroundStyle(DS.error)
                 }
             }
         }
         .padding(.vertical, DS.space(1))
+        .accessibilityElement(children: .combine)
     }
 }

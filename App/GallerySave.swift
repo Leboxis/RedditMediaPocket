@@ -30,12 +30,16 @@ enum GallerySave {
             throw GallerySaveError.notAuthorized
         }
 
-        try await PHPhotoLibrary.shared().performChanges {
-            for url in urls {
-                let request = PHAssetCreationRequest.forAsset()
-                let options = PHAssetResourceCreationOptions()
-                options.originalFilename = url.lastPathComponent
-                request.addResource(with: isVideo(url) ? .video : .photo, fileURL: url, options: options)
+        for start in stride(from: 0, to: urls.count, by: 30) {
+            try Task.checkCancellation()
+            let batch = Array(urls[start..<min(start + 30, urls.count)])
+            try await PHPhotoLibrary.shared().performChanges {
+                for url in batch {
+                    let request = PHAssetCreationRequest.forAsset()
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = url.lastPathComponent
+                    request.addResource(with: isVideo(url) ? .video : .photo, fileURL: url, options: options)
+                }
             }
         }
     }

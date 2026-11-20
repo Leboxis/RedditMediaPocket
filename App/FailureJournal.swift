@@ -34,15 +34,31 @@ struct FailureEntry: Codable, Identifiable, Equatable {
     static let shared = FailureJournal()
     @Published private(set) var entries: [FailureEntry] = []
 
-    private static var fileURL: URL {
+    private static let ioQueue = DispatchQueue(label: "FailureJournal.io", qos: .utility)
+    private let fileURL: URL
+    private var saveTask: Task<Void, Never>?
+
+    init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         let folder = base.appendingPathComponent("RedditMediaPocket", isDirectory: true)
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder.appendingPathComponent("failure-journal.json")
+        fileURL = folder.appendingPathComponent("failure-journal.json")
+        let url = fileURL
+        Task.detached(priority: .utility) {
+            guard let data = try? Data(contentsOf: url),
+                  let loaded = try? JSONDecoder().decode([FailureEntry].self, from: data) else { return }
+            await MainActor.run {
+                let journal = FailureJournal.shared
+                if journal.entries.isEmpty {
+                    journal.entries = loaded
+                } else {
+                    let existingKeys = Set(journal.entries.map(\.dedupKey))
+                    let merged = loaded.filter { !existingKeys.contains($0.dedupKey) } + journal.entries
+                    journal.entries = merged.count > Self.cap ? Array(merged.suffix(Self.cap)) : merged
+                }
+            }
+        }
     }
-
-    init() { load() }
 
     /// Jamais plus de 500 entrées : au-delà, les plus anciennes tombent. Un
     /// média inaccessible depuis longtemps l'est probablement pour de bon.
@@ -55,29 +71,39 @@ struct FailureEntry: Codable, Identifiable, Equatable {
             list.removeFirst(list.count - Self.cap)
         }
         entries = list
-        save()
+        scheduleSave()
     }
 
     func remove(ids: [UUID]) {
         let set = Set(ids)
         entries.removeAll { set.contains($0.id) }
-        save()
+        scheduleSave()
     }
 
     func clear() {
         entries = []
-        save()
+        saveNow()
     }
 
-    private func load() {
-        guard let data = try? Data(contentsOf: Self.fileURL),
-              let list = try? JSONDecoder().decode([FailureEntry].self, from: data) else { return }
-        entries = list
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            self?.saveNow()
+        }
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        try? data.write(to: Self.fileURL, options: .atomic)
+    private func saveNow() {
+        saveTask?.cancel()
+        saveTask = nil
+        let snapshot = entries
+        let url = fileURL
+        Self.ioQueue.async {
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            guard let data = try? JSONEncoder().encode(snapshot) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 }
 
@@ -118,6 +144,7 @@ struct FailureJournalView: View {
     @ObservedObject private var journal = FailureJournal.shared
     @ObservedObject private var model: Downloader
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmClear = false
 
     init(model: Downloader) {
         self.model = model
@@ -133,8 +160,18 @@ struct FailureJournalView: View {
                                                               "Download failures will appear here, ready to be retried.")))
                 } else {
                     List {
+                        if model.running && !model.status.isEmpty {
+                            HStack(spacing: DS.space(2)) {
+                                ProgressView().controlSize(.small)
+                                Text(model.status)
+                                    .font(.caption)
+                                    .foregroundStyle(DS.onSurfaceMuted)
+                            }
+                        }
                         ForEach(journal.entries) { entry in
-                            FailureRow(entry: entry, model: model)
+                            FailureRow(entry: entry, isRunning: model.running) {
+                                model.retryFailures([entry])
+                            }
                         }
                         .onDelete { offsets in
                             journal.remove(ids: offsets.map { journal.entries[$0].id })
@@ -154,28 +191,33 @@ struct FailureJournalView: View {
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(L("Vider", "Clear")) { journal.clear() }
-                        .disabled(journal.entries.isEmpty)
+                    if !journal.entries.isEmpty {
+                        Button(L("Vider", "Clear"), role: .destructive) { confirmClear = true }
+                            .disabled(model.running)
+                    }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .confirmationAction) {
                     Button(L("OK", "OK")) { dismiss() }
                 }
             }
+            .confirmationDialog(L("Vider le journal des échecs ?", "Clear failure journal?"), isPresented: $confirmClear, titleVisibility: .visible) {
+                Button(L("Vider", "Clear"), role: .destructive) { journal.clear() }
+                Button(L("Annuler", "Cancel"), role: .cancel) { }
+            } message: {
+                Text(L("Tous les échecs en attente seront oubliés.", "All pending failures will be discarded."))
+            }
         }
+        .tint(DS.accentEmphasis)
     }
 }
 
 private struct FailureRow: View {
     let entry: FailureEntry
-    @ObservedObject private var model: Downloader
-
-    init(entry: FailureEntry, model: Downloader) {
-        self.entry = entry
-        self.model = model
-    }
+    let isRunning: Bool
+    let onRetry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: DS.space(1)) {
             Text(entry.filename)
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
@@ -189,11 +231,11 @@ private struct FailureRow: View {
                     .lineLimit(2)
                 Spacer()
                 if entry.sourceURL != nil {
-                    Button(L("Réessayer", "Retry")) {
-                        model.retryFailures([entry])
-                    }
-                    .font(.caption.weight(.semibold))
-                    .disabled(model.running)
+                    Button(L("Réessayer", "Retry"), action: onRetry)
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderless)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .disabled(isRunning)
                 } else {
                     Text(L("Nouvel essai par relance de la collection", "Retry by rescanning the collection"))
                         .font(.caption2)

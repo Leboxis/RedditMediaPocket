@@ -219,7 +219,7 @@ final class XFetishAlbumsTests: XCTestCase {
         let video = XFetishAlbums.parseVideoRef("https://x-fetish.tube/video/631644/jazzy-toes-vip-03-28-2026-onlyfans-video/")
         XCTAssertEqual(video?.id, "631644")
         XCTAssertEqual(video?.url.absoluteString, "https://x-fetish.tube/video/631644/jazzy-toes-vip-03-28-2026-onlyfans-video/")
-        for input in ["x/example", "https://x-fetish.tube/models/example/", "", "https://evil.test/video/631644/x/", "https://x-fetish.tube/video/notanumber/x/", "https://x-fetish.tube/albums/12/x/"] {
+        for input in ["x/example", "https://x-fetish.tube/models/example/", "", "https://evil.test/video/631644/x/", "https://x-fetish.tube/video/notanumber/x/", "https://x-fetish.tube/albums/12/x/", "https://x-fetish.tube/video/631644/bad%20slug/"] {
             XCTAssertNil(XFetishAlbums.parseVideoRef(input), input)
         }
     }

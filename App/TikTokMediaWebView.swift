@@ -29,14 +29,21 @@ import MediaCore
         guard !busy, TikTokWeb.isMediaHost(url) else { return nil }
         guard let view = makeWebView(userAgent: userAgent) else { return nil }
         busy = true
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
-            self.continuation = continuation
-            timeout = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.timeoutSeconds * 1_000_000_000)
-                guard let self else { return }
-                self.finish(nil)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+                self.continuation = continuation
+                timeout = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: Self.timeoutSeconds * 1_000_000_000)
+                    guard let self else { return }
+                    self.finish(nil)
+                }
+                view.load(URLRequest(url: url))
             }
-            view.load(URLRequest(url: url))
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.webView?.stopLoading()
+                self?.finish(nil)
+            }
         }
     }
 
@@ -53,13 +60,13 @@ import MediaCore
     private func finish(_ data: Data?) {
         timeout?.cancel()
         timeout = nil
-        guard let continuation else { busy = false; return }
-        self.continuation = nil
-        busy = false
-        if data != nil, let destination {
+        if let destination {
             try? FileManager.default.removeItem(at: destination)
         }
         destination = nil
+        guard let continuation else { busy = false; return }
+        self.continuation = nil
+        busy = false
         continuation.resume(returning: data)
     }
 
@@ -106,8 +113,16 @@ import MediaCore
         decisionHandler(.download)
     }
 
-    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
         download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        finish(nil)
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        finish(nil)
     }
 
     // MARK: - WKDownloadDelegate

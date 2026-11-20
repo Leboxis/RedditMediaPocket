@@ -36,7 +36,7 @@ extension KDriveError {
     /// Erreur d'envoi passagère (timeout 408, 429, 5xx, réseau coupé) : le
     /// fichier n'a pas été écrit côté serveur, une relance est sûre.
     static func isTransientUploadError(_ error: Error) -> Bool {
-        if error is URLError { return true }
+        if let urlError = error as? URLError { return urlError.code != .cancelled }
         if case KDriveError.serverError(let code, _) = error { return code == 408 || code == 429 || code >= 500 }
         return false
     }
@@ -131,8 +131,9 @@ final class KDriveRateLimitCenter: ObservableObject {
     nonisolated static func register(response: HTTPURLResponse, body: Data?) {
         let retryAfter = response.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0) }
         let statusCode = response.statusCode
+        let isRateLimitBody = statusCode == 429 || Self.isRateLimitErrorCode(body)
         Task { @MainActor in
-            shared.sync(statusCode: statusCode, retryAfter: retryAfter, body: body)
+            shared.sync(statusCode: statusCode, retryAfter: retryAfter, isRateLimitBody: isRateLimitBody)
         }
     }
 
@@ -157,12 +158,14 @@ final class KDriveRateLimitCenter: ObservableObject {
         let now = Date()
         if let until = limitedUntil, until > now {
             let wait = until.timeIntervalSince(now)
-            nextSlotDelay = wait
+            if abs(nextSlotDelay - wait) > 0.05 { nextSlotDelay = wait }
             return wait
         }
         let wait = pacer.reserveSlot(now: now)
-        requestsLastMinute = pacer.count(at: now)
-        nextSlotDelay = pacer.nextSlotWait(now: now)
+        let count = pacer.count(at: now)
+        if requestsLastMinute != count { requestsLastMinute = count }
+        let nextDelay = pacer.nextSlotWait(now: now)
+        if abs(nextSlotDelay - nextDelay) > 0.05 { nextSlotDelay = nextDelay }
         return wait > 0 ? max(wait, 0.1) : 0
     }
 
@@ -170,17 +173,22 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// afficher en continu l'état de l'API pendant un envoi.
     func refreshPacingInfo() {
         let now = Date()
-        requestsLastMinute = pacer.count(at: now)
+        let count = pacer.count(at: now)
+        if requestsLastMinute != count { requestsLastMinute = count }
+        let nextDelay: TimeInterval
         if let until = limitedUntil, until > now {
-            nextSlotDelay = until.timeIntervalSince(now)
+            nextDelay = until.timeIntervalSince(now)
         } else {
-            nextSlotDelay = pacer.nextSlotWait(now: now)
+            nextDelay = pacer.nextSlotWait(now: now)
         }
+        if abs(nextSlotDelay - nextDelay) > 0.05 { nextSlotDelay = nextDelay }
     }
 
     /// Codes d'erreur officiels (`error.code`) qui traduisent un rate limit.
-    private func isRateLimitErrorCode(_ body: Data?) -> Bool {
-        guard let body,
+    nonisolated private static func isRateLimitErrorCode(_ body: Data?) -> Bool {
+        guard let body, !body.isEmpty else { return false }
+        // Chemin rapide sur 2xx : évite JSONSerialization si `"error"` absent.
+        guard body.range(of: Data("\"error\"".utf8)) != nil,
               let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let result = json["result"] as? String, result == "error"
         else { return false }
@@ -193,38 +201,42 @@ final class KDriveRateLimitCenter: ObservableObject {
             || description.lowercased().contains("too many requests")
     }
 
-    private func sync(statusCode: Int, retryAfter: Double?, body: Data?) {
+    private func sync(statusCode: Int, retryAfter: Double?, isRateLimitBody: Bool) {
         let now = Date()
         // Le pacer est alimenté par `reserveSlot` (avant l'envoi) :
         // ne pas compter deux fois la même requête ici.
-        requestsLastMinute = pacer.count(at: now)
+        let count = pacer.count(at: now)
+        if requestsLastMinute != count { requestsLastMinute = count }
 
         // Mécanisme officiel d'erreur Infomaniak (developer.infomaniak.com) :
         // HTTP 429 ou corps JSON `result: "error"` avec un code de bridage.
-        if statusCode == 429 || isRateLimitErrorCode(body) {
+        if statusCode == 429 || isRateLimitBody {
             let window = min(max(retryAfter ?? 60, 1), 3600)
             if (limitedUntil ?? .distantPast) < now {
                 LogCenter.err(L("kDrive : rate limit API détecté — reprise estimée dans \(Int(window)) s.", "kDrive: API rate limit detected — estimated resume in \(Int(window)) s."))
             }
-            limitedUntil = max(limitedUntil ?? .distantPast, now.addingTimeInterval(window))
+            let target = max(limitedUntil ?? .distantPast, now.addingTimeInterval(window))
+            if limitedUntil != target { limitedUntil = target }
             return
         }
-        if requestsLastMinute >= Self.officialLimitPerMinute {
+        if count >= Self.officialLimitPerMinute {
             if let oldest = pacer.oldest(at: now) {
                 let resume = oldest.addingTimeInterval(60)
                 if (limitedUntil ?? .distantPast) < now {
-                    LogCenter.err(L("kDrive : \(requestsLastMinute) requêtes API en 60 s (limite officielle : \(Self.officialLimitPerMinute)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(requestsLastMinute) API requests in 60 s (official limit: \(Self.officialLimitPerMinute)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
+                    LogCenter.err(L("kDrive : \(count) requêtes API en 60 s (limite officielle : \(Self.officialLimitPerMinute)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(count) API requests in 60 s (official limit: \(Self.officialLimitPerMinute)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
                 }
-                limitedUntil = max(limitedUntil ?? .distantPast, resume)
+                let target = max(limitedUntil ?? .distantPast, resume)
+                if limitedUntil != target { limitedUntil = target }
             }
             return
         }
-        if (200..<300).contains(statusCode), now > (limitedUntil ?? .distantPast) {
+        if (200..<300).contains(statusCode), now > (limitedUntil ?? .distantPast), limitedUntil != nil {
             limitedUntil = nil
         }
     }
 }
 
+@MainActor
 final class KDriveService: ObservableObject {
     static let shared = KDriveService()
     static let concurrentUploadLimit = KDriveUploadPolicy.maxConcurrentUploads
@@ -241,6 +253,7 @@ final class KDriveService: ObservableObject {
     @Published private(set) var lastFailedCount = 0
 
     private var activeTask: Task<Void, Never>?
+    private var uploadGeneration = UUID()
 
     private init() {}
 
@@ -292,9 +305,17 @@ final class KDriveService: ObservableObject {
         var cursor: String?
         var hasMore = true
         while hasMore {
-            var urlString = "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files?type[]=dir&limit=200"
-            if let cursor { urlString += "&cursor=\(cursor)" }
-            guard let url = URL(string: urlString) else { throw KDriveError.invalidURL }
+            var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files")
+            var queryItems = [
+                URLQueryItem(name: "type[]", value: "dir"),
+                URLQueryItem(name: "limit", value: "200")
+            ]
+            if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+            components?.queryItems = queryItems
+            if let encoded = components?.percentEncodedQuery {
+                components?.percentEncodedQuery = encoded.replacingOccurrences(of: "+", with: "%2B")
+            }
+            guard let url = components?.url else { throw KDriveError.invalidURL }
 
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
@@ -341,10 +362,15 @@ guard (200..<300).contains(httpResponse.statusCode) else {
     /// Une seule requête : liste les sous-dossiers du parent, puis matching local.
     func folderStatus(token: String, driveId: String, parentDirectoryId: String = "1", names: [String]) async throws -> [String: KDriveFolderItem] {
         let existing = try await fetchSubdirectories(token: token, driveId: driveId, directoryId: parentDirectoryId)
+        var byNormalizedName: [String: KDriveFolderItem] = [:]
+        for item in existing {
+            let key = FilenamePolicy.kDriveNormalizedName(item.name)
+            if byNormalizedName[key] == nil { byNormalizedName[key] = item }
+        }
         var result: [String: KDriveFolderItem] = [:]
         for name in names {
-            let target = FilenamePolicy.kDriveFolderName(name)
-            if let match = existing.first(where: { FilenamePolicy.kDriveNameMatch($0.name, target) }) {
+            let target = FilenamePolicy.kDriveNormalizedName(FilenamePolicy.kDriveFolderName(name))
+            if let match = byNormalizedName[target] {
                 result[name] = match
             }
         }
@@ -365,9 +391,17 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         var cursor: String?
         var hasMore = true
         while hasMore {
-            var urlString = "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files?type[]=file&limit=200"
-            if let cursor { urlString += "&cursor=\(cursor)" }
-            guard let url = URL(string: urlString) else { throw KDriveError.invalidURL }
+            var components = URLComponents(string: "https://api.infomaniak.com/3/drive/\(cleanDriveId)/files/\(cleanDirectoryId)/files")
+            var queryItems = [
+                URLQueryItem(name: "type[]", value: "file"),
+                URLQueryItem(name: "limit", value: "200")
+            ]
+            if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor)) }
+            components?.queryItems = queryItems
+            if let encoded = components?.percentEncodedQuery {
+                components?.percentEncodedQuery = encoded.replacingOccurrences(of: "+", with: "%2B")
+            }
+            guard let url = components?.url else { throw KDriveError.invalidURL }
 
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
@@ -584,6 +618,8 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         }
 
         cancelUpload()
+        let generation = UUID()
+        uploadGeneration = generation
         wasCancelled = false
         isUploading = true
         currentProgress = 0
@@ -592,73 +628,72 @@ guard (200..<300).contains(httpResponse.statusCode) else {
         currentFileName = ""
         lastError = nil
         uploadedFileURLs = []
+        lastSuccessCount = 0
+        lastFailedCount = 0
 
         activeTask = Task {
             var success = 0
             var failed = 0
             var completed = 0
             var failedExamples: [KDriveUploadOutcome] = []
+            let limit = max(1, Self.concurrentUploadLimit)
 
-            let batchSize = Self.concurrentUploadLimit
-            var batchStart = 0
-
-            while batchStart < files.count && !Task.isCancelled {
-                let batchEnd = min(batchStart + batchSize, files.count)
-                let batch = Array(files[batchStart..<batchEnd])
-
-                let outcomes = await withTaskGroup(of: KDriveUploadOutcome.self, returning: [KDriveUploadOutcome].self) { group in
-                    for fileURL in batch {
-                        group.addTask {
-                            if Task.isCancelled {
-                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
-                            }
-                            guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                                return KDriveUploadOutcome(
-                                    fileURL: fileURL,
-                                    fileName: fileURL.lastPathComponent,
-                                    succeeded: false,
-                                    errorMessage: L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
-                                )
-                            }
-                            do {
-                                try await KDriveService.performUpload(
-                                    fileURL: fileURL,
-                                    token: token,
-                                    driveId: driveId,
-                                    directoryId: directoryId
-                                )
-                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
-                            } catch {
-                                if KDriveError.isTransientUploadError(error), !Task.isCancelled {
-                                    LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
-                                    try? await Task.sleep(for: .seconds(2))
-                                    do {
-                                        try await KDriveService.performUpload(
-                                            fileURL: fileURL,
-                                            token: token,
-                                            driveId: driveId,
-                                            directoryId: directoryId
-                                        )
-                                        return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
-                                    } catch {
-                                        return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
-                                    }
-                                }
-                                return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
-                            }
+            func uploadOne(_ fileURL: URL) async -> KDriveUploadOutcome {
+                if Task.isCancelled {
+                    return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
+                }
+                guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                    return KDriveUploadOutcome(
+                        fileURL: fileURL,
+                        fileName: fileURL.lastPathComponent,
+                        succeeded: false,
+                        errorMessage: L("Fichier introuvable : \(fileURL.lastPathComponent)", "File not found: \(fileURL.lastPathComponent)")
+                    )
+                }
+                do {
+                    try await KDriveService.performUpload(
+                        fileURL: fileURL,
+                        token: token,
+                        driveId: driveId,
+                        directoryId: directoryId
+                    )
+                    return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
+                } catch {
+                    if KDriveError.isTransientUploadError(error), !Task.isCancelled {
+                        LogCenter.kdrive(L("kDrive : erreur transitoire sur \(fileURL.lastPathComponent), nouvelle tentative…", "kDrive: transient error on \(fileURL.lastPathComponent), retrying…"))
+                        try? await Task.sleep(for: .seconds(2))
+                        guard !Task.isCancelled else {
+                            return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: KDriveError.cancelled.localizedDescription)
+                        }
+                        do {
+                            try await KDriveService.performUpload(
+                                fileURL: fileURL,
+                                token: token,
+                                driveId: driveId,
+                                directoryId: directoryId
+                            )
+                            return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: true, errorMessage: nil)
+                        } catch {
+                            return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
                         }
                     }
+                    return KDriveUploadOutcome(fileURL: fileURL, fileName: fileURL.lastPathComponent, succeeded: false, errorMessage: error.localizedDescription)
+                }
+            }
 
-                    var results: [KDriveUploadOutcome] = []
-                    for await outcome in group {
-                        results.append(outcome)
-                    }
-                    return results
+            await withTaskGroup(of: KDriveUploadOutcome.self) { group in
+                var nextIndex = 0
+                for _ in 0..<min(limit, files.count) {
+                    let url = files[nextIndex]
+                    nextIndex += 1
+                    group.addTask { await uploadOne(url) }
                 }
 
-                if Task.isCancelled { break }
-
-                for outcome in outcomes {
+                while let outcome = await group.next() {
+                    if Task.isCancelled || self.uploadGeneration != generation {
+                        group.cancelAll()
+                        break
+                    }
                     completed += 1
                     currentFileIndex = completed
                     currentFileName = outcome.fileName
@@ -672,10 +707,16 @@ guard (200..<300).contains(httpResponse.statusCode) else {
                         LogCenter.err(L("kDrive : échec — \(outcome.fileName) : \(outcome.errorMessage ?? "")", "kDrive: failed — \(outcome.fileName): \(outcome.errorMessage ?? "")"))
                         if failedExamples.count < 5 { failedExamples.append(outcome) }
                     }
-                }
 
-                batchStart = batchEnd
+                    if nextIndex < files.count && !Task.isCancelled && self.uploadGeneration == generation {
+                        let url = files[nextIndex]
+                        nextIndex += 1
+                        group.addTask { await uploadOne(url) }
+                    }
+                }
             }
+
+            guard self.uploadGeneration == generation else { return }
 
             let summaryMessage: String? = {
                 guard failed > 0 else { return nil }
@@ -692,7 +733,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
             lastError = summaryMessage
             lastSuccessCount = success
             lastFailedCount = failed
-            if Task.isCancelled {
+            if Task.isCancelled || wasCancelled {
                 completion(success, failed, KDriveError.cancelled.localizedDescription)
             } else {
                 currentProgress = files.isEmpty ? 0 : 1
@@ -702,6 +743,7 @@ guard (200..<300).contains(httpResponse.statusCode) else {
     }
 
     func cancelUpload() {
+        uploadGeneration = UUID()
         wasCancelled = true
         activeTask?.cancel()
         activeTask = nil
@@ -748,18 +790,21 @@ private enum KDriveConnectionStatus {
 /// Détail de la connexion kDrive, poussé depuis la ligne kDrive de la zone
 /// Connexions des Réglages (même habillage que les autres services).
 struct KDriveSettingsDetailView: View {
+    private enum Field: Hashable { case token, driveId }
+
     @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
     @State private var now = Date()
-    private let rateLimitTicker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
     @AppStorage("kDriveDirectoryId") private var directoryId = "1"
-    @AppStorage("kDriveDirectoryName") private var directoryName = "Racine (kDrive)"
+    @AppStorage("kDriveDirectoryName") private var directoryName = ""
 
+    @FocusState private var focusedField: Field?
     @State private var showToken = false
     @State private var isTestingConnection = false
     @State private var connectionStatus: KDriveConnectionStatus?
     @State private var connectionError: String?
+    @State private var showResetConfirm = false
 
     private var configured: Bool {
         !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -769,100 +814,159 @@ struct KDriveSettingsDetailView: View {
     var body: some View {
         Form {
             Section {
-            HStack {
-                Group {
-                    if showToken {
-                        TextField(L("Token API", "API token"), text: $token)
-                    } else {
-                        SecureField(L("Token API", "API token"), text: $token)
+                HStack(spacing: DS.space(2)) {
+                    Group {
+                        if showToken {
+                            TextField(L("Token API", "API token"), text: $token)
+                        } else {
+                            SecureField(L("Token API", "API token"), text: $token)
+                        }
+                    }
+                    .focused($focusedField, equals: .token)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                    Button { showToken.toggle() } label: {
+                        Image(systemName: showToken ? "eye.slash" : "eye")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(DS.accentEmphasis)
+                    .accessibilityLabel(showToken ? L("Masquer le token API", "Hide API token") : L("Afficher le token API", "Show API token"))
+
+                    Button(L("Coller", "Paste")) {
+                        if let value = UIPasteboard.general.string {
+                            token = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(DS.accentEmphasis)
+                    .frame(minHeight: 44)
+                }
+
+                TextField(L("ID du Drive", "Drive ID"), text: $driveId)
+                    .focused($focusedField, equals: .driveId)
+                    .keyboardType(.numberPad)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                NavigationLink {
+                    KDriveFolderPickerView(
+                        token: token,
+                        driveId: driveId,
+                        directoryId: $directoryId,
+                        directoryName: $directoryName,
+                        embeddedInNavigationStack: true
+                    )
+                } label: {
+                    HStack {
+                        Label(directoryName.isEmpty ? L("Racine (kDrive)", "Root (kDrive)") : directoryName, systemImage: "folder.fill")
+                        Spacer()
+                        Text("ID: \(directoryId)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(DS.onSurfaceMuted)
                     }
                 }
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+                .disabled(!configured)
 
-                Button { showToken.toggle() } label: {
-                    Image(systemName: showToken ? "eye.slash" : "eye")
-                }
-                .buttonStyle(.borderless)
-
-                Button(L("Coller", "Paste")) {
-                    if let value = UIPasteboard.general.string {
-                        token = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                Button {
+                    focusedField = nil
+                    testConnection()
+                } label: {
+                    HStack {
+                        if isTestingConnection { ProgressView().controlSize(.small) }
+                        Label(L("Tester la connexion", "Test connection"), systemImage: "network")
                     }
                 }
-                .buttonStyle(.borderless)
-            }
+                .disabled(!configured || isTestingConnection)
 
-            TextField(L("ID du Drive", "Drive ID"), text: $driveId)
-                .keyboardType(.numberPad)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            NavigationLink {
-                KDriveFolderPickerView(
-                    token: token,
-                    driveId: driveId,
-                    directoryId: $directoryId,
-                    directoryName: $directoryName,
-                    embeddedInNavigationStack: true
-                )
-            } label: {
-                HStack {
-                    Label(directoryName.isEmpty ? L("Racine (kDrive)", "Root (kDrive)") : directoryName, systemImage: "folder.fill")
-                    Spacer()
-                    Text("ID: \(directoryId)")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(DS.onSurfaceMuted)
-                }
-            }
-            .disabled(!configured)
-
-            Button {
-                testConnection()
-            } label: {
-                HStack {
-                    if isTestingConnection { ProgressView().controlSize(.small) }
-                    Label(L("Tester la connexion", "Test connection"), systemImage: "network")
-                }
-            }
-            .disabled(!configured || isTestingConnection)
-
-            if let until = rateLimit.limitedUntil, until > now {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label(L("kDrive limité (rate limit actif)", "kDrive rate-limited"), systemImage: "hourglass")
+                if let until = rateLimit.limitedUntil, until > now {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(L("kDrive limité (rate limit actif)", "kDrive rate-limited"), systemImage: "hourglass")
+                            .font(.footnote)
+                            .foregroundStyle(DS.accentEmphasis)
+                        Text(L("Reprise estimée : \(until.formatted(date: .omitted, time: .standard))", "Estimated resume: \(until.formatted(date: .omitted, time: .standard))"))
+                            .font(.caption2)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                    }
+                } else if configured {
+                    Label(L("kDrive opérationnel (aucun rate limit)", "kDrive operational (no rate limit)"), systemImage: "checkmark.circle.fill")
                         .font(.footnote)
                         .foregroundStyle(DS.accentEmphasis)
-                    Text(L("Reprise estimée : \(until.formatted(date: .omitted, time: .standard))", "Estimated resume: \(until.formatted(date: .omitted, time: .standard))"))
-                        .font(.caption2)
+                } else {
+                    Label(L("Token API ou ID du Drive manquant", "API token or Drive ID missing"), systemImage: "gearshape")
+                        .font(.footnote)
                         .foregroundStyle(DS.onSurfaceMuted)
                 }
-            } else {
-                Label(L("kDrive opérationnel (aucun rate limit)", "kDrive operational (no rate limit)"), systemImage: "checkmark.circle.fill")
-                    .font(.footnote)
-                    .foregroundStyle(DS.accentEmphasis)
-            }
-            Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requêtes/min (limite officielle, abonnement 6 To inclus)", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requests/min (official limit, 6 TB plan included)"))
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? DS.accentEmphasis : DS.onSurfaceMuted)
 
-            if let status = connectionStatus {
-                switch status {
-                case .success(let name):
-                    Label(L("Connecté : \(name)", "Connected: \(name)"), systemImage: "checkmark.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(DS.accentEmphasis)
+                if configured || rateLimit.requestsLastMinute > 0 {
+                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requêtes/min (limite officielle)", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requests/min (official limit)"))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? DS.accentEmphasis : DS.onSurfaceMuted)
                 }
-            }
+
+                if let status = connectionStatus {
+                    switch status {
+                    case .success(let name):
+                        Label(L("Connecté : \(name)", "Connected: \(name)"), systemImage: "checkmark.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(DS.accentEmphasis)
+                    }
+                }
             } header: {
                 Text("Infomaniak kDrive")
             } footer: {
-                Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis l’onglet principal : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the main tab: a subfolder per collection is created inside it automatically."))
+                Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis la Bibliothèque : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the Library: a subfolder per collection is created inside it automatically."))
+            }
+
+            if configured || directoryId != "1" || !directoryName.isEmpty {
+                Section {
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: {
+                        Label(L("Effacer la configuration kDrive", "Clear kDrive configuration"), systemImage: "trash")
+                    }
+                }
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(L("Infomaniak kDrive", "Infomaniak kDrive"))
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button(L("OK", "Done")) { focusedField = nil }
+            }
+        }
+        .tint(DS.accentEmphasis)
         .errorAlert(connectionError)
-        .onReceive(rateLimitTicker) { tick in now = tick }
+        .confirmationDialog(
+            L("Effacer la configuration kDrive ?", "Clear kDrive configuration?"),
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button(L("Effacer", "Clear"), role: .destructive) {
+                focusedField = nil
+                token = ""
+                driveId = ""
+                directoryId = "1"
+                directoryName = ""
+                connectionStatus = nil
+                connectionError = nil
+            }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Le token API, l’ID du Drive et le dossier cible seront supprimés de cet appareil.", "The API token, Drive ID, and target folder will be removed from this device."))
+        }
+        .task(id: rateLimit.limitedUntil) {
+            now = Date()
+            guard let until = rateLimit.limitedUntil else { return }
+            while !Task.isCancelled && until > Date() {
+                try? await Task.sleep(for: .seconds(15))
+                now = Date()
+            }
+        }
         .onChange(of: token) { _ in connectionStatus = nil }
         .onChange(of: driveId) { _ in connectionStatus = nil }
     }
@@ -951,9 +1055,13 @@ struct KDriveFolderPickerView: View {
 
             if isLoading {
                 HStack { Spacer(); ProgressView(); Spacer() }
-            } else if errorMessage != nil {
-                VStack(alignment: .leading, spacing: 8) {
+            } else if let errorMessage {
+                VStack(alignment: .leading, spacing: DS.space(2)) {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(DS.onSurfaceMuted)
                     Button(L("Réessayer", "Retry")) { loadFolders() }
+                        .tint(DS.accentEmphasis)
                 }
             } else {
                 if pathStack.count > 1 {
@@ -1011,12 +1119,9 @@ struct KDriveFolderPickerView: View {
                 Text(dismissOnSelection
                      ? L("Choisir « \(currentFolder.name) »", "Choose “\(currentFolder.name)”")
                      : L("Envoyer ici : « \(currentFolder.name) »", "Upload here: “\(currentFolder.name)”"))
-                    .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, DS.space(3))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(DS.accent)
+            .buttonStyle(DSPrimaryButtonStyle())
             .padding()
             .background(.bar)
         }
@@ -1155,6 +1260,7 @@ struct KDriveUploadSheet: View {
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
     @State private var deleteFailures = 0
+    @State private var isDeleting = false
 
     var body: some View {
         NavigationStack {
@@ -1195,9 +1301,10 @@ struct KDriveUploadSheet: View {
                     } else {
                         UploadActionButton(title: L("Fermer", "Close"), systemImage: "checkmark", prominent: true) { dismiss() }
                         if deletedCount == 0 && deleteFailures == 0 && !service.uploadedFileURLs.isEmpty {
-                            UploadActionButton(title: L("Supprimer les \(service.uploadedFileURLs.count) fichier(s) envoyé(s) du téléphone", "Delete the \(service.uploadedFileURLs.count) uploaded file(s) from the device"), systemImage: "trash", destructive: true) {
+                            UploadActionButton(title: L("Supprimer \(service.uploadedFileURLs.count) envoyés du téléphone", "Delete \(service.uploadedFileURLs.count) uploaded from device"), systemImage: "trash", destructive: true) {
                                 showDeleteConfirm = true
                             }
+                            .disabled(isDeleting)
                         }
                     }
                 }
@@ -1277,22 +1384,33 @@ struct KDriveUploadSheet: View {
     }
 
     private func deleteUploadedFiles() {
-        var deleted = 0
-        var failures = 0
-        for url in service.uploadedFileURLs where FileManager.default.fileExists(atPath: url.path) {
-            do {
-                try FileManager.default.removeItem(at: url)
-                deleted += 1
-            } catch {
-                failures += 1
-                LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+        guard !isDeleting else { return }
+        isDeleting = true
+        let urls = service.uploadedFileURLs
+        Task { @MainActor in
+            let (deleted, failures) = await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                var deleted = 0
+                var failures = 0
+                for url in urls where fm.fileExists(atPath: url.path) {
+                    do {
+                        try fm.removeItem(at: url)
+                        MediaMetadata.remove(for: url)
+                        deleted += 1
+                    } catch {
+                        failures += 1
+                        LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)", "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+                    }
+                }
+                return (deleted, failures)
+            }.value
+            deletedCount = deleted
+            deleteFailures = failures
+            isDeleting = false
+            if deleted > 0 {
+                // La galerie et les compteurs relisent la collection active.
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
             }
-        }
-        deletedCount = deleted
-        deleteFailures = failures
-        if deleted > 0 {
-            // La galerie et les compteurs relisent la collection active.
-            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
         }
     }
 }

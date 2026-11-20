@@ -265,7 +265,7 @@ public enum InstagramAPI {
             "fb_api_req_friendly_name=" + formEncode(postsQueryName),
             "server_timestamps=true",
             "variables=" + formEncode(String(decoding: json, as: UTF8.self)),
-            "doc_id=" + postsQueryID
+            "doc_id=" + formEncode(operation?.docID ?? postsQueryID)
         ]
         return Data(pairs.joined(separator: "&").utf8)
     }

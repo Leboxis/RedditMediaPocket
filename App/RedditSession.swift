@@ -9,6 +9,8 @@ import MediaCore
     @Published private(set) var hasSession = false
     @Published private(set) var revision = 0
     @Published private(set) var clearing = false
+    private var cachedCookies: [HTTPCookie] = []
+    private var sessionIdentity: [String] = []
     private override init() {
         super.init()
         store.httpCookieStore.add(self)
@@ -24,23 +26,31 @@ import MediaCore
     }
     func refresh() async {
         let cookies = await allCookies()
-        hasSession = cookies.contains {
+        cachedCookies = cookies
+        let identity = cookies.filter { $0.name == "reddit_session" }
+            .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
+        let ready = !clearing && cookies.contains {
             $0.name == "reddit_session" && RedditCookiePolicy.header(cookies: [$0], for: URL(string: "https://www.reddit.com/")!) != nil
         }
-        revision += 1
+        let changed = identity != sessionIdentity || hasSession != ready
+        sessionIdentity = identity
+        if hasSession != ready { hasSession = ready }
+        if changed { revision += 1 }
     }
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, RedditCookiePolicy.allows(url) else { return nil }
-        let cookies = await allCookies()
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
         guard !clearing else { return nil }
-        return RedditCookiePolicy.header(cookies: cookies, for: url)
+        return RedditCookiePolicy.header(cookies: cachedCookies, for: url)
     }
     func logout() async {
         clearing = true
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
-        hasSession = false; revision += 1; clearing = false
+        cachedCookies = []; sessionIdentity = []
+        if hasSession { hasSession = false }
+        revision += 1; clearing = false
     }
 }
 
@@ -180,6 +190,11 @@ final class SafeRedirects: NSObject, URLSessionTaskDelegate {
             // pour la destination, retiré dès que l'hôte change, et jamais
             // transmis au CDN de médias (exclu par `TikTokCookiePolicy`).
             if let cookie = await TikTokSession.shared.cookieHeader(for: url) {
+                redirected.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
+            // Instagram suit la même règle après une redirection : reconstruit
+            // pour la destination, jamais transmis aux CDN médias.
+            if let cookie = await InstagramSession.shared.cookieHeader(for: url) {
                 redirected.setValue(cookie, forHTTPHeaderField: "Cookie")
             }
             completionHandler(redirected)

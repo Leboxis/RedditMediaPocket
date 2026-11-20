@@ -22,6 +22,7 @@ import MediaCore
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
     private var credentialValues: [String] = []
+    private var cachedCookies: [HTTPCookie] = []
     @Published private(set) var clearing = false
 
     private override init() {
@@ -49,6 +50,7 @@ import MediaCore
     /// acceptée » au moindre renouvellement de jeton.
     func refresh() async {
         let cookies = await allCookies()
+        cachedCookies = cookies
         let identity = cookies.filter { $0.name == "sessionid" }
             .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
         let ready = !clearing && TikTokCookiePolicy.hasLoginCookie(cookies: cookies)
@@ -90,9 +92,9 @@ import MediaCore
     /// refusé (HTTP 403).
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, TikTokCookiePolicy.allows(url) else { return nil }
-        let cookies = await allCookies()
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
         guard !clearing else { return nil }
-        return TikTokCookiePolicy.header(cookies: cookies, for: url)
+        return TikTokCookiePolicy.header(cookies: cachedCookies, for: url)
     }
 
     func logout() async {
@@ -102,7 +104,7 @@ import MediaCore
         }
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
-        credentialValues = []; clearing = false
+        credentialValues = []; cachedCookies = []; clearing = false
     }
 }
 

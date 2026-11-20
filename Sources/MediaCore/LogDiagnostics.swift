@@ -2,16 +2,16 @@ import Foundation
 
 /// Text safe to display, persist and share in a diagnostic log.
 public enum LogDiagnostics {
+    private static let sanitizeRules: [(regex: NSRegularExpression, replacement: String)] = [
+        (try! NSRegularExpression(pattern: #"(?i)\b(?:Cookie|Set-Cookie)\s*:\s*[^\r\n]*"#), "[cookie masqué]"),
+        (try! NSRegularExpression(pattern: #"(?i)\b(Authorization\s*:\s*(?:Bearer|Basic)\s+|Bearer\s+)[^\s,;]+"#), "$1[masqué]"),
+        (try! NSRegularExpression(pattern: #"(?i)\b((?:feed|user|i-acctoken|acctoken|token|access_token|refresh_token|client_secret|api_key|reddit_session|password|session)\s*=\s*)[^\s&;#\"'<>]+"#), "$1[masqué]")
+    ]
+
     public static func sanitize(_ message: String) -> String {
         var clean = message
-        let replacements: [(String, String)] = [
-            (#"(?i)\b(?:Cookie|Set-Cookie)\s*:\s*[^\r\n]*"#, "[cookie masqué]"),
-            (#"(?i)\b(Authorization\s*:\s*(?:Bearer|Basic)\s+|Bearer\s+)[^\s,;]+"#, "$1[masqué]"),
-            (#"(?i)\b((?:feed|user|i-acctoken|acctoken|token|access_token|refresh_token|client_secret|api_key|reddit_session|password|session)\s*=\s*)[^\s&;#\"'<>]+"#, "$1[masqué]")
-        ]
-        for (pattern, replacement) in replacements {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
-            clean = regex.stringByReplacingMatches(in: clean, range: NSRange(clean.startIndex..., in: clean), withTemplate: replacement)
+        for rule in sanitizeRules {
+            clean = rule.regex.stringByReplacingMatches(in: clean, range: NSRange(clean.startIndex..., in: clean), withTemplate: rule.replacement)
         }
         return clean.count > 500 ? String(clean.prefix(500)) + "…" : clean
     }

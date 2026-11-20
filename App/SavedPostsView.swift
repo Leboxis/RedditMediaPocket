@@ -164,12 +164,16 @@ struct SavedPostsView: View {
                             .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if errorMessage != nil {
-                    VStack(spacing: 12) {
+                } else if let errorMessage {
+                    VStack(spacing: DS.space(3)) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
+                            .font(.system(size: 36)).foregroundStyle(DS.error)
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(DSPrimaryButtonStyle())
                     }
                     .padding(DS.space(6))
                 } else if let posts {
@@ -213,6 +217,7 @@ struct SavedPostsView: View {
                     } label: {
                         Image(systemName: showFeed ? "list.bullet" : "play.rectangle.on.rectangle.fill").font(.title3)
                     }
+                    .disabled((posts ?? []).isEmpty)
                     .accessibilityLabel(showFeed
                         ? L("Vue liste", "List view")
                         : L("Vue défilement", "Feed view"))
@@ -228,7 +233,7 @@ struct SavedPostsView: View {
                 }
             }
         }
-        .tint(DS.accent)
+        .tint(DS.accentEmphasis)
         .errorAlert(errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, posts == nil { await load() }
@@ -250,7 +255,7 @@ struct SavedPostsView: View {
     }
 
     @ViewBuilder private var savedCountBanner: some View {
-        if let canonical = model.activeUser,
+        if let canonical = model.collections.first(where: { $0.isSaved })?.id,
            let snapshot = Downloader.savedMediaCount(for: canonical) {
             savedCountBannerText(snapshot)
         }
@@ -300,6 +305,7 @@ struct SavedFeedView: View {
                 PagedFeed(entries: entries, visibleID: $visibleID, preload: preload)
             }
         }
+        .preferredColorScheme(.dark)
         .onDisappear { bin.clear() }
         .task(id: posts.map(\.id)) {
             preload.configure(model: model, bin: bin)
@@ -322,6 +328,7 @@ private struct PagedFeed: View {
     let entries: [SavedFeedEntry]
     @Binding var visibleID: SavedFeedEntry.ID?
     @ObservedObject var preload: FeedPreloadStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ScrollView(.vertical) {
@@ -344,7 +351,7 @@ private struct PagedFeed: View {
         .scrollTargetBehavior(.paging)
         .scrollPosition(id: $visibleID)
         .scrollIndicators(.hidden)
-        .animation(.smooth(duration: 0.28), value: visibleID)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: visibleID)
         .ignoresSafeArea()
     }
 }
@@ -673,16 +680,9 @@ private struct SavedMediaCard: View {
             defer { imageLoaded = true }
             guard let imageURL else { return }
             do {
-                let data = try await model.previewImageData(imageURL)
+                let decoded = try await model.previewThumbnail(imageURL)
                 try Task.checkCancellation()
-                if let source = CGImageSourceCreateWithData(data as CFData, nil),
-                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 960
-                   ] as CFDictionary) {
-                    image = UIImage(cgImage: thumbnail)
-                }
+                image = decoded
             } catch {
             }
         }
@@ -742,7 +742,9 @@ private struct SavedMediaCard: View {
                 ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.system(size: 44))
-                    .foregroundStyle(DS.onSurface).shadow(radius: 3)
+                    .foregroundStyle(Color.white)
+                    .padding(DS.space(1))
+                    .background(Color.black.opacity(0.45), in: Circle())
             }
         }
         .frame(maxWidth: .infinity).frame(height: 240)

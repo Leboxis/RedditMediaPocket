@@ -40,17 +40,33 @@ struct LogEntry: Identifiable, Equatable {
     private static let maxFileBytes = 2 * 1024 * 1024
     private static let ioQueue = DispatchQueue(label: "LogCenter.io", qos: .utility)
 
-    private var fileURL0: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent("log-0.txt")
-    }
-    private var fileURL1: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent("log-1.txt")
-    }
+    private let fileURL0: URL
+    private let fileURL1: URL
+    private let isoFormatter = ISO8601DateFormatter()
+    private var pendingBuffer: [LogEntry] = []
+    private var uiFlushTask: Task<Void, Never>?
+    private var pendingDiskLines: [String] = []
+    private var diskFlushScheduled = false
 
     private init() {
-        loadFromDisk()
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("Logs", isDirectory: true)
+        fileURL0 = dir.appendingPathComponent("log-0.txt")
+        fileURL1 = dir.appendingPathComponent("log-1.txt")
+        let url0 = fileURL0
+        let url1 = fileURL1
+        Task.detached(priority: .utility) {
+            let loaded = Self.readFromDisk(url0: url0, url1: url1)
+            await MainActor.run {
+                let current = LogCenter.shared
+                if !loaded.entries.isEmpty {
+                    let combined = (loaded.entries + current.entries)
+                    let trimmed = combined.count > Self.maxMemory ? Array(combined.suffix(Self.maxMemory)) : combined
+                    current.entries = trimmed
+                    current.errorCount = trimmed.reduce(0) { $0 + ($1.level == .erreur ? 1 : 0) }
+                }
+            }
+        }
         addSync(level: .info, message: L("Journal démarré.", "Log started."))
     }
 
@@ -73,16 +89,60 @@ struct LogEntry: Identifiable, Equatable {
 
     private func addSync(level: LogLevel, message: String) {
         let entry = LogEntry(date: Date(), level: level, message: message)
+        if level == .erreur {
+            flushPendingEntries()
+            appendEntry(entry)
+        } else {
+            pendingBuffer.append(entry)
+            if uiFlushTask == nil {
+                uiFlushTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    self?.flushPendingEntries()
+                }
+            }
+        }
+        let line = "\(isoFormatter.string(from: entry.date)) [\(entry.level.rawValue)] \(entry.message)\n"
+        pendingDiskLines.append(line)
+        if pendingDiskLines.count >= 25 {
+            flushDiskLines()
+        } else if !diskFlushScheduled {
+            diskFlushScheduled = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                self?.flushDiskLines()
+            }
+        }
+    }
+
+    private func appendEntry(_ entry: LogEntry) {
         entries.append(entry)
         if entries.count > Self.maxMemory {
             entries.removeFirst(entries.count - Self.maxMemory)
         }
-        if level == .erreur { errorCount += 1 }
-        // Écriture fichier hors Main pour ne jamais geler l'écran même avec 500 lignes par run.
-        let line: String = {
-            let f = ISO8601DateFormatter()
-            return "\(f.string(from: entry.date)) [\(entry.level.rawValue)] \(entry.message)\n"
-        }()
+        if entry.level == .erreur { errorCount += 1 }
+    }
+
+    private func flushPendingEntries() {
+        uiFlushTask?.cancel()
+        uiFlushTask = nil
+        guard !pendingBuffer.isEmpty else { return }
+        let batch = pendingBuffer
+        pendingBuffer.removeAll(keepingCapacity: true)
+        var next = entries
+        next.append(contentsOf: batch)
+        if next.count > Self.maxMemory {
+            next.removeFirst(next.count - Self.maxMemory)
+        }
+        entries = next
+        let addedErrors = batch.reduce(0) { $0 + ($1.level == .erreur ? 1 : 0) }
+        if addedErrors > 0 { errorCount += addedErrors }
+    }
+
+    private func flushDiskLines() {
+        diskFlushScheduled = false
+        guard !pendingDiskLines.isEmpty else { return }
+        let payload = pendingDiskLines.joined()
+        pendingDiskLines.removeAll(keepingCapacity: true)
         let url0 = fileURL0
         let url1 = fileURL1
         let maxBytes = Self.maxFileBytes
@@ -93,7 +153,7 @@ struct LogEntry: Identifiable, Equatable {
                 try? fm.removeItem(at: url1)
                 try? fm.moveItem(at: url0, to: url1)
             }
-            guard let data = line.data(using: .utf8) else { return }
+            guard let data = payload.data(using: .utf8) else { return }
             if !fm.fileExists(atPath: url0.path) { try? data.write(to: url0) }
             else if let handle = try? FileHandle(forWritingTo: url0) {
                 try? handle.seekToEnd()
@@ -104,18 +164,29 @@ struct LogEntry: Identifiable, Equatable {
     }
 
     func clear() {
+        uiFlushTask?.cancel()
+        uiFlushTask = nil
+        pendingBuffer.removeAll()
+        pendingDiskLines.removeAll()
+        diskFlushScheduled = false
         entries = []
         errorCount = 0
-        try? FileManager.default.removeItem(at: fileURL0)
-        try? FileManager.default.removeItem(at: fileURL1)
+        let url0 = fileURL0
+        let url1 = fileURL1
+        Self.ioQueue.async {
+            try? FileManager.default.removeItem(at: url0)
+            try? FileManager.default.removeItem(at: url1)
+        }
         addSync(level: .info, message: L("Journal effacé.", "Log cleared."))
     }
 
     func filtered(level: LogLevel?, search: String) -> [LogEntry] {
-        entries.filter { entry in
+        flushPendingEntries()
+        let needle = search.trimmingCharacters(in: .whitespaces)
+        return entries.filter { entry in
             if let level, entry.level != level { return false }
-            if search.trimmingCharacters(in: .whitespaces).isEmpty { return true }
-            return entry.message.localizedCaseInsensitiveContains(search)
+            if needle.isEmpty { return true }
+            return entry.message.localizedCaseInsensitiveContains(needle)
         }
     }
 
@@ -141,11 +212,13 @@ struct LogEntry: Identifiable, Equatable {
     /// Copie du journal dans le presse-papiers : les applications qui n'acceptent
     /// pas les fichiers n'ont besoin que du texte.
     func copyToPasteboard(level: LogLevel? = nil, search: String = "") {
+        flushPendingEntries()
         UIPasteboard.general.string = exportText(level: level, search: search)
     }
 
     /// Fichier d'export : même contenu que la copie, matérialisé en .txt.
     func exportFile(level: LogLevel? = nil, search: String = "") -> URL {
+        flushPendingEntries()
         let scope: String
         if let level { scope = level.rawValue } else { scope = L("tout", "all") }
         let stamp = Int(Date().timeIntervalSince1970)
@@ -154,15 +227,16 @@ struct LogEntry: Identifiable, Equatable {
         return tmp
     }
 
-    private func loadFromDisk() {
-        let fm = FileManager.default
+    nonisolated private static func readFromDisk(url0: URL, url1: URL) -> (entries: [LogEntry], errorCount: Int) {
         var lines: [String] = []
-        for url in [fileURL1, fileURL0] {
+        for url in [url1, url0] {
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             lines.append(contentsOf: text.split(separator: "\n", omittingEmptySubsequences: false).suffix(Self.maxMemory).map(String.init))
         }
         let tail = lines.suffix(Self.maxMemory)
         let formatter = ISO8601DateFormatter()
+        var loaded: [LogEntry] = []
+        var errors = 0
         for line in tail {
             // Format : date [niveau] message — tolérant si date illisible.
             let level: LogLevel = line.contains("[erreur]") ? .erreur : (line.contains("[reseau]") ? .reseau : (line.contains("[kdrive]") ? .kdrive : .info))
@@ -174,9 +248,10 @@ struct LogEntry: Identifiable, Equatable {
                 return line
             }()
             if message.isEmpty { continue }
-            entries.append(LogEntry(date: date, level: level, message: message))
+            if level == .erreur { errors += 1 }
+            loaded.append(LogEntry(date: date, level: level, message: message))
         }
-        errorCount = entries.filter { $0.level == .erreur }.count
+        return (loaded, errors)
     }
 }
 
@@ -202,31 +277,38 @@ struct LogsButton: View {
 
 struct LogsView: View {
     @ObservedObject private var logs = LogCenter.shared
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var level: LogLevel?
     @State private var search = ""
     @State private var exportURL: URL?
     @State private var copied = false
+    @State private var confirmClear = false
+
     var body: some View {
-        NavigationStack {
+        let visible = logs.filtered(level: level, search: search)
+        return NavigationStack {
             VStack(spacing: 0) {
-                Picker(L("Filtre", "Filter"), selection: Binding(
-                    get: { level?.rawValue ?? "all" },
-                    set: { level = LogLevel(rawValue: $0) }
-                )) {
-                    Text(L("Tout", "All")).tag("all")
-                    ForEach(LogLevel.allCases) { l in Text(l.label).tag(l.rawValue) }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: DS.space(2)) {
+                        filterPill(title: L("Tout", "All"), selected: level == nil) { level = nil }
+                        ForEach(LogLevel.allCases) { item in
+                            filterPill(title: item.label, selected: level == item) { level = item }
+                        }
+                    }
+                    .padding(.horizontal, DS.space(4))
+                    .padding(.vertical, DS.space(2))
                 }
-                .pickerStyle(.segmented).padding(.horizontal, DS.space(3)).padding(.vertical, DS.space(2))
-                Text(L("\(logs.filtered(level: level, search: search).count) lignes", "\(logs.filtered(level: level, search: search).count) lines"))
-                    .font(.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, DS.space(3))
+                Text(L("\(visible.count) lignes", "\(visible.count) lines"))
+                    .font(DS.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
+                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, DS.space(4))
                 ScrollViewReader { proxy in
-                    List(logs.filtered(level: level, search: search)) { entry in
-                        HStack(alignment: .top, spacing: 8) {
+                    List(visible) { entry in
+                        HStack(alignment: .top, spacing: DS.space(2)) {
                             Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? DS.error : DS.onSurfaceMuted).frame(width: 22)
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: DS.space(1)) {
                                 Text(entry.message).font(.caption).textSelection(.enabled)
-                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
+                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(DS.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
                             }
                         }
                         .accessibilityElement(children: .combine)
@@ -235,7 +317,11 @@ struct LogsView: View {
                     .listStyle(.plain)
                     .onChange(of: logs.entries.count) { _ in
                         if let last = logs.filtered(level: level, search: search).last {
-                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                            if reduceMotion {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            } else {
+                                withAnimation(DS.micro) { proxy.scrollTo(last.id, anchor: .bottom) }
+                            }
                         }
                     }
                 }
@@ -244,10 +330,13 @@ struct LogsView: View {
             .navigationTitle(L("Journal", "Logs"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L("Effacer", "Clear")) { logs.clear() }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(role: .destructive) { confirmClear = true } label: {
+                        Text(L("Effacer", "Clear"))
+                    }
+                    .disabled(logs.entries.isEmpty)
                 }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
                         Button {
                             logs.copyToPasteboard(level: level, search: search)
@@ -281,6 +370,15 @@ struct LogsView: View {
                     }
                     .accessibilityLabel(L("Exporter les logs", "Export logs"))
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("Fermer", "Close")) { dismiss() }
+                }
+            }
+            .confirmationDialog(L("Effacer le journal ?", "Clear logs?"), isPresented: $confirmClear, titleVisibility: .visible) {
+                Button(L("Effacer", "Clear"), role: .destructive) { logs.clear() }
+                Button(L("Annuler", "Cancel"), role: .cancel) { }
+            } message: {
+                Text(L("Tout l’historique du journal sera définitivement supprimé.", "The entire log history will be permanently deleted."))
             }
             .sheet(item: Binding(
                 get: { exportURL.map { ExportSelection(files: [$0]) } },
@@ -289,5 +387,20 @@ struct LogsView: View {
                 ExportSheet(files: item.files).ignoresSafeArea()
             }
         }
+        .tint(DS.accentEmphasis)
+    }
+
+    private func filterPill(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(DS.caption)
+                .padding(.horizontal, DS.space(3))
+                .padding(.vertical, DS.space(1))
+                .frame(minHeight: 36)
+                .foregroundStyle(selected ? DS.onAccent : DS.onSurface)
+                .background(selected ? DS.accent : DS.surface, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

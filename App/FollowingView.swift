@@ -63,12 +63,16 @@ struct FollowingView: View {
                             .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if errorMessage != nil {
-                    VStack(spacing: 12) {
+                } else if let errorMessage {
+                    VStack(spacing: DS.space(3)) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
+                            .font(.system(size: 36)).foregroundStyle(DS.error)
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
                         Button(L("Réessayer", "Retry")) { retryCount += 1 }
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(DSPrimaryButtonStyle())
                     }
                     .padding(DS.space(6))
                 } else if let friends {
@@ -109,7 +113,7 @@ struct FollowingView: View {
                                     } label: {
                                         Image(systemName: isDownloaded ? "checkmark.circle.fill" : "circle")
                                             .font(.title3)
-                                            .foregroundStyle(isDownloaded ? DS.accentEmphasis : Color.secondary)
+                                            .foregroundStyle(isDownloaded ? DS.accentEmphasis : DS.onSurfaceMuted)
                                             .frame(minWidth: 44, minHeight: 44)
                                             .contentShape(Rectangle())
                                     }
@@ -124,7 +128,10 @@ struct FollowingView: View {
                                     Button {
                                         onDownloadAll(name)
                                     } label: {
-                                        Image(systemName: "arrow.down.circle").font(.title3)
+                                        Image(systemName: "arrow.down.circle")
+                                            .font(.title3)
+                                            .frame(minWidth: 44, minHeight: 44)
+                                            .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.borderless)
                                     .disabled(model.running)
@@ -149,7 +156,7 @@ struct FollowingView: View {
                                 Image(systemName: "externaldrive")
                             }
                         }
-                        .disabled(!kDriveConfigured || kDriveLoading || model.running)
+                        .disabled(!kDriveConfigured || kDriveLoading || model.running || (friends ?? []).isEmpty)
                         .accessibilityLabel(L("Vérifier sur kDrive", "Check on kDrive"))
                     }
                     ToolbarItem(placement: .confirmationAction) {
@@ -157,7 +164,7 @@ struct FollowingView: View {
                     }
                 }
         }
-        .tint(DS.accent)
+        .tint(DS.accentEmphasis)
         .errorAlert(kDriveError ?? errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             if session.hasSession, friends == nil { await load() }
@@ -229,12 +236,16 @@ struct FollowingUserPosts: View {
                         .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if errorMessage != nil {
-                VStack(spacing: 12) {
+            } else if let errorMessage {
+                VStack(spacing: DS.space(3)) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 36)).foregroundStyle(DS.accentEmphasis)
+                        .font(.system(size: 36)).foregroundStyle(DS.error)
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                        .multilineTextAlignment(.center)
                     Button(L("Réessayer", "Retry")) { retryCount += 1 }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(DSPrimaryButtonStyle())
                 }
                 .padding(DS.space(6))
             } else if let posts {
@@ -414,16 +425,9 @@ private struct FollowingMediaCard: View {
             defer { imageLoaded = true }
             guard let imageURL else { return }
             do {
-                let data = try await model.previewImageData(imageURL)
+                let decoded = try await model.previewThumbnail(imageURL)
                 try Task.checkCancellation()
-                if let source = CGImageSourceCreateWithData(data as CFData, nil),
-                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 960
-                   ] as CFDictionary) {
-                    image = UIImage(cgImage: thumbnail)
-                }
+                image = decoded
             } catch {
                 // A missing thumbnail does not prevent opening the original.
             }
@@ -486,7 +490,9 @@ private struct FollowingMediaCard: View {
                 ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.system(size: 44))
-                    .foregroundStyle(DS.onSurface).shadow(radius: 3)
+                    .foregroundStyle(Color.white)
+                    .padding(DS.space(1))
+                    .background(Color.black.opacity(0.45), in: Circle())
             }
         }
         .frame(maxWidth: .infinity).frame(height: 240)

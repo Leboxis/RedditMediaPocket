@@ -16,8 +16,12 @@ struct UploadConsoleCard: View {
     /// Statistiques (libellé, valeur) en petites lignes monospaced.
     let stats: [(label: String, value: String)]
     let summary: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let columns = dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible()), GridItem(.flexible())]
         VStack(alignment: .leading, spacing: DS.space(2)) {
             HStack(spacing: DS.space(3)) {
                 Image(systemName: icon)
@@ -37,6 +41,7 @@ struct UploadConsoleCard: View {
                 }
                 Spacer(minLength: DS.space(3))
             }
+            .accessibilityElement(children: .combine)
 
             if let counter, let progress {
                 VStack(alignment: .leading, spacing: DS.space(1)) {
@@ -61,17 +66,17 @@ struct UploadConsoleCard: View {
             }
 
             if !stats.isEmpty {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: DS.space(2)) {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: DS.space(2)) {
                     ForEach(stats.indices, id: \.self) { i in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(stats[i].label)
                                 .font(DS.caption2)
                                 .foregroundStyle(DS.onSurfaceMuted)
-                                .lineLimit(1)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                             Text(stats[i].value)
                                 .font(DS.monoCaption)
                                 .foregroundStyle(DS.onSurface)
-                                .lineLimit(1)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                                 .truncationMode(.middle)
                         }
                     }
@@ -81,7 +86,6 @@ struct UploadConsoleCard: View {
         .padding(DS.space(3))
         .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusL))
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -99,15 +103,17 @@ struct UploadActionButton: View {
                 Image(systemName: systemImage)
             }
             Text(title)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
         }
         .font(DS.headline)
         .frame(maxWidth: .infinity, minHeight: 48)
 
         let button = Button(role: destructive ? .destructive : nil, action: action) { label }
         if prominent {
-            button.buttonStyle(.borderedProminent).tint(DS.accent)
+            button.buttonStyle(DSPrimaryButtonStyle())
         } else {
-            button.buttonStyle(.bordered).tint(destructive ? DS.error : DS.accent)
+            button.buttonStyle(.bordered).tint(destructive ? DS.error : DS.accentEmphasis)
         }
     }
 }

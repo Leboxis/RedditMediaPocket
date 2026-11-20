@@ -24,6 +24,29 @@ public enum FeedTraversal {
         persist: (FeedCheckpoint) -> Void,
         trace: (String) -> Void = { _ in }
     ) async throws -> Bool {
+        try await run(
+            checkpoint: checkpoint,
+            maximumPages: maximumPages,
+            validCursor: validCursor,
+            fetchPage: { after in
+                let posts = try await fetch(after)
+                return (posts, posts.last?.id)
+            },
+            process: process,
+            persist: persist,
+            trace: trace
+        )
+    }
+
+    @MainActor public static func run(
+        checkpoint: FeedCheckpoint,
+        maximumPages: Int = 100,
+        validCursor: (String) -> Bool = { $0.hasPrefix("t3_") },
+        fetchPage: (String?) async throws -> (posts: [Post], after: String?),
+        process: ([Post]) async throws -> Void,
+        persist: (FeedCheckpoint) -> Void,
+        trace: (String) -> Void = { _ in }
+    ) async throws -> Bool {
         var state = checkpoint
         var visited = Set(state.visited)
         let needsHistory = state.visited.isEmpty || state.cursor != nil
@@ -43,9 +66,12 @@ public enum FeedTraversal {
             var after = state.frontier
             var reachedHistory = false
             var pages = Set<[String]>()
+            var seenCursors = Set<String>()
+            if let after { seenCursors.insert(after) }
             for _ in 0..<maximumPages {
                 try Task.checkCancellation()
-                let posts = try await fetch(after)
+                let page = try await fetchPage(after)
+                let posts = page.posts
                 try Task.checkCancellation()
                 let fresh = freshPosts(posts)
                 trace(L("Nouveautés : \(fresh.count) nouveaux posts sur \(posts.count).", "New-post scan: \(fresh.count) new posts out of \(posts.count)."))
@@ -54,13 +80,15 @@ public enum FeedTraversal {
                     try Task.checkCancellation()
                     commit(fresh)
                 }
-                guard let last = posts.last?.id, validCursor(last),
-                      pages.insert(posts.map(\.id)).inserted else {
+                let nextCursor = page.after ?? posts.last?.id
+                let uniqueContent = posts.isEmpty ? true : pages.insert(posts.map(\.id)).inserted
+                guard let last = nextCursor, validCursor(last),
+                      uniqueContent, seenCursors.insert(last).inserted else {
                     trace(L("Nouveautés terminées : page vide, répétée ou curseur invalide.", "New-post scan ended: empty or repeated page, or invalid cursor."))
                     reachedHistory = true
                     break
                 }
-                if fresh.isEmpty {
+                if !posts.isEmpty, fresh.isEmpty {
                     trace(L("Nouveautés terminées : historique déjà connu atteint.", "New-post scan ended: reached known history."))
                     reachedHistory = true
                     break
@@ -84,11 +112,30 @@ public enum FeedTraversal {
         trace(L("Phase historique : reprise après \(state.cursor ?? "début").", "History scan: resuming after \(state.cursor ?? "start")."))
         var after = state.cursor
         var pages = Set<[String]>()
+        var seenCursors = Set<String>()
+        if let after { seenCursors.insert(after) }
         for _ in 0..<maximumPages {
             try Task.checkCancellation()
-            let posts = try await fetch(after)
+            let page = try await fetchPage(after)
+            let posts = page.posts
             try Task.checkCancellation()
-            guard !posts.isEmpty, pages.insert(posts.map(\.id)).inserted else {
+            let nextCursor = page.after ?? posts.last?.id
+            // Une page sans post `t3_` mais avec un curseur `after` valide
+            // (ex. page de 100 commentaires sauvegardés `t1_`) continue vers
+            // la page suivante ; une page vide sans curseur termine le flux.
+            if posts.isEmpty {
+                guard let last = nextCursor, validCursor(last), seenCursors.insert(last).inserted else {
+                    trace(L("Historique terminé : page vide ou répétée.", "History complete: empty or repeated page."))
+                    state.cursor = nil
+                    persist(state)
+                    return true
+                }
+                after = last
+                state.cursor = last
+                persist(state)
+                continue
+            }
+            guard pages.insert(posts.map(\.id)).inserted else {
                 trace(L("Historique terminé : page vide ou répétée.", "History complete: empty or repeated page."))
                 state.cursor = nil
                 persist(state)
@@ -101,7 +148,7 @@ public enum FeedTraversal {
                 try Task.checkCancellation()
                 commit(fresh)
             }
-            guard let last = posts.last?.id, validCursor(last), last != after else {
+            guard let last = nextCursor, validCursor(last), last != after, seenCursors.insert(last).inserted else {
                 trace(L("Historique terminé : curseur invalide ou inchangé.", "History complete: invalid or unchanged cursor."))
                 state.cursor = nil
                 persist(state)

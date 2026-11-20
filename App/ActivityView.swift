@@ -16,7 +16,7 @@ struct ActivityView: View {
             Form {
                 Section {
                     SettingsRow(
-                        symbol: "doc.text.magnifyingglass", tint: DS.accent,
+                        symbol: "doc.text.magnifyingglass", tint: DS.accentEmphasis,
                         title: L("Journal de bord", "Logs"),
                         status: logs.errorCount > 0
                             ? L("\(logs.errorCount) erreur(s)", "\(logs.errorCount) error(s)")
@@ -25,7 +25,7 @@ struct ActivityView: View {
                         tap: { logsPresented = true },
                         showsChevron: true)
                     SettingsRow(
-                        symbol: "exclamationmark.triangle", tint: DS.accent,
+                        symbol: "exclamationmark.triangle", tint: DS.accentEmphasis,
                         title: L("Journal des échecs", "Failure journal"),
                         status: journal.entries.isEmpty
                             ? L("Aucun échec en attente", "No pending failures")

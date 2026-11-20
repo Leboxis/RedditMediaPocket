@@ -17,41 +17,48 @@ private struct MediaDetails {
     var dates: MediaMetadata?
 
     static func load(_ url: URL) async -> MediaDetails {
-        var details = MediaDetails()
         // Petites lectures fichier hors Main : ne bloque pas l'écran (décision Jev A bug 5).
-        let fileInfo = await Task.detached(priority: .utility) { () -> (Int64?, MediaMetadata?) in
+        async let fileInfoTask: (Int64?, MediaMetadata?) = Task.detached(priority: .utility) {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
             return (size, MediaMetadata.read(for: url))
         }.value
-        details.bytes = fileInfo.0
-        details.dates = fileInfo.1
+
+        var details = MediaDetails()
         if isVideo(url) {
             let asset = AVURLAsset(url: url)
-            if let duration = try? await asset.load(.duration), duration.seconds.isFinite, duration.seconds >= 0 {
+            async let durationResult = asset.load(.duration)
+            async let tracksResult = asset.loadTracks(withMediaType: .video)
+            if let duration = try? await durationResult, duration.seconds.isFinite, duration.seconds >= 0 {
                 details.duration = duration.seconds
             }
-            if let track = try? await asset.loadTracks(withMediaType: .video).first {
-                if let size = try? await track.load(.naturalSize),
-                   let transform = try? await track.load(.preferredTransform) {
+            if let track = (try? await tracksResult)?.first {
+                async let naturalSizeResult = track.load(.naturalSize)
+                async let transformResult = track.load(.preferredTransform)
+                async let fpsResult = track.load(.nominalFrameRate)
+                async let bitRateResult = track.load(.estimatedDataRate)
+                if let size = try? await naturalSizeResult,
+                   let transform = try? await transformResult {
                     let display = CGRect(origin: .zero, size: size).applying(transform)
                     let width = abs(display.width), height = abs(display.height)
                     if width.isFinite, height.isFinite, width > 0, height > 0 {
                         details.resolution = "\(Int(width.rounded())) × \(Int(height.rounded())) px"
                     }
                 }
-                if let fps = try? await track.load(.nominalFrameRate), fps.isFinite, fps > 0 { details.frameRate = fps }
-                if let rate = try? await track.load(.estimatedDataRate), rate.isFinite, rate > 0 { details.bitRate = rate }
+                if let fps = try? await fpsResult, fps.isFinite, fps > 0 { details.frameRate = fps }
+                if let rate = try? await bitRateResult, rate.isFinite, rate > 0 { details.bitRate = rate }
             }
         } else {
-            let resolution = await Task.detached(priority: .utility) { () -> String? in
+            details.resolution = await Task.detached(priority: .utility) { () -> String? in
                 guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                       let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                       let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
                       let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else { return nil }
                 return "\(width.intValue) × \(height.intValue) px"
             }.value
-            details.resolution = resolution
         }
+        let fileInfo = await fileInfoTask
+        details.bytes = fileInfo.0
+        details.dates = fileInfo.1
         return details
     }
 }
@@ -91,13 +98,28 @@ struct MediaInfoView: View {
                         row(L("Téléchargement", "Downloaded"), date(details.dates?.downloadedAt))
                         row(L("Publication du post", "Post published"), date(details.dates?.postDate))
                     } header: { Text(L("Dates", "Dates")) } footer: {
-                        Text(L("Les dates non enregistrées ou absentes du flux Reddit sont indisponibles.", "Dates that were not recorded or are missing from the Reddit feed are unavailable."))
+                        Text(L("Les dates non enregistrées ou absentes de la source sont indisponibles.", "Dates that were not recorded or are missing from the source are unavailable."))
                     }
                     Section {
                         row(L("Auteur", "Author"), author(details.dates?.author))
-                        row(L("Lien du post", "Post link"), details.dates?.postLink ?? unavailable)
+                        if let rawLink = details.dates?.postLink,
+                           let linkURL = URL(string: rawLink),
+                           ["http", "https"].contains(linkURL.scheme?.lowercased() ?? "") {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(L("Lien du post", "Post link")).font(.caption).foregroundStyle(DS.onSurfaceMuted)
+                                Link(destination: linkURL) {
+                                    Text(rawLink)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .textSelection(.enabled)
+                            }
+                            .padding(.vertical, DS.space(1))
+                        } else {
+                            row(L("Lien du post", "Post link"), details.dates?.postLink ?? unavailable)
+                        }
                     } header: { Text(L("Source", "Source")) } footer: {
-                        Text(L("Lien copiable pour retrouver le post Reddit d'origine.", "Copyable link to find the original Reddit post."))
+                        Text(L("Lien ouvrable et copiable vers la publication d’origine.", "Openable and copyable link to the original post."))
                     }
                 } else {
                     ProgressView(L("Lecture des informations…", "Loading information…"))
@@ -114,7 +136,7 @@ struct MediaInfoView: View {
                 details = result
             }
         }
-        .tint(DS.accent)
+        .tint(DS.accentEmphasis)
     }
 
     private func row(_ title: String, _ value: String) -> some View {

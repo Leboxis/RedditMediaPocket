@@ -253,11 +253,17 @@ public enum FilenamePolicy {
         return String(hash, radix: 16)
     }
 
+    /// Clé canonique de comparaison kDrive (NFC + insensible à la casse et aux
+    /// diacritiques), pour éviter les balayages quadratiques O(N × M).
+    public static func kDriveNormalizedName(_ name: String) -> String {
+        name.precomposedStringWithCanonicalMapping
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
     /// Comparaison de noms de dossiers kDrive : insensible à la casse et aux
     /// diacritiques, comme la recherche dans `prepareCollectionFolder`.
     public static func kDriveNameMatch(_ lhs: String, _ rhs: String) -> Bool {
-        lhs.precomposedStringWithCanonicalMapping
-            .compare(rhs.precomposedStringWithCanonicalMapping, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        kDriveNormalizedName(lhs) == kDriveNormalizedName(rhs)
     }
 
     /// Noms distants possibles d'un fichier local : le nom assaini envoyé en
@@ -272,7 +278,8 @@ public enum FilenamePolicy {
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
     /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`,
-    /// `rg/pseudo` et `tw/pseudo`.
+    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo`,
+    /// `ts/pseudo`, `ttv/videos`, `ig/pseudo` et `reddit/posts`.
     public static func kDriveFolderName(_ raw: String, fallback: String = "Pocket", maxUTF8Bytes: Int = 100) -> String {
         var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let labelSeparators = CharacterSet(charactersIn: "/／\\＼")
@@ -295,7 +302,13 @@ public enum FilenamePolicy {
         var typeSuffix = ""
         if parts.count > 1, let first = parts.first?.lowercased() {
             if first == "x" { typePrefix = "X-Fetish " }
-            else if first == "rg" { typePrefix = "Rg" }
+            else if first == "rg" {
+                if parts.count >= 3, parts[1].lowercased() == "gif" {
+                    typePrefix = "RgGif "
+                } else {
+                    typePrefix = "Rg"
+                }
+            }
             // `tw` doit rester distinct de `t` : un compte X ne doit jamais
             // hériter du dossier d'un profil Reddit au même pseudo.
             else if first == "tw" { typeSuffix = " - X" }
@@ -304,6 +317,8 @@ public enum FilenamePolicy {
             // TikTok isolée) porte la même mention, au moins autant qu'un
             // subreddit nommé d'après un identifiant numérique.
             else if first == "tt" || first == "ttv" { typeSuffix = " - TikTok" }
+            // `ts` (sauvegardés TikTok) reste distinct d'un profil `tt/`.
+            else if first == "ts" { typeSuffix = " - TikTok Saved" }
             // `ig` reste distinct de toutes les autres sources : un compte
             // Instagram ne doit jamais hériter du dossier d'un profil au
             // même pseudo.

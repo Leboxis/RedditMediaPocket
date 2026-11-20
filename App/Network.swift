@@ -9,13 +9,13 @@ import MediaCore
     private var sessionRevision = -1
     private var requestGeneration = 0
     private var limits: ServiceLimits
+    private var legacyCooldownDate: Date
     private var rssCache: [URL: (date: Date, data: Data)] = [:]
     private let defaults = UserDefaults.standard
 
     private func checkLimit(_ service: String) throws {
         // Older versions did not record the source. Honor that existing deadline once.
-        let legacy = Date(timeIntervalSince1970: defaults.double(forKey: "cooldown"))
-        if legacy > Date() { throw NetworkError.limited(service: "Ancienne limite", until: legacy) }
+        if legacyCooldownDate > Date() { throw NetworkError.limited(service: "Ancienne limite", until: legacyCooldownDate) }
         if let date = limits.blockedUntil(service: service, now: Date()) {
             throw NetworkError.limited(service: service, until: date)
         }
@@ -25,6 +25,7 @@ import MediaCore
     func resetRateLimits() {
         requestGeneration += 1
         limits = ServiceLimits()
+        legacyCooldownDate = .distantPast
         rssCache.removeAll()
         defaults.removeObject(forKey: "serviceCooldowns")
         defaults.removeObject(forKey: "cooldown")
@@ -32,6 +33,8 @@ import MediaCore
     init() {
         let stored = UserDefaults.standard.dictionary(forKey: "serviceCooldowns") as? [String: Double] ?? [:]
         limits = ServiceLimits(deadlines: stored.mapValues { Date(timeIntervalSince1970: $0) })
+        let legacySeconds = UserDefaults.standard.double(forKey: "cooldown")
+        legacyCooldownDate = legacySeconds > 0 ? Date(timeIntervalSince1970: legacySeconds) : .distantPast
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -128,19 +131,19 @@ import MediaCore
     }
     func data(_ url: URL, bearer: String? = nil, headers: [String: String]? = nil,
               body: Data? = nil) async throws -> Data {
-        (try await fetch(url, bearer: bearer, headers: headers, body: body)).data
+        (try await fetch(url, bearer: bearer, headers: headers, body: body, includeHeaders: false)).data
     }
 
     /// Comme `data`, en rendant aussi les en-têtes de la réponse : Instagram ne
     /// livre son jeton `csrf` que par `Set-Cookie`, plus dans le HTML.
     func dataAndHeaders(_ url: URL, headers: [String: String]? = nil) async throws -> (data: Data, headers: [String: String]) {
-        try await fetch(url, bearer: nil, headers: headers, body: nil)
+        try await fetch(url, bearer: nil, headers: headers, body: nil, includeHeaders: true)
     }
 
     private func fetch(_ url: URL, bearer: String?, headers: [String: String]?,
-                       body: Data?) async throws -> (data: Data, headers: [String: String]) {
+                       body: Data?, includeHeaders: Bool) async throws -> (data: Data, headers: [String: String]) {
         do {
-            return try await fetchOnce(url, bearer: bearer, headers: headers, body: body)
+            return try await fetchOnce(url, bearer: bearer, headers: headers, body: body, includeHeaders: includeHeaders)
         } catch NetworkError.refused(let code) where code == 404 {
             // Les flux `.rss` de Reddit sont coupés depuis le 13/11/2026 (404
             // sur www.reddit.com ET old.reddit.com). Le repli historique sur
@@ -152,7 +155,7 @@ import MediaCore
             LogCenter.info(L("Flux Reddit refusé (HTTP 404) sur \(LogDiagnostics.requestSummary(url)) — nouvel essai sur \(LogDiagnostics.requestSummary(fallback)).",
                              "Reddit feed refused (HTTP 404) on \(LogDiagnostics.requestSummary(url)) — retrying on \(LogDiagnostics.requestSummary(fallback))."))
             do {
-                let result = try await fetchOnce(fallback, bearer: bearer, headers: headers, body: body)
+                let result = try await fetchOnce(fallback, bearer: bearer, headers: headers, body: body, includeHeaders: includeHeaders)
                 LogCenter.info(L("Repli \(fallback.host ?? "") : flux servi (\(result.data.count) octets).",
                                  "Fallback \(fallback.host ?? ""): feed served (\(result.data.count) bytes)."))
                 return result
@@ -165,7 +168,7 @@ import MediaCore
     }
 
     private func fetchOnce(_ url: URL, bearer: String?, headers: [String: String]?,
-                           body: Data?) async throws -> (data: Data, headers: [String: String]) {
+                           body: Data?, includeHeaders: Bool) async throws -> (data: Data, headers: [String: String]) {
         let generation = requestGeneration
         let revision = RedditSession.shared.revision
         if revision != sessionRevision { rssCache.removeAll(); sessionRevision = revision }
@@ -220,8 +223,10 @@ import MediaCore
             rssCache[url] = (Date(), data)
         }
         var fields: [String: String] = [:]
-        for (key, value) in http?.allHeaderFields ?? [:] {
-            fields[String(describing: key).lowercased()] = String(describing: value)
+        if includeHeaders {
+            for (key, value) in http?.allHeaderFields ?? [:] {
+                fields[String(describing: key).lowercased()] = String(describing: value)
+            }
         }
         return (data, fields)
     }
@@ -245,6 +250,10 @@ import MediaCore
     /// `www.reddit.com/user/<pseudo>/saved.json` (les flux `.rss` privés sont
     /// coupés depuis le 13/11/2026). Nécessite la session Reddit.
     func savedPosts(_ feed: SavedFeed, after: String?) async throws -> [Post] {
+        try await savedPostsPage(feed, after: after).posts
+    }
+
+    func savedPostsPage(_ feed: SavedFeed, after: String?) async throws -> (posts: [Post], after: String?) {
         var components = URLComponents(string: "https://www.reddit.com/user/\(feed.username)/saved.json")!
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "100")]
         if let after { items.append(URLQueryItem(name: "after", value: after)) }
@@ -255,7 +264,7 @@ import MediaCore
         do {
             let body = try await data(url)
             try Task.checkCancellation()
-            return try RedditListing.parse(body)
+            return try RedditListing.parsePage(body)
         } catch {
             try Task.checkCancellation()
             if error is CancellationError { throw error }
@@ -331,9 +340,15 @@ import MediaCore
             guard mime.hasPrefix("image/") || mime.hasPrefix("video/") || mime.hasPrefix("audio/") || mime == "application/octet-stream" else {
                 throw NetworkError.invalid(L("Le serveur n’a pas renvoyé un média (\(mime)).", "The server did not return media (\(mime))."))
             }
-            let persistent = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension.isEmpty ? "mp4" : url.pathExtension)
-            try FileManager.default.moveItem(at: temp, to: persistent)
-            let sizeKB = (try? persistent.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { $0 / 1024 } ?? 0
+            let ext = url.pathExtension.isEmpty ? "mp4" : url.pathExtension
+            let (persistent, sizeKB) = try await Task.detached(priority: .userInitiated) { () -> (URL, Int) in
+                let persistent = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(ext)
+                try FileManager.default.moveItem(at: temp, to: persistent)
+                let sizeKB = (try? persistent.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { $0 / 1024 } ?? 0
+                return (persistent, sizeKB)
+            }.value
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             LogCenter.net(L("Reçu : \(LogDiagnostics.requestSummary(response.url ?? url)) (HTTP \(code), \(mime), \(sizeKB) Ko, \(String(format: "%.1f", Date().timeIntervalSince(started))) s).", "Received: \(LogDiagnostics.requestSummary(response.url ?? url)) (HTTP \(code), \(mime), \(sizeKB) KB, \(String(format: "%.1f", Date().timeIntervalSince(started))) s)."))
             return persistent
@@ -402,6 +417,7 @@ private final class StallWatchdog: NSObject, URLSessionTaskDelegate, @unchecked 
     private var lastBytes: Int64 = 0
     private var lastActivity = Date()
     private var stopped = false
+    private var pollTask: Task<Void, Never>?
     private(set) var stalled = false
 
     func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
@@ -411,18 +427,25 @@ private final class StallWatchdog: NSObject, URLSessionTaskDelegate, @unchecked 
     }
 
     func start() {
-        Task { [weak self] in
-            while let self, !self.isStopped {
+        let worker = Task { [weak self] in
+            while !Task.isCancelled, let self, !self.isStopped {
                 try? await Task.sleep(for: .seconds(Self.pollInterval))
+                if Task.isCancelled { break }
                 self.check()
             }
         }
+        lock.lock()
+        pollTask = worker
+        lock.unlock()
     }
 
     func stop() {
         lock.lock()
         stopped = true
+        let worker = pollTask
+        pollTask = nil
         lock.unlock()
+        worker?.cancel()
     }
 
     private var isStopped: Bool {

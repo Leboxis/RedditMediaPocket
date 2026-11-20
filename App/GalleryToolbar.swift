@@ -31,7 +31,7 @@ struct GalleryToolbar: View {
                                           "\(model.displayedFiles.count) of \(model.files.count) media shown"))
             }
         }
-        .padding(.horizontal, DS.space(3))
+        .padding(.horizontal, DS.space(4))
         .padding(.bottom, DS.space(2))
     }
 
@@ -51,16 +51,18 @@ struct GalleryToolbar: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(DS.onSurfaceMuted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(L("Effacer la recherche", "Clear search"))
             }
         }
         .font(.footnote)
-        .padding(.horizontal, DS.space(2))
-        .padding(.vertical, DS.space(2))
+        .padding(.leading, DS.space(3))
+        .padding(.trailing, model.gallerySearch.isEmpty ? DS.space(3) : 0)
         .frame(minHeight: 44)
-        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusS))
+        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
     }
 
     private var sortMenu: some View {
@@ -112,7 +114,7 @@ struct GalleryToolbar: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(active ? DS.accentEmphasis : DS.onSurface)
             .frame(width: 44, height: 44)
-            .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusS))
+            .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
             .contentShape(Rectangle())
     }
 }

@@ -8,14 +8,65 @@ import WebKit
 
 func isVideo(_ url: URL) -> Bool { ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()) }
 
+private actor ThumbnailCoordinator {
+    private let maxConcurrent = 6
+    private var running = 0
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var inflight: [URL: Task<UIImage?, Never>] = [:]
+
+    func run(url: URL, decode: @Sendable @escaping () async -> UIImage?) async -> UIImage? {
+        if let existing = inflight[url] {
+            return await existing.value
+        }
+        let task = Task<UIImage?, Never> {
+            await acquire()
+            let result = await decode()
+            release()
+            return result
+        }
+        inflight[url] = task
+        let image = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        inflight.removeValue(forKey: url)
+        return image
+    }
+
+    private func acquire() async {
+        if running < maxConcurrent {
+            running += 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+        running += 1
+    }
+
+    private func release() {
+        running = max(0, running - 1)
+        if !waiters.isEmpty {
+            let next = waiters.removeFirst()
+            next.resume()
+        }
+    }
+}
+
 private final class Thumbnails: @unchecked Sendable {
     static let shared = Thumbnails()
     private let cache = NSCache<NSURL, UIImage>()
+    private let coordinator = ThumbnailCoordinator()
     private init() { cache.totalCostLimit = 32 * 1024 * 1024 }
+
+    func cached(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
 
     func image(for url: URL) async -> UIImage? {
         if let image = cache.object(forKey: url as NSURL) { return image }
-        let work = Task.detached(priority: .utility) { () -> UIImage? in
+        let image = await coordinator.run(url: url) {
             if isVideo(url) {
                 let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
                 generator.appliesPreferredTrackTransform = true
@@ -23,18 +74,18 @@ private final class Thumbnails: @unchecked Sendable {
                 guard let result = try? await generator.image(at: .zero) else { return nil }
                 return UIImage(cgImage: result.image)
             }
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 360,
-                    kCGImageSourceShouldCacheImmediately: true
-                  ] as CFDictionary) else { return nil }
-            return UIImage(cgImage: image)
+            return await Task.detached(priority: .utility) { () -> UIImage? in
+                guard !Task.isCancelled,
+                      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                      let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 360,
+                        kCGImageSourceShouldCacheImmediately: true
+                      ] as CFDictionary) else { return nil }
+                return UIImage(cgImage: image)
+            }.value
         }
-        let image = await withTaskCancellationHandler {
-            await work.value
-        } onCancel: { work.cancel() }
         if let image, !Task.isCancelled {
             cache.setObject(image, forKey: url as NSURL, cost: Int(image.size.width * image.size.height * 4))
         }
@@ -48,21 +99,23 @@ struct MediaThumbnail: View {
     @State private var loaded = false
 
     var body: some View {
+        let displayImage = image ?? Thumbnails.shared.cached(for: url)
         DS.surface
             .aspectRatio(1, contentMode: .fit)
             .overlay {
-                GeometryReader { geometry in
-                    if let image {
-                        Image(uiImage: image).resizable().scaledToFill()
-                            .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                Group {
+                    if let displayImage {
+                        Image(uiImage: displayImage)
+                            .resizable()
+                            .scaledToFill()
+                    } else if loaded {
+                        Image(systemName: isVideo(url) ? "video" : "photo")
+                            .foregroundStyle(DS.onSurfaceMuted)
                     } else {
-                        ZStack {
-                            if loaded {
-                                Image(systemName: isVideo(url) ? "video" : "photo").foregroundStyle(DS.onSurfaceMuted)
-                            } else { ProgressView().controlSize(.small) }
-                        }.frame(width: geometry.size.width, height: geometry.size.height)
+                        ProgressView().controlSize(.small)
                     }
                 }
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
                 .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomTrailing) {
@@ -76,7 +129,11 @@ struct MediaThumbnail: View {
             .clipped()
             .contentShape(Rectangle())
             .task(id: url) {
-                image = await Thumbnails.shared.image(for: url)
+                if displayImage == nil {
+                    image = await Thumbnails.shared.image(for: url)
+                } else if image == nil {
+                    image = displayImage
+                }
                 loaded = true
             }
     }
@@ -87,6 +144,7 @@ struct MediaPreview: View {
     let urls: [URL]
     @State private var index: Int
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     init(urls: [URL], selectedURL: URL) {
         self.urls = urls
         _index = State(initialValue: urls.firstIndex(of: selectedURL) ?? 0)
@@ -98,14 +156,24 @@ struct MediaPreview: View {
     var body: some View {
         Group {
             if urls.isEmpty {
-                Text(L("Aucun média", "No media")).foregroundStyle(DS.onSurfaceMuted)
+                VStack(spacing: 0) {
+                    HStack {
+                        Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                            .accessibilityLabel(L("Fermer", "Close"))
+                        Spacer()
+                    }
+                    .padding(.horizontal, DS.space(2)).padding(.vertical, DS.space(1))
+                    Spacer()
+                    Text(L("Aucun média", "No media")).foregroundStyle(DS.onSurfaceMuted)
+                    Spacer()
+                }
             } else {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button { dismiss() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
                     .accessibilityLabel(L("Fermer", "Close"))
                 Button {
-                    if safeIndex > 0 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index = safeIndex - 1 } }
+                    if safeIndex > 0 { withAnimation(reduceMotion ? nil : DS.spring) { index = safeIndex - 1 } }
                 } label: { Image(systemName: "chevron.backward").frame(width: 44, height: 44) }
                     .disabled(safeIndex == 0)
                     .accessibilityLabel(L("Média précédent", "Previous media"))
@@ -115,7 +183,7 @@ struct MediaPreview: View {
                     Text("\(safeIndex + 1) / \(urls.count)").font(.caption).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
                 }.frame(maxWidth: .infinity).multilineTextAlignment(.center)
                 Button {
-                    if safeIndex < urls.count - 1 { withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) { index = safeIndex + 1 } }
+                    if safeIndex < urls.count - 1 { withAnimation(reduceMotion ? nil : DS.spring) { index = safeIndex + 1 } }
                 } label: { Image(systemName: "chevron.forward").frame(width: 44, height: 44) }
                     .disabled(safeIndex == urls.count - 1)
                     .accessibilityLabel(L("Média suivant", "Next media"))
@@ -137,44 +205,35 @@ private struct MediaPager: View {
     let urls: [URL]
     @Binding var index: Int
     @State private var dragOffset: CGFloat = 0
-    @State private var zoomed: [Bool]
-
-    init(urls: [URL], index: Binding<Int>) {
-        self.urls = urls
-        self._index = index
-        self._zoomed = State(initialValue: Array(repeating: false, count: urls.count))
-    }
+    @State private var isZoomed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var clampedIndex: Int {
         guard !urls.isEmpty else { return 0 }
         return min(max(index, 0), urls.count - 1)
     }
-    private var indexZoomed: Bool {
-        guard zoomed.indices.contains(clampedIndex) else { return false }
-        return zoomed[clampedIndex]
-    }
-    private func zoomBinding(at position: Int) -> Binding<Bool> {
-        guard zoomed.indices.contains(position) else { return .constant(false) }
-        return $zoomed[position]
+
+    private var visibleRange: ClosedRange<Int>? {
+        guard !urls.isEmpty else { return nil }
+        let lower = max(0, clampedIndex - 1)
+        let upper = min(urls.count - 1, clampedIndex + 1)
+        return lower...upper
     }
 
     var body: some View {
         GeometryReader { proxy in
             let width = max(proxy.size.width, 1)
-            HStack(spacing: 0) {
-                ForEach(urls.indices, id: \.self) { position in
-                    Group {
-                        if abs(position - clampedIndex) <= 1 {
-                            MediaPage(url: urls[position], active: position == clampedIndex, zoomed: zoomBinding(at: position))
-                        } else {
-                            DS.background
-                        }
+            ZStack {
+                if let visibleRange {
+                    ForEach(visibleRange, id: \.self) { position in
+                        let zoomBinding = position == clampedIndex ? $isZoomed : .constant(false)
+                        MediaPage(url: urls[position], active: position == clampedIndex, zoomed: zoomBinding)
+                            .frame(width: width, height: proxy.size.height)
+                            .offset(x: CGFloat(position - clampedIndex) * width + dragOffset)
                     }
-                    .frame(width: width, height: proxy.size.height)
                 }
             }
-            .frame(width: width * CGFloat(max(urls.count, 1)), alignment: .leading)
-            .offset(x: -CGFloat(clampedIndex) * width + dragOffset)
+            .frame(width: width, height: proxy.size.height)
             .contentShape(Rectangle())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 18, coordinateSpace: .named("mediaPager"))
@@ -190,35 +249,32 @@ private struct MediaPager: View {
                         var target = clampedIndex
                         if (dx < -limit || predicted < -width * 0.6), clampedIndex < urls.count - 1 { target += 1 }
                         else if (dx > limit || predicted > width * 0.6), clampedIndex > 0 { target -= 1 }
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
+                        withAnimation(reduceMotion ? nil : DS.spring) {
                             index = target
                             dragOffset = 0
                         }
                     },
-                including: indexZoomed ? .subviews : .all
+                including: isZoomed ? .subviews : .all
             )
         }
         .background(DS.background)
         .coordinateSpace(name: "mediaPager")
         .clipped()
-        .onChange(of: indexZoomed) { _ in dragOffset = 0 }
-        .onChange(of: index) { _ in dragOffset = 0 }
+        .onChange(of: isZoomed) { _ in dragOffset = 0 }
+        .onChange(of: index) { _ in
+            isZoomed = false
+            dragOffset = 0
+        }
         .onChange(of: urls.count) { _ in
-            // urls est une copie stable par présentation ; resync défensive
-            // si la source change (zoomed dimensionné à l'init sinon).
-            zoomed = Array(repeating: false, count: urls.count)
             if index >= urls.count { index = max(urls.count - 1, 0) }
         }
         .onAppear {
-            if zoomed.count != urls.count {
-                zoomed = Array(repeating: false, count: urls.count)
-            }
             if index >= urls.count { index = max(urls.count - 1, 0) }
         }
     }
 
     private func canPage(_ value: DragGesture.Value, height: CGFloat) -> Bool {
-        guard !urls.isEmpty, zoomed.indices.contains(clampedIndex), !zoomed[clampedIndex], abs(value.translation.width) > abs(value.translation.height) else { return false }
+        guard !urls.isEmpty, !isZoomed, abs(value.translation.width) > abs(value.translation.height) else { return false }
         if isVideo(urls[clampedIndex]) {
             // Reserve the native top controls and bottom scrubber. A horizontal
             // swipe in the central picture navigates in either direction.
@@ -250,15 +306,22 @@ struct MediaPage: View {
         }
         .task(id: url) {
             if !isVideo(url), url.pathExtension.lowercased() != "gif" {
-                let value = await Task.detached(priority: .userInitiated) { () -> UIImage? in
-                    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                let worker = Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    guard !Task.isCancelled,
+                          let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                           let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                             kCGImageSourceCreateThumbnailFromImageAlways: true,
                             kCGImageSourceCreateThumbnailWithTransform: true,
-                            kCGImageSourceThumbnailMaxPixelSize: 4096
+                            kCGImageSourceThumbnailMaxPixelSize: 2560,
+                            kCGImageSourceShouldCacheImmediately: true
                           ] as CFDictionary) else { return nil }
                     return UIImage(cgImage: cg)
-                }.value
+                }
+                let value = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
                 if !Task.isCancelled { image = value; failed = value == nil }
             }
         }
@@ -288,6 +351,7 @@ private struct LocalVideoPlayer: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.player.pause()
+        coordinator.player.replaceCurrentItem(with: nil)
         controller.player = nil
     }
 
@@ -317,11 +381,15 @@ private struct AnimatedImage: UIViewRepresentable {
         view.scrollView.isScrollEnabled = false
         view.scrollView.panGestureRecognizer.isEnabled = false
         view.scrollView.bounces = false
+        let escapedName = url.lastPathComponent
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)?
+            .replacingOccurrences(of: "\"", with: "%22")
+            ?? ""
         let html = """
         <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-        <style>html,body{margin:0;height:100%;background:#000;display:flex;align-items:center;justify-content:center}
+        <style>html,body{margin:0;height:100%;background:transparent;display:flex;align-items:center;justify-content:center}
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
-        <body><img src="\(url.lastPathComponent)"></body></html>
+        <body><img src="\(escapedName)"></body></html>
         """
         view.loadHTMLString(html, baseURL: url.deletingLastPathComponent())
         return view

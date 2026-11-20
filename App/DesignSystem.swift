@@ -68,11 +68,32 @@ enum DS {
 /// Style de bouton « pressable » : scale 0,97 au toucher, animé en 150 ms,
 /// sans animation si Réduire les animations est actif.
 struct DSPressableButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? DS.pressScale : 1)
+            .opacity(isEnabled ? 1 : 0.45)
+            .scaleEffect(isEnabled && configuration.isPressed && !reduceMotion ? DS.pressScale : 1)
+            .animation(reduceMotion ? nil : DS.micro, value: configuration.isPressed)
+    }
+}
+
+/// Bouton d'action principal pleine largeur ou standard, utilisant la paire
+/// approuvée `DS.accent` / `DS.onAccent`.
+struct DSPrimaryButtonStyle: ButtonStyle {
+    var cornerRadius: CGFloat = DS.radiusM
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(DS.headline)
+            .foregroundStyle(isEnabled ? DS.onAccent : DS.onSurfaceMuted)
+            .padding(.horizontal, DS.space(4))
+            .frame(minHeight: 48)
+            .background(isEnabled ? DS.accent : DS.surface, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .scaleEffect(isEnabled && configuration.isPressed && !reduceMotion ? DS.pressScale : 1)
             .animation(reduceMotion ? nil : DS.micro, value: configuration.isPressed)
     }
 }

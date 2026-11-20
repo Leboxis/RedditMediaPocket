@@ -26,9 +26,11 @@ private struct DownloadSettings: View {
     @State private var instagramLoginPresented = false
     @State private var confirmDeleteAll = false
     @State private var diagnosticsPresented = false
+    @State private var logoutServiceTitle: String?
+    @State private var logoutAction: (() async -> Void)?
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
-    @AppStorage("kDriveDirectoryName") private var kDriveDirectoryName = "Racine (kDrive)"
+    @AppStorage("kDriveDirectoryName") private var kDriveDirectoryName = ""
     @Environment(\.dismiss) private var dismiss
 
     private var kDriveConfigured: Bool {
@@ -60,7 +62,7 @@ private struct DownloadSettings: View {
                         }
                     }
                 } footer: {
-                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 16. Par défaut : 10 pour toutes les sources. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 16. Defaults: 10 for all sources. Higher values may increase server rate limiting."))
+                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 16. Par défaut : 10, ou 6 pour X-Fetish. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 16. Defaults: 10, or 6 for X-Fetish. Higher values may increase server rate limiting."))
                 }
                 Section {
                     Picker(L("Morceaux par vidéo", "Parts per video"), selection: $model.xFetishSegments) {
@@ -80,82 +82,61 @@ private struct DownloadSettings: View {
                 }
                 Section {
                     SettingsRow(
-                        symbol: "person.crop.circle", tint: DS.accent, title: L("Reddit", "Reddit"),
+                        symbol: "person.crop.circle",
+                        tint: reddit.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        title: L("Reddit", "Reddit"),
                         status: reddit.hasSession ? L("Session détectée", "Session detected") : L("Sans session", "Signed out"),
                         statusColor: reddit.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
                         tap: { loginPresented = true },
                         enabled: !(model.running || reddit.clearing),
-                        menuItems: [
-                            .init(label: reddit.hasSession ? L("Ouvrir Reddit", "Open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit"),
-                                  systemImage: reddit.hasSession ? "safari" : "person.badge.key",
-                                  action: { loginPresented = true }),
-                            .init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
-                                  destructive: true, action: { Task { await reddit.logout() } })
-                        ])
+                        menuItems: redditMenuItems)
                     SettingsRow(
-                        symbol: "bird", tint: .gray, title: "X",
-                        status: xSession.apiAccepted ? L("Session détectée", "Session detected")
-                            : (xSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
-                        statusColor: xSession.apiAccepted ? DS.accentEmphasis : (xSession.apiRejected ? DS.error : DS.onSurfaceMuted),
+                        symbol: "bird",
+                        tint: xSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        title: "X",
+                        status: sessionStatus(hasSession: xSession.hasSession, rejected: xSession.apiRejected),
+                        statusColor: sessionStatusColor(hasSession: xSession.hasSession, rejected: xSession.apiRejected),
                         tap: { xLoginPresented = true },
                         enabled: !(model.running || xSession.clearing),
-                        menuItems: [
-                            .init(label: xSession.hasSession ? L("Ouvrir X", "Open X") : L("Se connecter à X", "Sign in to X"),
-                                  systemImage: xSession.hasSession ? "safari" : "person.badge.key",
-                                  action: { xLoginPresented = true }),
-                            .init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
-                                  destructive: true, action: { Task { await xSession.logout() } })
-                        ])
+                        menuItems: xMenuItems)
                     SettingsRow(
-                        symbol: "music.note", tint: .cyan, title: "TikTok",
-                        status: tikTokSession.apiAccepted ? L("Session détectée", "Session detected")
-                            : (tikTokSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
-                        statusColor: tikTokSession.apiAccepted ? DS.accentEmphasis : (tikTokSession.apiRejected ? DS.error : DS.onSurfaceMuted),
+                        symbol: "music.note",
+                        tint: tikTokSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        title: "TikTok",
+                        status: sessionStatus(hasSession: tikTokSession.hasSession, rejected: tikTokSession.apiRejected),
+                        statusColor: sessionStatusColor(hasSession: tikTokSession.hasSession, rejected: tikTokSession.apiRejected),
                         tap: { tikTokLoginPresented = true },
                         enabled: !(model.running || tikTokSession.clearing),
-                        menuItems: [
-                            .init(label: tikTokSession.hasSession ? L("Ouvrir TikTok", "Open TikTok") : L("Se connecter à TikTok", "Sign in to TikTok"),
-                                  systemImage: tikTokSession.hasSession ? "safari" : "person.badge.key",
-                                  action: { tikTokLoginPresented = true }),
-                            .init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
-                                  destructive: true, action: { Task { await tikTokSession.logout() } })
-                        ])
+                        menuItems: tikTokMenuItems)
                     SettingsRow(
-                        symbol: "camera", tint: .pink, title: "Instagram",
-                        status: instagramSession.apiAccepted ? L("Session détectée", "Session detected")
-                            : (instagramSession.apiRejected ? L("Session refusée", "Session rejected") : L("Sans session", "Signed out")),
-                        statusColor: instagramSession.apiAccepted ? DS.accentEmphasis : (instagramSession.apiRejected ? DS.error : DS.onSurfaceMuted),
+                        symbol: "camera",
+                        tint: instagramSession.hasSession ? DS.accentEmphasis : DS.onSurfaceMuted,
+                        title: "Instagram",
+                        status: sessionStatus(hasSession: instagramSession.hasSession, rejected: instagramSession.apiRejected),
+                        statusColor: sessionStatusColor(hasSession: instagramSession.hasSession, rejected: instagramSession.apiRejected),
                         tap: { instagramLoginPresented = true },
                         enabled: !(model.running || instagramSession.clearing),
-                        menuItems: [
-                            .init(label: instagramSession.hasSession ? L("Ouvrir Instagram", "Open Instagram") : L("Se connecter à Instagram", "Sign in to Instagram"),
-                                  systemImage: instagramSession.hasSession ? "safari" : "person.badge.key",
-                                  action: { instagramLoginPresented = true }),
-                            .init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
-                                  destructive: true, action: { Task { await instagramSession.logout() } })
-                        ])
+                        menuItems: instagramMenuItems)
                     NavigationLink {
                         KDriveSettingsDetailView()
                     } label: {
                         SettingsRow(
-                            symbol: "icloud", tint: .blue, title: "Infomaniak kDrive",
+                            symbol: "icloud",
+                            tint: kDriveConfigured ? DS.accentEmphasis : DS.onSurfaceMuted,
+                            title: "Infomaniak kDrive",
                             status: kDriveConfigured
                                 ? L("Configuré · \(kDriveFolderLabel)", "Configured · \(kDriveFolderLabel)")
                                 : L("Non configuré", "Not configured"),
                             statusColor: kDriveConfigured ? DS.accentEmphasis : DS.onSurfaceMuted,
-                            tap: nil,
-                            menuItems: [
-                                .init(label: L("Effacer la configuration", "Clear configuration"), systemImage: "trash",
-                                      destructive: true, action: { kDriveToken = ""; kDriveId = "" })
-                            ])
+                            tap: nil)
                     }
-                    // Diagnostic discret, dans la zone Connexions.
-                    Button { diagnosticsPresented = true } label: {
-                        Label(L("Test de santé des sources", "Source health check"), systemImage: "waveform.path.ecg")
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .contentShape(Rectangle())
-                    }
+                    SettingsRow(
+                        symbol: "waveform.path.ecg",
+                        tint: DS.accentEmphasis,
+                        title: L("Test de santé des sources", "Source health check"),
+                        status: L("Vérifier les API et sessions locales", "Check APIs and local sessions"),
+                        tap: { diagnosticsPresented = true },
+                        showsChevron: true)
                 } header: {
                     Text(L("Connexions", "Accounts"))
                 } footer: {
@@ -198,15 +179,110 @@ private struct DownloadSettings: View {
             } message: {
                 Text(L("Tous les médias téléchargés seront définitivement effacés.", "All downloaded media will be permanently deleted."))
             }
+            .confirmationDialog(
+                L("Déconnecter \(logoutServiceTitle ?? "") ?", "Sign out of \(logoutServiceTitle ?? "")?"),
+                isPresented: Binding(
+                    get: { logoutServiceTitle != nil },
+                    set: { if !$0 { logoutServiceTitle = nil; logoutAction = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button(L("Déconnexion", "Sign out"), role: .destructive) {
+                    let action = logoutAction
+                    logoutServiceTitle = nil
+                    logoutAction = nil
+                    if let action { Task { await action() } }
+                }
+                Button(L("Annuler", "Cancel"), role: .cancel) {
+                    logoutServiceTitle = nil
+                    logoutAction = nil
+                }
+            } message: {
+                Text(L("La session locale de ce service sera supprimée.", "The local session for this service will be removed."))
+            }
             .navigationTitle(L("Réglages", "Settings"))
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(embedded ? .large : .inline)
             .toolbar {
                 if !embedded {
                     ToolbarItem(placement: .confirmationAction) { Button("OK") { dismiss() } }
                 }
             }
         }
-        .tint(DS.accent)
+        .tint(DS.accentEmphasis)
+    }
+
+    private func sessionStatus(hasSession: Bool, rejected: Bool) -> String {
+        if rejected { return L("Session refusée", "Session rejected") }
+        return hasSession ? L("Session détectée", "Session detected") : L("Sans session", "Signed out")
+    }
+
+    private func sessionStatusColor(hasSession: Bool, rejected: Bool) -> Color {
+        if rejected { return DS.error }
+        return hasSession ? DS.accentEmphasis : DS.onSurfaceMuted
+    }
+
+    private var redditMenuItems: [SettingsRow.MenuItem] {
+        var items = [SettingsRow.MenuItem(
+            label: reddit.hasSession ? L("Ouvrir Reddit", "Open Reddit") : L("Se connecter à Reddit", "Sign in to Reddit"),
+            systemImage: reddit.hasSession ? "safari" : "person.badge.key",
+            action: { loginPresented = true }
+        )]
+        if reddit.hasSession {
+            items.append(.init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
+                               destructive: true, action: {
+                logoutServiceTitle = "Reddit"
+                logoutAction = { await reddit.logout() }
+            }))
+        }
+        return items
+    }
+
+    private var xMenuItems: [SettingsRow.MenuItem] {
+        var items = [SettingsRow.MenuItem(
+            label: xSession.hasSession ? L("Ouvrir X", "Open X") : L("Se connecter à X", "Sign in to X"),
+            systemImage: xSession.hasSession ? "safari" : "person.badge.key",
+            action: { xLoginPresented = true }
+        )]
+        if xSession.hasSession {
+            items.append(.init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
+                               destructive: true, action: {
+                logoutServiceTitle = "X"
+                logoutAction = { await xSession.logout() }
+            }))
+        }
+        return items
+    }
+
+    private var tikTokMenuItems: [SettingsRow.MenuItem] {
+        var items = [SettingsRow.MenuItem(
+            label: tikTokSession.hasSession ? L("Ouvrir TikTok", "Open TikTok") : L("Se connecter à TikTok", "Sign in to TikTok"),
+            systemImage: tikTokSession.hasSession ? "safari" : "person.badge.key",
+            action: { tikTokLoginPresented = true }
+        )]
+        if tikTokSession.hasSession {
+            items.append(.init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
+                               destructive: true, action: {
+                logoutServiceTitle = "TikTok"
+                logoutAction = { await tikTokSession.logout() }
+            }))
+        }
+        return items
+    }
+
+    private var instagramMenuItems: [SettingsRow.MenuItem] {
+        var items = [SettingsRow.MenuItem(
+            label: instagramSession.hasSession ? L("Ouvrir Instagram", "Open Instagram") : L("Se connecter à Instagram", "Sign in to Instagram"),
+            systemImage: instagramSession.hasSession ? "safari" : "person.badge.key",
+            action: { instagramLoginPresented = true }
+        )]
+        if instagramSession.hasSession {
+            items.append(.init(label: L("Déconnexion", "Sign out"), systemImage: "rectangle.portrait.and.arrow.right",
+                               destructive: true, action: {
+                logoutServiceTitle = "Instagram"
+                logoutAction = { await instagramSession.logout() }
+            }))
+        }
+        return items
     }
 }
 

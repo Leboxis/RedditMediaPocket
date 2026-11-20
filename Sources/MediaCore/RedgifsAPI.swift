@@ -73,14 +73,14 @@ public enum RedgifsAPI {
         if let range = name.range(of: "(?:^|//)(?:www\\.)?redgifs\\.com/(?:niches/|gifs/search/?)",
                                   options: .regularExpression) {
             name = String(name[range.upperBound...])
-            if let query = name.firstIndex(of: "?") { name = String(name[name.startIndex..<query]) }
         }
         if let query = name.firstIndex(of: "?") {
             let tail = String(name[name.index(after: query)...])
             if let value = tail.split(separator: "&")
                 .first(where: { $0.hasPrefix("search_text=") })?
                 .dropFirst("search_text=".count) {
-                name = String(value)
+                let rawValue = String(value).replacingOccurrences(of: "+", with: " ")
+                name = rawValue.removingPercentEncoding ?? rawValue
             } else {
                 name = String(name[name.startIndex..<query])
             }

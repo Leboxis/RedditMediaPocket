@@ -22,6 +22,7 @@ import MediaCore
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
     private var credentialValues: [String] = []
+    private var cachedCookies: [HTTPCookie] = []
     @Published private(set) var clearing = false
 
     private override init() {
@@ -48,6 +49,7 @@ import MediaCore
     /// de session, et l'inclure ferait retomber l'indicateur « API acceptée ».
     func refresh() async {
         let cookies = await allCookies()
+        cachedCookies = cookies
         let identity = cookies.filter { $0.name == "sessionid" }
             .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
         let ready = !clearing && InstagramCookiePolicy.hasLoginCookie(cookies: cookies)
@@ -84,9 +86,9 @@ import MediaCore
     /// ne recevront jamais le jeton de session.
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, InstagramCookiePolicy.allows(url) else { return nil }
-        let cookies = await allCookies()
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
         guard !clearing else { return nil }
-        return InstagramCookiePolicy.header(cookies: cookies, for: url)
+        return InstagramCookiePolicy.header(cookies: cachedCookies, for: url)
     }
 
     func logout() async {
@@ -96,7 +98,7 @@ import MediaCore
         }
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
-        credentialValues = []; clearing = false
+        credentialValues = []; cachedCookies = []; clearing = false
     }
 }
 

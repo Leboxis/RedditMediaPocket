@@ -55,6 +55,9 @@ final class MediaCoreTests: XCTestCase {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("saved/leboxis"), "Sleboxis")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("x/itwasalwaysmysolesvip"), "X-Fetish itwasalwaysmysolesvip")
         XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("x/foo"), FilenamePolicy.kDriveFolderName("u/xfoo"))
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("ts/nasa"), FilenamePolicy.kDriveFolderName("tt/nasa"))
+        XCTAssertNotEqual(FilenamePolicy.kDriveFolderName("rg/gif/abc123"), FilenamePolicy.kDriveFolderName("rg/abc123"))
+        XCTAssertEqual(FilenamePolicy.kDriveNormalizedName("café.jpeg"), FilenamePolicy.kDriveNormalizedName("cafe\u{0301}.jpeg"))
         XCTAssertEqual(FilenamePolicy.kDriveFolderName(""), "Pocket")
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("a?b"), "A-b")
     }

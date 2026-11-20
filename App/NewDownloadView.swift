@@ -97,15 +97,36 @@ struct NewDownloadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, DS.space(3))
                     .frame(minHeight: 44)
-            } else {
-                TextField(placeholder, text: $model.username)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.go).focused($editing)
-                    .disabled(model.running)
-                    .onSubmit { start() }
-                    .padding(DS.space(3))
+            } else if model.sourceKind == "ts" {
+                Text(L("Sauvegardés TikTok connectés", "Signed-in TikTok saved"))
+                    .font(.callout)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DS.space(3))
                     .frame(minHeight: 44)
-                    .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
+            } else {
+                HStack(spacing: DS.space(1)) {
+                    TextField(placeholder, text: $model.username)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .submitLabel(.go).focused($editing)
+                        .disabled(model.running)
+                        .onSubmit { start() }
+                    if !model.username.isEmpty && !model.running {
+                        Button { model.username = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.callout)
+                                .foregroundStyle(DS.onSurfaceMuted)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(L("Effacer le champ", "Clear input"))
+                    }
+                }
+                .padding(.leading, DS.space(3))
+                .padding(.trailing, model.username.isEmpty || model.running ? DS.space(3) : 0)
+                .frame(minHeight: 44)
+                .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
             }
         }
     }
@@ -120,12 +141,10 @@ struct NewDownloadView: View {
                 Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
                     .font(DS.headline)
             }
-            .foregroundStyle(DS.onAccent)
             .frame(maxWidth: .infinity, minHeight: 48)
-            .background(DS.accent, in: RoundedRectangle(cornerRadius: DS.radiusM))
         }
         .disabled(cannotStart)
-        .buttonStyle(DSPressableButtonStyle())
+        .buttonStyle(DSPrimaryButtonStyle())
         .accessibilityLabel(model.running ? L("Arrêter le téléchargement", "Stop download") : L("Télécharger", "Download"))
     }
 
@@ -212,7 +231,11 @@ struct NewDownloadView: View {
         } else if model.sourceKind == "ts" && !tikTokSession.hasSession {
             sessionHint(L("Sauvegardés TikTok : connecte-toi à TikTok dans les Réglages. Sans session, impossible de lire les publications enregistrées du compte.", "TikTok saved: sign in to TikTok in Settings. Without a session, the account's saved posts cannot be read."))
         } else if !isTwitterInput && !isTikTokInput && model.sourceKind != "ts" && model.needsSession && !redditSession.hasSession {
-            sessionHint(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."))
+            if model.sourceKind == "saved" {
+                sessionHint(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."))
+            } else {
+                sessionHint(L("Reddit : connecte-toi à Reddit dans les Réglages pour lire ce flux.", "Reddit: sign in to Reddit in Settings to read this feed."))
+            }
         }
     }
 
@@ -238,19 +261,52 @@ struct NewDownloadView: View {
                     .opacity(showProgress ? 1 : 0)
                     .accessibilityHidden(!showProgress)
             }
-            if let unit = model.transferUnit, (isXFetishInput || isTwitterInput || isTikTokInput), model.running, unit.total > 0 {
-                ProgressView(value: unit.fraction)
-                    .progressViewStyle(.linear)
-                    .tint(DS.accent)
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(isTikTokInput ? L("Téléchargement TikTok", "TikTok download")
-                                        : (isTwitterInput ? L("Téléchargement X", "X download") : L("Téléchargement X-Fetish", "X-Fetish download")))
-                    .accessibilityValue("\(unit.done)/\(unit.total)")
+            if model.running {
+                if let unit = model.transferUnit, unit.total > 0 {
+                    let sourceName = SourceSelection.spoken(SourceKind(rawValue: model.sourceKind) ?? .user)
+                    ProgressView(value: unit.fraction)
+                        .progressViewStyle(.linear)
+                        .tint(DS.accent)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(sourceName)
+                        .accessibilityValue("\(unit.done)/\(unit.total)")
+                } else if model.discovered > 0 {
+                    let fraction = min(1.0, Double(model.count) / Double(max(1, model.discovered)))
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .tint(DS.accent)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(L("Téléchargement en cours", "Downloading"))
+                        .accessibilityValue("\(model.count)/\(model.discovered)")
+                } else {
+                    HStack(spacing: DS.space(2)) {
+                        ProgressView().controlSize(.small)
+                        Text(model.status.isEmpty ? L("Analyse en cours…", "Scanning…") : model.status)
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            if !model.status.isEmpty {
+            if !model.status.isEmpty && !(model.running && model.transferUnit == nil && model.discovered == 0) {
                 Text(model.status)
                     .font(.caption).foregroundStyle(DS.onSurfaceMuted)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if model.storageLimitReached {
+                HStack(spacing: DS.space(2)) {
+                    Image(systemName: "externaldrive.badge.exclamationmark")
+                    Text(L("Plafond d’espace atteint : libère de la place ou relève la limite dans les Réglages.",
+                           "Storage limit reached: free up space or raise the limit in Settings."))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .font(.caption)
+                .foregroundStyle(DS.error)
+                .padding(DS.space(2))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(DS.error.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityElement(children: .combine)
             }
             if model.scanIncomplete {
                 HStack(spacing: DS.space(2)) {
@@ -416,7 +472,7 @@ private struct SourceGridSheet: View {
 
     private func sessionMissing(_ kind: SourceKind) -> Bool {
         switch kind {
-        case .saved: return !reddit.hasSession
+        case .user, .subreddit, .saved: return !reddit.hasSession
         case .twitter: return !xSession.hasSession
         case .tiktok, .tiktokSaved: return !tikTokSession.hasSession
         default: return false
@@ -424,35 +480,42 @@ private struct SourceGridSheet: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: DS.space(3)) {
-                Text(L("Télécharger depuis…", "Download from…"))
-                    .font(DS.headline)
-                    .foregroundStyle(DS.onSurface)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: DS.space(2)), count: 3), spacing: DS.space(2)) {
-                    ForEach(SourceSelection.order, id: \.rawValue) { kind in
-                        SourceGridCard(kind: kind,
-                                       isCurrent: model.sourceKind == kind.rawValue,
-                                       sessionMissing: sessionMissing(kind)) {
-                            SourceSelection.haptic()
-                            model.sourceKind = kind.rawValue
-                            onPick()
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: DS.space(3)) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: DS.space(2)), count: 3), spacing: DS.space(2)) {
+                        ForEach(SourceSelection.order, id: \.rawValue) { kind in
+                            SourceGridCard(kind: kind,
+                                           isCurrent: model.sourceKind == kind.rawValue,
+                                           sessionMissing: sessionMissing(kind)) {
+                                SourceSelection.haptic()
+                                model.sourceKind = kind.rawValue
+                                onPick()
+                            }
                         }
                     }
+                    HStack(spacing: DS.space(1)) {
+                        Circle()
+                            .fill(DS.accentEmphasis)
+                            .frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
+                        Text(L("Point accent : connexion requise dans les Réglages.", "Accent dot: sign-in required in Settings."))
+                            .font(.caption2)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                    }
                 }
-                Label(L("Point accent : connexion requise dans les Réglages.", "Accent dot: sign-in required in Settings."),
-                      systemImage: "circle.fill")
-                    .font(.caption2).foregroundStyle(DS.onSurfaceMuted)
+                .padding(DS.space(4))
             }
-            .padding(DS.space(4))
-        }
-        .background(DS.background)
-        .presentationDetents([.height(440)])
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button(L("Fermer", "Close")) { dismiss() }
+            .background(DS.background)
+            .navigationTitle(L("Télécharger depuis…", "Download from…"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(L("Fermer", "Close")) { dismiss() }
+                }
             }
         }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -470,7 +533,7 @@ private struct SourceGridCard: View {
                     if sessionMissing {
                         Circle().fill(DS.accentEmphasis).frame(width: 7, height: 7)
                             .offset(x: 4, y: -6)
-                            .accessibilityLabel(L("Connexion requise", "Sign-in required"))
+                            .accessibilityHidden(true)
                     }
                 }
                 Text(SourceSelection.spoken(kind))
@@ -478,9 +541,9 @@ private struct SourceGridCard: View {
                     .foregroundStyle(isCurrent ? DS.accentEmphasis : DS.onSurface)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
-                    .frame(height: 30)
+                    .frame(minHeight: 30)
                 Text(SourceSelection.face(kind))
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .font(.caption2.monospaced().weight(.semibold))
                     .foregroundStyle(DS.onSurfaceMuted)
             }
             .frame(maxWidth: .infinity)
@@ -491,6 +554,7 @@ private struct SourceGridCard: View {
         }
         .buttonStyle(DSPressableButtonStyle())
         .accessibilityLabel(SourceSelection.spoken(kind))
+        .accessibilityValue(sessionMissing ? L("Connexion requise", "Sign-in required") : "")
         .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
     }
 
@@ -526,6 +590,7 @@ struct TikTokSavedPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var loaded = false
     @State private var accountName = ""
+    @State private var accountError: String?
 
     var body: some View {
         NavigationStack {
@@ -577,13 +642,27 @@ struct TikTokSavedPicker: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                         Button {
-                            if let name = try? TikTokAPI.username(accountName), !name.isEmpty {
+                            do {
+                                let name = try TikTokAPI.username(accountName)
+                                accountError = nil
                                 onAccount(name)
+                            } catch {
+                                accountError = error.localizedDescription
                             }
                         } label: {
                             Image(systemName: "arrow.down.circle.fill")
+                                .font(.title3)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(.borderless)
                         .disabled(accountName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityLabel(L("Télécharger ce compte TikTok", "Download this TikTok account"))
+                    }
+                    if let accountError {
+                        Text(accountError)
+                            .font(.caption)
+                            .foregroundStyle(DS.error)
                     }
                 } header: {
                     Text(L("Un compte précis (comme tt)", "A specific account (like tt)"))
@@ -598,6 +677,7 @@ struct TikTokSavedPicker: View {
             }
             .navigationTitle(L("TikTok — quoi télécharger ?", "TikTok — what to download?"))
             .navigationBarTitleDisplayMode(.inline)
+            .tint(DS.accentEmphasis)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button(L("Annuler", "Cancel")) { dismiss() }

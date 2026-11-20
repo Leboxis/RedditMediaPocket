@@ -395,6 +395,9 @@ final class TikTokTests: XCTestCase {
         XCTAssertThrowsError(try TikTokWeb.parseVideoDetail(emptyItemInfo)) { error in
             XCTAssertEqual(error as? TikTokError, .videoUnavailable)
         }
+        let numericDateJSON = #"{"__DEFAULT_SCOPE__":{"webapp.video-detail":{"statusCode":0,"itemInfo":{"itemStruct":{"id":"7302","desc":"Num","createTime":1700000000,"author":{"uniqueId":"nasa"},"video":{"playAddr":"https://v16-webapp-prime.tiktok.com/video/a.mp4"}}}}}}"#
+        let numericDetail = try? TikTokWeb.parseVideoDetail(numericDateJSON)
+        XCTAssertEqual(numericDetail?.publishedAt, Date(timeIntervalSince1970: 1_700_000_000))
         XCTAssertThrowsError(try TikTokWeb.parseVideoPage(profileHTML("{}"))) { error in
             XCTAssertEqual(error as? TikTokError, .invalidTimeline)
         }

@@ -80,9 +80,11 @@ public enum XFetishRangeDownload {
         defer { if ownsPart { try? fm.removeItem(at: part) } }
 
         let count = max(1, min(maximumSegments, segments))
+        let rangeSession = RangeSession(configuration: configuration)
+        defer { rangeSession.invalidate() }
         if count > 1 {
             do {
-                let probe = try await RangeStream.fetch(fullRequest, configuration: configuration, range: 0...0)
+                let probe = try await rangeSession.fetch(fullRequest, range: 0...0)
                 guard let total = contentRange(probe.value(forHTTPHeaderField: "Content-Range"))?.total else {
                     throw Failure.unsupportedRanges
                 }
@@ -94,7 +96,7 @@ public enum XFetishRangeDownload {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         for (index, range) in byteRanges.enumerated() {
                             group.addTask {
-                                _ = try await RangeStream.fetch(fullRequest, configuration: configuration,
+                                _ = try await rangeSession.fetch(fullRequest,
                                     file: part, range: range, total: total,
                                     progress: { received, _ in aggregate.update(index, received) })
                             }
@@ -121,7 +123,7 @@ public enum XFetishRangeDownload {
         try Data().write(to: part, options: .withoutOverwriting)
         ownsPart = true
         let aggregate = RangeProgress(count: 1, total: nil, report: progress)
-        _ = try await RangeStream.fetch(fullRequest, configuration: configuration, file: part,
+        _ = try await rangeSession.fetch(fullRequest, file: part,
             progress: { received, total in aggregate.update(0, received, total: total) })
         try Task.checkCancellation()
         try fm.moveItem(at: part, to: destination)
@@ -132,6 +134,7 @@ public enum XFetishRangeDownload {
 private final class RangeProgress: @unchecked Sendable {
     private let lock = NSLock()
     private var received: [Int64]
+    private var totalReceived: Int64 = 0
     private let total: Int64?
     private var lastReport = Date.distantPast
     private let report: (@Sendable (Int64, Int64) -> Void)?
@@ -142,22 +145,116 @@ private final class RangeProgress: @unchecked Sendable {
     }
     func update(_ index: Int, _ bytes: Int64, total expected: Int64 = 0) {
         lock.lock(); defer { lock.unlock() }
+        totalReceived += bytes - received[index]
         received[index] = bytes
-        let done = received.reduce(0, +), expectedTotal = self.total ?? expected
-        if Date().timeIntervalSince(lastReport) >= 0.3 || (expectedTotal > 0 && done == expectedTotal) {
-            lastReport = Date()
+        let done = totalReceived, expectedTotal = self.total ?? expected
+        let now = Date()
+        if now.timeIntervalSince(lastReport) >= 0.3 || (expectedTotal > 0 && done == expectedTotal) {
+            lastReport = now
             report?(done, expectedTotal)
         }
     }
 }
 
-/// Delegate callbacks run on one serial queue; cancellation only touches the task under a lock.
-private final class RangeStream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+/// Une seule `URLSession` + file série partagée par tous les segments d'un
+/// téléchargement vidéo X-Fetish (évite 25-33 sessions/TLS séparées par fichier).
+private final class RangeSession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var cancelled = false
-    private var task: URLSessionDataTask?
-    private var session: URLSession?
-    private var continuation: CheckedContinuation<HTTPURLResponse, Error>?
+    private var streams: [Int: RangeStream] = [:]
+    private var invalidated = false
+    private let session: URLSession
+
+    init(configuration: URLSessionConfiguration) {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        var createdSession: URLSession!
+        super.init()
+        createdSession = URLSession(configuration: configuration, delegate: self, delegateQueue: queue)
+        self.session = createdSession
+    }
+
+    func fetch(_ request: URLRequest, file: URL? = nil, range: ClosedRange<Int64>? = nil, total: Int64? = nil,
+               progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> HTTPURLResponse {
+        let stream = RangeStream(file: file, range: range, total: total, progress: progress)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                var request = request
+                if let range { request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range") }
+                start(stream: stream, request: request, continuation: continuation)
+            }
+        } onCancel: {
+            stream.cancel()
+        }
+    }
+
+    private func start(stream: RangeStream, request: URLRequest, continuation: CheckedContinuation<HTTPURLResponse, Error>) {
+        stream.lock.lock()
+        guard !stream.cancelled else {
+            stream.lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        lock.lock()
+        guard !invalidated else {
+            lock.unlock()
+            stream.lock.unlock()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        let task = session.dataTask(with: request)
+        stream.task = task
+        stream.continuation = continuation
+        streams[task.taskIdentifier] = stream
+        lock.unlock()
+        stream.lock.unlock()
+        task.resume()
+    }
+
+    func invalidate() {
+        lock.lock()
+        invalidated = true
+        let pending = Array(streams.values)
+        lock.unlock()
+        for stream in pending { stream.cancel() }
+        session.invalidateAndCancel()
+    }
+
+    private func stream(for task: URLSessionTask) -> RangeStream? {
+        lock.lock(); defer { lock.unlock() }
+        return streams[task.taskIdentifier]
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let stream = stream(for: dataTask) else { completionHandler(.cancel); return }
+        stream.didReceive(response: response, completionHandler: completionHandler)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        stream(for: dataTask)?.didReceive(data: data, task: dataTask)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        let stream = streams.removeValue(forKey: task.taskIdentifier)
+        lock.unlock()
+        stream?.didComplete(error: error)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let stream = stream(for: task) else { completionHandler(nil); return }
+        stream.willRedirect(task: task, newRequest: request, completionHandler: completionHandler)
+    }
+}
+
+/// État d'un flux de segment individuel ; callbacks sérialisés par `RangeSession`.
+private final class RangeStream: @unchecked Sendable {
+    let lock = NSLock()
+    var cancelled = false
+    var task: URLSessionDataTask?
+    var continuation: CheckedContinuation<HTTPURLResponse, Error>?
     private var response: HTTPURLResponse?
     private var failure: Error?
     private var handle: FileHandle?
@@ -169,40 +266,20 @@ private final class RangeStream: NSObject, URLSessionDataDelegate, @unchecked Se
     private let total: Int64?
     private let progress: (@Sendable (Int64, Int64) -> Void)?
 
-    private init(file: URL?, range: ClosedRange<Int64>?, total: Int64?,
-                 progress: (@Sendable (Int64, Int64) -> Void)?) {
+    init(file: URL?, range: ClosedRange<Int64>?, total: Int64?,
+         progress: (@Sendable (Int64, Int64) -> Void)?) {
         self.file = file; self.range = range; self.total = total; self.progress = progress
     }
 
-    static func fetch(_ request: URLRequest, configuration: URLSessionConfiguration,
-        file: URL? = nil, range: ClosedRange<Int64>? = nil, total: Int64? = nil,
-        progress: (@Sendable (Int64, Int64) -> Void)? = nil) async throws -> HTTPURLResponse {
-        let stream = RangeStream(file: file, range: range, total: total, progress: progress)
-        return try await withTaskCancellationHandler {
-            try Task.checkCancellation()
-            return try await withCheckedThrowingContinuation { continuation in
-                stream.lock.lock(); defer { stream.lock.unlock() }
-                guard !stream.cancelled else { continuation.resume(throwing: CancellationError()); return }
-                stream.continuation = continuation
-                let queue = OperationQueue()
-                queue.maxConcurrentOperationCount = 1
-                let session = URLSession(configuration: configuration, delegate: stream, delegateQueue: queue)
-                stream.session = session
-                var request = request
-                if let range { request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range") }
-                let task = session.dataTask(with: request)
-                stream.task = task
-                task.resume()
-            }
-        } onCancel: {
-            stream.lock.lock(); defer { stream.lock.unlock() }
-            stream.cancelled = true
-            stream.task?.cancel()
-        }
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let activeTask = task
+        lock.unlock()
+        activeTask?.cancel()
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
-                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+    func didReceive(response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         do {
             guard let http = response as? HTTPURLResponse, let url = http.url,
                   XFetishRangeDownload.allowsStorage(url) else { throw XFetishRangeDownload.Failure.invalidResponse }
@@ -241,7 +318,7 @@ private final class RangeStream: NSObject, URLSessionDataDelegate, @unchecked Se
         }
     }
 
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    func didReceive(data: Data, task: URLSessionDataTask) {
         guard failure == nil else { return }
         do {
             if let expected, Int64(data.count) > expected - received {
@@ -250,25 +327,27 @@ private final class RangeStream: NSObject, URLSessionDataDelegate, @unchecked Se
             try handle?.write(contentsOf: data)
             received += Int64(data.count)
             progress?(received, expected ?? 0)
-        } catch { failure = error; dataTask.cancel() }
+        } catch { failure = error; task.cancel() }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let continuation else { return }
+    func didComplete(error: Error?) {
+        lock.lock()
+        let continuation = self.continuation
         self.continuation = nil
-        var error = failure ?? error
-        do { try handle?.close() } catch let closeError { error = error ?? closeError }
+        let wasCancelled = cancelled
+        lock.unlock()
+        guard let continuation else { return }
+        var finalError = failure ?? error
+        if finalError == nil && wasCancelled { finalError = CancellationError() }
+        do { try handle?.close() } catch let closeError { finalError = finalError ?? closeError }
         handle = nil
-        session.invalidateAndCancel()
-        self.session = nil
-        if let error { continuation.resume(throwing: error) }
+        if let finalError { continuation.resume(throwing: finalError) }
         else if let response, received > 0, expected == nil || received == expected {
             continuation.resume(returning: response)
         } else { continuation.resume(throwing: XFetishRangeDownload.Failure.unsupportedRanges) }
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+    func willRedirect(task: URLSessionTask, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         guard redirects < 5, let url = request.url, XFetishRangeDownload.allowsStorage(url) else {
             failure = XFetishRangeDownload.Failure.invalidResponse
             completionHandler(nil)

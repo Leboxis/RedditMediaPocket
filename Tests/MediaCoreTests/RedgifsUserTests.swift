@@ -53,4 +53,9 @@ final class RedgifsUserTests: XCTestCase {
     func testKDriveFolderNameForRedgifs() {
         XCTAssertEqual(FilenamePolicy.kDriveFolderName("rg/upset_trash_3094"), "Rgupset_trash_3094")
     }
+
+    func testSearchTextURLTagParsing() throws {
+        XCTAssertEqual(try RedgifsAPI.tag("https://www.redgifs.com/gifs/search?search_text=latex"), "latex")
+        XCTAssertEqual(try RedgifsAPI.tag("https://www.redgifs.com/niches/soft-core?order=new"), "soft-core")
+    }
 }

@@ -20,6 +20,13 @@ public enum RedditListing {
     /// Parse une listing JSON `t3_…` en posts. Lève `FeedError.invalidFeed`
     /// si le document n'est pas une listing JSON.
     public static func parse(_ data: Data) throws -> [Post] {
+        try parsePage(data).posts
+    }
+
+    /// Parse une listing JSON avec son curseur `data.after` : sur les
+    /// sauvegardés, une page de 100 commentaires (`t1_…`) produit zéro `t3_`,
+    /// mais `data.after` permet de poursuivre vers les pages suivantes.
+    public static func parsePage(_ data: Data) throws -> (posts: [Post], after: String?) {
         guard let root = try? JSONSerialization.jsonObject(with: data),
               let listing = root as? [String: Any],
               let listingData = listing["data"] as? [String: Any],
@@ -33,7 +40,8 @@ public enum RedditListing {
                   let post = post(from: d) else { continue }
             posts.append(post)
         }
-        return posts
+        let after = (listingData["after"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        return (posts, after)
     }
 
     /// Curseur de pagination (`data.after`) d'une listing, si présent.

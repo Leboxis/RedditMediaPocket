@@ -3,6 +3,7 @@ import Combine
 import AVFoundation
 import CryptoKit
 import ImageIO
+import UIKit
 import MediaCore
 
 struct UserCollection: Codable, Identifiable, Equatable {
@@ -51,6 +52,21 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return (isSubreddit ? "r/" : "u/") + name
     }
     var displayName: String { isTikTokVideo ? "Tiktok - Videos" : (isSaved ? "Saved" : id) }
+    /// Icône SF Symbol unifiée pour les 13 types de collection.
+    var icon: String {
+        if isSaved { return "heart.fill" }
+        if isXFetish { return "flame" }
+        if isRedGifs || isRedGifsTag || isRedGifsGif { return "film" }
+        if isTwitter { return "at" }
+        if isTikTokSaved { return "bookmark.fill" }
+        if isTikTok || isTikTokVideo { return "music.note" }
+        if isInstagram { return "camera" }
+        if isSubreddit || isRedditPosts { return "bubble.left.and.bubble.right" }
+        return "person.crop.circle"
+    }
+    /// Libellé canonique transmis à `FilenamePolicy.kDriveFolderName` pour
+    /// éviter toute collision entre sources portant le même pseudo.
+    var kDriveLabel: String { id }
     /// Dossier de stockage. Les points de `r.…`, `saved.…`, `x.…`,
     /// `redgifs.…`, `tw.…` et `tk.…` sont interdits dans les pseudos : aucune
     /// collection existante ne peut entrer en collision. Les vidéos TikTok
@@ -203,8 +219,22 @@ extension Notification.Name {
     /// l'ordre d'affichage des fichiers déjà sur l'écran, jamais ce qui est
     /// téléchargé.
     @Published var gallerySearch = "" {
-        didSet { applyGalleryOrdering() }
+        didSet {
+            searchDebounceTask?.cancel()
+            let trimmed = gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                applyGalleryOrdering()
+            } else {
+                searchDebounceTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    self?.applyGalleryOrdering()
+                }
+            }
+        }
     }
+    private var searchDebounceTask: Task<Void, Never>?
+    private var orderingCoalesceTask: Task<Void, Never>?
     @Published var gallerySort: GallerySort = {
         GallerySort(rawValue: UserDefaults.standard.string(forKey: "gallerySort") ?? "") ?? .newest
     }() {
@@ -246,34 +276,34 @@ extension Notification.Name {
     /// liste. Les trier à la volée aurait relu les attributs de chaque fichier
     /// à chaque rendu, sur une collection qui peut compter des milliers
     /// d'entrées.
-    @Published private var fileDates: [URL: Date] = [:]
-    @Published private var fileSizes: [URL: Int64] = [:]
+    private var fileDates: [URL: Date] = [:]
+    private var fileSizes: [URL: Int64] = [:]
+    private var searchIndex: [URL: String] = [:]
 
-    /// Relève date et taille d'un lot de fichiers, hors du fil principal.
-    /// Seuls les attributs déjà en cache du système sont demandés : la liste
-    /// vient d'être scannée, une lecture disque supplémentaire serait inutile.
-    nonisolated static func buildFileFacts(_ files: [URL]) -> (dates: [URL: Date], sizes: [URL: Int64]) {
-        var dates: [URL: Date] = [:]
-        var sizes: [URL: Int64] = [:]
-        let keys: Set<URLResourceKey> = [.creationDateKey, .fileSizeKey]
-        for url in files {
-            guard let values = try? url.resourceValues(forKeys: keys) else { continue }
-            if let date = values.creationDate { dates[url] = date }
-            if let size = values.fileSize { sizes[url] = Int64(size) }
+    /// Coalesce `applyGalleryOrdering()` pendant un téléchargement actif pour
+    /// éviter un tri O(N log N) sur le thread principal à chaque fichier sauvé.
+    private func scheduleGalleryOrderingDuringRun() {
+        guard orderingCoalesceTask == nil else { return }
+        orderingCoalesceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self else { return }
+            self.orderingCoalesceTask = nil
+            self.applyGalleryOrdering()
         }
-        return (dates, sizes)
     }
 
-    /// Texte cherchable par fichier : auteur et lien du post, lus une fois au
-    /// rechargement. Les noms de fichiers ne sont pas dupliqués ici.
-    @Published private var searchIndex: [URL: String] = [:]
-
     /// Reconstruit l'index de recherche depuis les sidecars. Appelé par
-    /// `reload()`, hors du chemin de rendu.
+    /// `reload()`, hors du chemin de rendu, avec un seul `JSONDecoder`.
     nonisolated static func buildSearchIndex(_ files: [URL]) -> [URL: String] {
         var index: [URL: String] = [:]
+        let decoder = JSONDecoder()
         for url in files {
-            guard let metadata = MediaMetadata.read(for: url) else { continue }
+            if Task.isCancelled { break }
+            let metaURL = url.deletingLastPathComponent()
+                .appendingPathComponent(".metadata", isDirectory: true)
+                .appendingPathComponent(url.lastPathComponent + ".json")
+            guard let data = try? Data(contentsOf: metaURL),
+                  let metadata = try? decoder.decode(MediaMetadata.self, from: data) else { continue }
             let parts = [metadata.author, metadata.postLink].compactMap { $0 }
             guard !parts.isEmpty else { continue }
             index[url] = parts.joined(separator: " ").lowercased()
@@ -426,15 +456,14 @@ extension Notification.Name {
             return try? FeedSource.parse(text)
         }
         // `tt` accepte `@pseudo` et une adresse `tiktok.com/@pseudo` collée
-        // telle quelle ; le préfixe ne doit pas être ajouté dans ces cas.
+        // telle quelle ; `@pseudo` nu sans domaine TikTok reste en mode `tt/`.
         if sourceKind == "tt" {
-            let text = username.contains("/") || username.hasPrefix("@")
-                || username.lowercased().contains("tiktok.com") ? username : "tt/\(username)"
+            let text = username.contains("/") || username.lowercased().contains("tiktok.com")
+                ? username : "tt/\(username)"
             return try? FeedSource.parse(text)
         }
         if sourceKind == "rg" {
             let text = username.contains("/") || username.lowercased().contains("redgifs.com")
-                || username.hasPrefix("#")
                 ? username : "rg/\(username)"
             return try? FeedSource.parse(text)
         }
@@ -496,7 +525,6 @@ extension Notification.Name {
         }
     }
     @Published var active = 0
-    @Published private(set) var transfers = 0
     private var failed = 0
     /// Contexte du parcours en cours, pour le journal des échecs : collection
     /// et dossier des médias dont le transfert échoue.
@@ -514,11 +542,20 @@ extension Notification.Name {
         cache.countLimit = 100
         return cache
     }()
+    private let previewThumbnailCache: NSCache<NSURL, UIImage> = {
+        let cache = NSCache<NSURL, UIImage>()
+        cache.totalCostLimit = 32 * 1024 * 1024
+        cache.countLimit = 100
+        return cache
+    }()
     private var previewSessionRevision = -1
     private var task: Task<Void, Never>?
     private var reloadTask: Task<Void, Never>?
+    private var searchIndexTask: Task<Void, Never>?
     private var reloadRevision = 0
     private var displayedCollectionID: String?
+    private var lastLoadedFolderMTime: Date?
+    private var pendingSavedDuringReload: [(url: URL, size: Int64, date: Date, searchEntry: String?)] = []
     private var tokenTask: Task<String, Error>?
     private var token: String?
     private var tokenDate = Date.distantPast
@@ -529,10 +566,7 @@ extension Notification.Name {
     var activeCollection: UserCollection? { collections.first { $0.id == activeUser } }
 
     init() {
-        network.$transfers.assign(to: &$transfers)
-        loadCollections()
-        migrateFolders()
-        Self.cleanupStalePreviewTemps()
+        loadCachedCollections()
         // Fichiers supprimés du téléphone (envoi kDrive) : le compte de
         // médias de la collection active et la galerie sont relus aussitôt.
         filesDeletedObserver = NotificationCenter.default.addObserver(
@@ -552,6 +586,44 @@ extension Notification.Name {
         // la collection active reste sélectionnée (pastille + type de source).
         username = ""
         reload()
+        runStartupMaintenance()
+    }
+
+    private func runStartupMaintenance() {
+        let rootURL = root
+        let cached = collections
+        Task.detached(priority: .utility) {
+            CollectionFiles.migrateLegacyTikTokVideoFolders(
+                root: rootURL,
+                into: rootURL.appendingPathComponent("ttv.videos", isDirectory: true)
+            )
+            Self.cleanupStalePreviewTemps()
+            let nonEmptyIDs = Set(cached.filter {
+                CollectionFiles.hasMedia(in: rootURL.appendingPathComponent($0.folderName, isDirectory: true))
+            }.map(\.id))
+            let knownFolders = Set(cached.filter { nonEmptyIDs.contains($0.id) }.map(\.folderName))
+            let discovered = Self.scanFreshFolders(root: rootURL, excluding: knownFolders)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                let beforeIDs = self.collections.map(\.id)
+                self.collections.removeAll { !nonEmptyIDs.contains($0.id) && !CollectionFiles.hasMedia(in: self.root.appendingPathComponent($0.folderName, isDirectory: true)) }
+                var seen = Set(self.collections.map(\.id))
+                for col in discovered where seen.insert(col.id).inserted {
+                    self.collections.append(col)
+                }
+                self.sortCollections()
+                if self.collections.map(\.id) != beforeIDs {
+                    self.saveCollections()
+                    if let active = self.activeUser, !self.collections.contains(where: { $0.id == active }) {
+                        self.activeUser = self.liveCollections.first?.id ?? self.collections.first?.id
+                    }
+                    if self.activeUser == nil {
+                        self.activeUser = self.liveCollections.first?.id ?? self.collections.first?.id
+                    }
+                    self.reload()
+                }
+            }
+        }
     }
 
     /// Décision Jev A bug 12 : carnet + ménage. Les aperçus oubliés (quitte au
@@ -595,7 +667,7 @@ extension Notification.Name {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
         else if collection.isTikTokSaved { sourceKind = "ts" }
-        else if collection.isTikTok { sourceKind = "tt" }
+        else if collection.isTikTok || collection.isTikTokVideo { sourceKind = "tt" }
         else if collection.isInstagram { sourceKind = "ig" }
         else if collection.isXFetish { sourceKind = "x" }
         else if collection.isRedGifs || collection.isRedGifsTag || collection.isRedGifsGif { sourceKind = "rg" }
@@ -605,6 +677,11 @@ extension Notification.Name {
             username = UserDefaults.standard.string(forKey: Self.xFetishSelectionKey(collection.id)) ?? ""
         } else if collection.isRedditPosts {
             username = UserDefaults.standard.string(forKey: Self.redditSelectionKey(collection.id)) ?? ""
+        } else if collection.isTikTokVideo {
+            username = ""
+        } else if collection.isTikTokSaved {
+            tikTokSavedAccount = collection.name
+            username = collection.name
         } else if collection.isRedGifsTag {
             username = "#\(collection.name)"
         } else if collection.isRedGifsGif {
@@ -618,7 +695,11 @@ extension Notification.Name {
         downloadFilter = DownloadFilterStore.load(collection.id)
     }
 
-    private func loadCollections() {
+    private func sortCollections() {
+        collections.sort { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+    }
+
+    private func loadCachedCollections() {
         if let data = UserDefaults.standard.data(forKey: "collections"),
            let saved = try? JSONDecoder().decode([UserCollection].self, from: data) {
             collections = saved.map {
@@ -626,16 +707,10 @@ extension Notification.Name {
                 collection.archived = false
                 return collection
             }
-            // Un id canonique n'existe qu'une fois (ex. deux collections
-            // `ttv/videos` d'avant le dossier global affichaient deux pastilles).
             var seenIDs = Set<String>()
             collections = collections.filter { seenIDs.insert($0.id).inserted }
-            // Pastille sans média disque (dossier absent ou vide, ex. « Tiktok -
-            // Videos » laissée par un dossier fantôme) : retirée au chargement.
-            let beforePrune = collections.count
-            collections.removeAll { !Self.folderHasMedia($0.folderName) }
-            if collections.count != beforePrune { saveCollections() }
-            if saved.contains(where: \.archived) { saveCollections() }
+            sortCollections()
+            if collections.count != saved.count || saved.contains(where: \.archived) { saveCollections() }
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
             // Anciennes versions : pseudo nu sans préfixe ; versions récentes :
@@ -670,70 +745,49 @@ extension Notification.Name {
         }
     }
 
-    /// Vrai quand le dossier racine contient au moins un média (tout fichier
-    /// non caché hors sidecars `.metadata`).
-    private static func folderHasMedia(_ folderName: String) -> Bool {
+    nonisolated private static func scanFreshFolders(root: URL, excluding known: Set<String>) -> [UserCollection] {
         let fm = FileManager.default
-        let url = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(folderName, isDirectory: true)
-        guard let entries = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return false }
-        return entries.contains { $0.lastPathComponent != ".metadata" }
-    }
-
-    private func migrateFolders() {
-        let known = Set(collections.map(\.folderName))
         let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true } ?? []
         let fresh = folders.map(\.lastPathComponent).filter { !known.contains($0) && $0 != "Inbox" }.sorted()
-        guard !fresh.isEmpty else { return }
+        guard !fresh.isEmpty else { return [] }
+        var discovered: [UserCollection] = []
         for folder in fresh {
-            // Un dossier vide (fichiers supprimés localement après envoi
-            // kDrive, ou dossier hérité sans média) ne doit pas ressusciter
-            // une collection au lancement : on l'ignore.
-            guard Self.folderHasMedia(folder) else { continue }
-            // Les dossiers `r.…`, `saved.…`, `x.…`, `redgifs.…`, `tw.…` et
-            // `reddit.…` viennent des subreddits, sauvegardés, profils X-Fetish,
-            // comptes RedGifs, comptes X et sélections de posts (le point est
-            // impossible dans un pseudo). Les variantes `redgifs.tag.` et
-            // `redgifs.gif.` sont testées avant le préfixe `redgifs.` nu.
+            let folderURL = root.appendingPathComponent(folder, isDirectory: true)
+            guard CollectionFiles.hasMedia(in: folderURL) else { continue }
             if folder.hasPrefix("r."), let sub = try? FeedSource.subredditName(String(folder.dropFirst(2))) {
-                collections.append(UserCollection(name: sub, isSubreddit: true))
+                discovered.append(UserCollection(name: sub, isSubreddit: true))
             } else if folder == "reddit.posts" {
-                collections.append(UserCollection(name: "posts", isRedditPosts: true))
+                discovered.append(UserCollection(name: "posts", isRedditPosts: true))
             } else if folder.hasPrefix("redgifs.tag."), let tag = try? RedgifsAPI.tag(String(folder.dropFirst(12))) {
-                collections.append(UserCollection(name: tag, isRedGifsTag: true))
+                discovered.append(UserCollection(name: tag, isRedGifsTag: true))
             } else if folder.hasPrefix("redgifs.gif."), let id = RedgifsAPI.gifID(String(folder.dropFirst(12))) {
-                collections.append(UserCollection(name: id, isRedGifsGif: true))
+                discovered.append(UserCollection(name: id, isRedGifsGif: true))
             } else if folder.hasPrefix("redgifs."), let owner = try? RedgifsAPI.username(String(folder.dropFirst(8))) {
-                collections.append(UserCollection(name: owner, isRedGifs: true))
+                discovered.append(UserCollection(name: owner, isRedGifs: true))
             } else if folder.hasPrefix("saved."), let owner = try? MediaExtractor.username(String(folder.dropFirst(6))) {
-                collections.append(UserCollection(name: owner, isSaved: true))
+                discovered.append(UserCollection(name: owner, isSaved: true))
             } else if folder.hasPrefix("x."), let model = try? XFetishAlbums.modelName(String(folder.dropFirst(2))) {
-                collections.append(UserCollection(name: model, isXFetish: true))
+                discovered.append(UserCollection(name: model, isXFetish: true))
             } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
-                collections.append(UserCollection(name: handle, isTwitter: true))
-            } else if folder.hasPrefix("ttv."), folder != "ttv." {
-                // Vidéos TikTok isolées : dossier global unique `ttv.videos`,
-                // une seule collection `ttv/videos` (les anciens dossiers
-                // `ttv.<id>` par lien se fondent dedans, sans doublon).
-                if !collections.contains(where: { $0.id == "ttv/videos" }) {
-                    collections.append(UserCollection(name: "videos", isTikTokVideo: true))
+                discovered.append(UserCollection(name: handle, isTwitter: true))
+            } else if folder == "ttv.videos" {
+                if !discovered.contains(where: { $0.id == "ttv/videos" }) {
+                    discovered.append(UserCollection(name: "videos", isTikTokVideo: true))
                 }
+            } else if folder.hasPrefix("ttv.") {
+                continue
             } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
-                collections.append(UserCollection(name: handle, isTikTok: true))
+                discovered.append(UserCollection(name: handle, isTikTok: true))
             } else if folder.hasPrefix("ts."), !folder.dropFirst(3).isEmpty {
-                // Sauvegardés TikTok du compte connecté : le nom est libre
-                // (par défaut `saved` si la page n'exposait pas le pseudo).
-                collections.append(UserCollection(name: String(folder.dropFirst(3)), isTikTokSaved: true))
+                discovered.append(UserCollection(name: String(folder.dropFirst(3)), isTikTokSaved: true))
             } else if folder.hasPrefix("ig."), let handle = try? InstagramAPI.username(String(folder.dropFirst(3))) {
-                collections.append(UserCollection(name: handle, isInstagram: true))
+                discovered.append(UserCollection(name: handle, isInstagram: true))
             } else {
-                collections.append(UserCollection(name: folder))
+                discovered.append(UserCollection(name: folder))
             }
         }
-        // Dédoublonnage par id canonique après migration des dossiers.
-        var seen = Set<String>()
-        collections = collections.filter { seen.insert($0.id).inserted }
-        saveCollections()
+        return discovered
     }
 
     func selectUser(_ id: String) {
@@ -802,6 +856,7 @@ extension Notification.Name {
             collections[index].archived = false
         } else {
             collections.append(UserCollection(source: source))
+            sortCollections()
         }
         saveCollections()
     }
@@ -813,41 +868,14 @@ extension Notification.Name {
     /// fichier déjà présent sous le même nom (même vidéo relancée) écrase sa
     /// copie identique ; les autres noms sont uniques par clé média du titre.
     static func migrateLegacyTikTokVideoFolders(root: URL, into globalFolder: URL) {
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return }
-        let legacyFolders = entries.filter { entry in
-            entry.lastPathComponent.hasPrefix("ttv.")
-                && entry.lastPathComponent != "ttv.videos"
-                && ((try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true)
+        let result = CollectionFiles.migrateLegacyTikTokVideoFolders(root: root, into: globalFolder)
+        for failure in result.failures {
+            LogCenter.err(L("Fusion TikTok : \(failure.fileName) non déplacé (\(failure.errorDescription)).",
+                            "TikTok merge: \(failure.fileName) not moved (\(failure.errorDescription))."))
         }
-        guard !legacyFolders.isEmpty else { return }
-        let metadataName = ".metadata"
-        for legacy in legacyFolders {
-            guard let contents = try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { continue }
-            var moved = 0
-            for item in contents {
-                let target = globalFolder.appendingPathComponent(item.lastPathComponent)
-                do {
-                    if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
-                    try fm.moveItem(at: item, to: target)
-                    moved += 1
-                } catch {
-                    LogCenter.err(L("Fusion TikTok : \(item.lastPathComponent) non déplacé (\(error.localizedDescription)).",
-                                    "TikTok merge: \(item.lastPathComponent) not moved (\(error.localizedDescription))."))
-                }
-                // Sidecar du fichier : mêmes nom et destination.
-                MediaMetadata.move(from: legacy.appendingPathComponent(metadataName)
-                                        .appendingPathComponent("\(item.lastPathComponent).json"),
-                                    to: globalFolder.appendingPathComponent(metadataName)
-                                        .appendingPathComponent("\(item.lastPathComponent).json"))
-            }
-            if (try? fm.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.isEmpty ?? true {
-                try? fm.removeItem(at: legacy)
-            }
-            if moved > 0 {
-                LogCenter.info(L("TikTok : \(moved) fichier(s) du dossier \(legacy.lastPathComponent) déplacés vers \(globalFolder.lastPathComponent).",
-                                 "TikTok: \(moved) file(s) from \(legacy.lastPathComponent) moved to \(globalFolder.lastPathComponent)."))
-            }
+        for entry in result.movedByFolder {
+            LogCenter.info(L("TikTok : \(entry.moved) fichier(s) du dossier \(entry.folderName) déplacés vers \(globalFolder.lastPathComponent).",
+                             "TikTok: \(entry.moved) file(s) from \(entry.folderName) moved to \(globalFolder.lastPathComponent)."))
         }
     }
 
@@ -855,7 +883,17 @@ extension Notification.Name {
         guard !running, let collection = collections.first(where: { $0.id == id }) else { return }
 
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
-        try? fm.removeItem(at: folder)
+        let rootURL = root
+        let isTikTokVideo = collection.isTikTokVideo
+        Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: folder)
+            if isTikTokVideo {
+                CollectionFiles.removeLegacyTikTokVideoFolders(in: rootURL)
+            }
+        }
+        if isTikTokVideo {
+            UserDefaults.standard.removeObject(forKey: Self.tikTokVideoSelectionKey)
+        }
         // Purge l'historique : sans ça, ré-ajouter la source après suppression
         // ne re-téléchargerait rien (posts déjà marqués vus).
         UserDefaults.standard.removeObject(forKey: Self.visitedKey(id))
@@ -893,41 +931,55 @@ extension Notification.Name {
     func deleteMedia(_ urls: [URL]) {
         guard !running, let collection = activeCollection else { return }
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true).standardizedFileURL
+        let fileSet = Set(files)
         let removable = urls.filter { url in
-            files.contains(url)
+            fileSet.contains(url)
                 && url.standardizedFileURL.deletingLastPathComponent() == folder
-                && (try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])).map({
-                    $0.isRegularFile == true && $0.isSymbolicLink != true
-                }) == true
         }
         guard !removable.isEmpty else { return }
 
-        var failures = 0
-        for url in removable {
-            do {
-                try fm.removeItem(at: url)
-                MediaMetadata.remove(for: url)
-            } catch {
-                failures += 1
+        loadingFiles = true
+        Task { @MainActor [weak self] in
+            let failures = await Task.detached(priority: .userInitiated) { () -> Int in
+                let fm = FileManager.default
+                var failures = 0
+                for url in removable {
+                    guard (try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])).map({
+                        $0.isRegularFile == true && $0.isSymbolicLink != true
+                    }) == true else { continue }
+                    do {
+                        try fm.removeItem(at: url)
+                        MediaMetadata.remove(for: url)
+                    } catch {
+                        failures += 1
+                    }
+                }
+                return failures
+            }.value
+            guard let self else { return }
+            if failures > 0 {
+                self.errorMessage = L("\(failures) média(s) n’ont pas pu être supprimés.", "\(failures) media file(s) could not be deleted.")
             }
+            self.reload()
         }
-        if failures > 0 {
-            errorMessage = L("\(failures) média(s) n’ont pas pu être supprimés.", "\(failures) media file(s) could not be deleted.")
-        }
-        reload()
     }
 
     func deleteAllDownloads() {
         guard !running else { return }
-        let folders = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && $0.lastPathComponent != "Inbox" } ?? []
-        folders.forEach { try? fm.removeItem(at: $0) }
+        let rootURL = root
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            let folders = (try? fm.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]))?
+                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true && $0.lastPathComponent != "Inbox" } ?? []
+            folders.forEach { try? fm.removeItem(at: $0) }
+        }
         for collection in collections {
             Self.clearSavedMediaCount(for: collection.id)
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(collection.id)")
             UserDefaults.standard.removeObject(forKey: "tikTokResume.\(collection.id)")
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(collection.id))
         }
+        UserDefaults.standard.removeObject(forKey: Self.tikTokVideoSelectionKey)
         collections = []
         saveCollections()
         activeUser = nil
@@ -937,17 +989,28 @@ extension Notification.Name {
         reload()
     }
 
+    func reloadIfFolderChanged() {
+        guard !running, let collection = activeCollection else { return }
+        let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
+        let currentMTime = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        if displayedCollectionID == activeUser, let currentMTime, currentMTime == lastLoadedFolderMTime {
+            return
+        }
+        reload()
+    }
+
     func reload() {
         reloadTask?.cancel()
+        searchIndexTask?.cancel()
+        searchIndexTask = nil
+        pendingSavedDuringReload.removeAll()
         reloadRevision += 1
         let revision = reloadRevision
         if displayedCollectionID != activeUser {
             files = []
             totalBytes = 0
+            lastLoadedFolderMTime = nil
             displayedCollectionID = activeUser
-            // Les tables de tri décrivent l'ancienne collection : les vider
-            // évite d'afficher les fichiers de la nouvelle avec les dates de
-            // l'ancienne pendant le scan.
             searchIndex = [:]
             fileDates = [:]
             fileSizes = [:]
@@ -963,16 +1026,12 @@ extension Notification.Name {
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
         reloadTask = Task { [weak self] in
             let worker = Task.detached(priority: .userInitiated) {
-                // L'index de recherche et les attributs de tri sont bâtis avec
-                // la liste, hors du fil principal : le rendu ne doit jamais
-                // toucher au disque.
                 let snapshot = try CollectionFiles.scan(folder)
-                let index = Downloader.buildSearchIndex(snapshot.files)
-                let facts = Downloader.buildFileFacts(snapshot.files)
-                return (snapshot, index, facts)
+                let mtime = (try? folder.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                return (snapshot, mtime)
             }
             do {
-                let (snapshot, index, facts) = try await withTaskCancellationHandler {
+                let (snapshot, mtime) = try await withTaskCancellationHandler {
                     try await worker.value
                 } onCancel: {
                     worker.cancel()
@@ -980,15 +1039,40 @@ extension Notification.Name {
                 guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
                 self.reloadTask = nil
                 self.loadingFiles = false
-                // L'ordre est recalculé après l'affectation des tables : sinon
-                // le tri par date ou par taille s'appuierait sur des tables
-                // encore vides et retomberait sur l'ordre alphabétique.
-                self.searchIndex = index
-                self.fileDates = facts.dates
-                self.fileSizes = facts.sizes
-                self.files = snapshot.files
-                self.totalBytes = snapshot.totalBytes
+                self.lastLoadedFolderMTime = mtime
+                self.fileDates = snapshot.dates
+                self.fileSizes = snapshot.sizes
+                var nextFiles = snapshot.files
+                var nextBytes = snapshot.totalBytes
+                var seen = Set(nextFiles)
+                for saved in self.pendingSavedDuringReload.reversed() where seen.insert(saved.url).inserted {
+                    nextFiles.insert(saved.url, at: 0)
+                    nextBytes += saved.size
+                    self.fileSizes[saved.url] = saved.size
+                    self.fileDates[saved.url] = saved.date
+                    if let entry = saved.searchEntry { self.searchIndex[saved.url] = entry }
+                }
+                self.pendingSavedDuringReload.removeAll()
+                self.files = nextFiles
+                self.totalBytes = nextBytes
                 self.applyGalleryOrdering()
+                // Indexation des sidecars en tâche de fond après affichage immédiat.
+                let filesForIndex = nextFiles
+                self.searchIndexTask = Task { [weak self] in
+                    let indexWorker = Task.detached(priority: .utility) {
+                        Downloader.buildSearchIndex(filesForIndex)
+                    }
+                    let index = await withTaskCancellationHandler {
+                        await indexWorker.value
+                    } onCancel: {
+                        indexWorker.cancel()
+                    }
+                    guard !Task.isCancelled, let self, self.reloadRevision == revision else { return }
+                    for (k, v) in index { self.searchIndex[k] = v }
+                    if !self.gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.applyGalleryOrdering()
+                    }
+                }
             } catch is CancellationError {
                 return
             } catch {
@@ -1024,7 +1108,12 @@ extension Notification.Name {
         scanIncomplete = false
         transferUnit = nil
         task = Task {
-            defer { running = false; active = 0; task = nil }
+            defer {
+                orderingCoalesceTask?.cancel()
+                orderingCoalesceTask = nil
+                applyGalleryOrdering()
+                running = false; active = 0; task = nil
+            }
             do {
                 try await run()
                 LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped in \(Int(Date().timeIntervalSince(started))) s."))
@@ -1245,6 +1334,7 @@ extension Notification.Name {
         let revision = RedditSession.shared.revision
         if previewSessionRevision != revision {
             previewCache.removeAllObjects()
+            previewThumbnailCache.removeAllObjects()
             previewSessionRevision = revision
         }
         if let cached = previewCache.object(forKey: url as NSURL) { return cached as Data }
@@ -1255,6 +1345,36 @@ extension Notification.Name {
             previewCache.setObject(data as NSData, forKey: url as NSURL, cost: data.count)
         }
         return data
+    }
+
+    /// Vignette pré-décodée hors `@MainActor` (960 px max, décodage immédiat)
+    /// pour éviter les micro-saccades de `FollowingView` et `SavedPostsView`.
+    func previewThumbnail(_ url: URL) async throws -> UIImage? {
+        try Task.checkCancellation()
+        let revision = RedditSession.shared.revision
+        if previewSessionRevision != revision {
+            previewCache.removeAllObjects()
+            previewThumbnailCache.removeAllObjects()
+            previewSessionRevision = revision
+        }
+        if let cached = previewThumbnailCache.object(forKey: url as NSURL) { return cached }
+        let data = try await previewImageData(url)
+        try Task.checkCancellation()
+        let decoded = await Task.detached(priority: .utility) { () -> UIImage? in
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 960,
+                    kCGImageSourceShouldCacheImmediately: true
+                  ] as CFDictionary) else { return nil }
+            return UIImage(cgImage: cg)
+        }.value
+        if let decoded, !Task.isCancelled, RedditSession.shared.revision == revision {
+            previewThumbnailCache.setObject(decoded, forKey: url as NSURL,
+                                            cost: Int(decoded.size.width * decoded.size.height * 4))
+        }
+        return decoded
     }
 
     private var galleryCache: [String: [Media]] = [:]
@@ -1275,7 +1395,11 @@ extension Notification.Name {
         }
         // Do not let a response from an earlier session populate the current cache.
         guard RedditSession.shared.revision == revision else { return media }
-        if galleryCache.count >= 50 { galleryCache.removeAll() }
+        if galleryCache.count >= 50 {
+            for key in Array(galleryCache.keys.prefix(10)) {
+                galleryCache.removeValue(forKey: key)
+            }
+        }
         galleryCache[feedID] = media
         return media
     }
@@ -1300,7 +1424,7 @@ extension Notification.Name {
                     let index = next
                     next += 1
                     group.addTask {
-                        do { return (index, try await self.resolveAndDownload(media[index]), nil) }
+                        do { return (index, try await self.resolveAndDownload(media[index]).url, nil) }
                         catch is CancellationError { return (index, nil, nil) }
                         catch { return (index, nil, error.localizedDescription) }
                     }
@@ -1355,12 +1479,20 @@ extension Notification.Name {
             source = .saved(feed.username)
             privateFeed = feed
         } else {
-            // `@pseudo` et `x.com/pseudo` collés tels quels sont acceptés : le préfixe
-            // ne doit pas être ajouté devant, sans quoi le pseudo serait
-            // invalide.
-            let needsPrefix = !username.contains("/") && !username.hasPrefix("@")
-                && !username.lowercased().contains("redgifs.com")
-            let text = needsPrefix ? "\(sourceKind)/\(username)" : username
+            // `@pseudo` n'est conservé tel quel que pour X (`tw`) : en mode
+            // TikTok (`tt`), `@pseudo` doit rester `tt/@pseudo` (jamais basculer vers X).
+            let lowerUser = username.lowercased()
+            let skipPrefix = username.contains("/")
+                || (sourceKind == "tw" && username.hasPrefix("@"))
+                || lowerUser.contains("redgifs.com")
+                || lowerUser.contains("tiktok.com")
+                || lowerUser.contains("instagram.com")
+                || lowerUser.contains("x.com/")
+                || lowerUser.contains("twitter.com/")
+                || lowerUser.contains("x-fetish.tube")
+                || lowerUser.contains("reddit.com/")
+                || lowerUser.contains("redd.it/")
+            let text = skipPrefix ? username : "\(sourceKind)/\(username)"
             source = try FeedSource.parse(text)
             if case .saved(let name) = source {
                 status = L("Vérification du compte et du flux privé…", "Checking account and private feed…")
@@ -1606,22 +1738,22 @@ extension Notification.Name {
         var pageNumber = 0
         let completed = try await FeedTraversal.run(checkpoint: checkpoint,
             validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
-            fetch: { after in
+            fetchPage: { after in
                 self.status = L("Recherche…", "Searching…")
                 pageNumber += 1
                 let shownAfter = after.map { String($0.suffix(8)) } ?? "début"
                 LogCenter.net(L("Page \(pageNumber) demandée après \(shownAfter)…", "Page \(pageNumber) requested after \(shownAfter)…"))
-                let posts: [Post]
+                let page: (posts: [Post], after: String?)
                 do {
-                    posts = try await self.fetchPosts(source: source, privateFeed: privateFeed, after: after)
+                    page = try await self.fetchPage(source: source, privateFeed: privateFeed, after: after)
                 } catch {
                     if !(error is CancellationError) {
                         LogCenter.err(L("Page \(pageNumber) interrompue après \(shownAfter) : \(error.localizedDescription). Reprise conservée au dernier point validé.", "Page \(pageNumber) failed after \(shownAfter): \(error.localizedDescription). Checkpoint kept at the last completed page."))
                     }
                     throw error
                 }
-                LogCenter.net(L("Page \(pageNumber) reçue : \(posts.count) posts.", "Page \(pageNumber) received: \(posts.count) posts."))
-                return posts
+                LogCenter.net(L("Page \(pageNumber) reçue : \(page.posts.count) posts.", "Page \(pageNumber) received: \(page.posts.count) posts."))
+                return page
             }, process: { posts in
                 LogCenter.info(L("Page \(pageNumber) : préparation de \(posts.count) posts…", "Page \(pageNumber): preparing \(posts.count) posts…"))
                 // Plafond d'espace vérifié à chaque page : `prepareDownloads`
@@ -1786,7 +1918,7 @@ extension Notification.Name {
             let media = Media.direct(image.url)
             mediaOverrides[id] = [media]
             // Anti-hotlink : le stockage exige le Referer de l'album.
-            mediaHeaders[media.key] = XFetishAPI.headers(referer: album.url)
+            mediaHeaders[id] = XFetishAPI.headers(referer: album.url)
             return Post(id: id, title: album.title, html: "", link: album.url.absoluteString)
         }
         let downloads = try await prepareDownloads(posts, folder: folder,
@@ -1840,6 +1972,7 @@ extension Notification.Name {
             author: canonical, mediaOverrides: mediaOverrides, xFetishVideos: videos)
         beginTransferUnit(total: downloads.count)
         try await executeDownloads(downloads, &preparedCount)
+        recordLastRunCount(canonical)
         LogCenter.info(L("X-Fetish sélection : \(preparedCount) médias préparés.", "X-Fetish selection: \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
@@ -1862,6 +1995,7 @@ extension Notification.Name {
 
         while true {
             try Task.checkCancellation()
+            try checkStorageQuota(folder: folder, canonical: canonical)
             guard scannedPages.insert(page).inserted, scannedPages.count <= 500 else {
                 throw XFetishError.tooManyPages
             }
@@ -1900,6 +2034,7 @@ extension Notification.Name {
         var scannedPages = 0
         var scannedVideos = 0
         let completed = try await XFetishVideos.run(page: firstPage, fetch: { page in
+            try self.checkStorageQuota(folder: folder, canonical: canonical)
             scannedPages += 1
             status = L("Recherche des vidéos X-Fetish… page \(page)", "Finding X-Fetish videos… page \(page)")
             let listingData = try await network.data(XFetishVideos.listingURL(model: model, page: page))
@@ -1961,13 +2096,30 @@ extension Notification.Name {
         // discrets : une vidéo lente n'immobilise plus les suivantes, la
         // pagination continue pendant les transferts, et un créneau libéré
         // est immédiatement repris par le média suivant.
-        let channel = ConcurrentChannel<Download>()
+        let channel = ConcurrentChannel<(Download, Int)>()
         let limit = max(1, sessionLimit)
         // La barre couvre tout le parcours : le total croît à chaque média
         // repéré, X n'annonce aucun total global.
         transferUnit = TransferUnit()
         var pipelineError: Error?
         var preparedHere = 0
+        var nextPageIndex = 0
+        var activePageIndex = -1
+        var pageOrder: [Int] = []
+        var pageRemaining: [Int: Int] = [:]
+        var pageCheckpoints: [Int: String?] = [:]
+        func flushCheckpoints() {
+            while let head = pageOrder.first, pageRemaining[head, default: 0] == 0 {
+                pageOrder.removeFirst()
+                pageRemaining.removeValue(forKey: head)
+                guard let storedCursor = pageCheckpoints.removeValue(forKey: head) else { continue }
+                if let cursor = storedCursor {
+                    UserDefaults.standard.set(["userID": userID, "cursor": cursor], forKey: resumeKey)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: resumeKey)
+                }
+            }
+        }
         var workers: [Task<Void, Never>] = []
         // Les consommateurs tournent sur l'acteur principal pour la tenue de
         // l'état, mais chaque transfert réseau s'exécute hors acteur : la
@@ -1976,10 +2128,12 @@ extension Notification.Name {
         // simple annulation fait sortir le consommateur sans erreur.
         for _ in 0..<limit {
             workers.append(Task { @MainActor [channel, self] in
-                while let item = await channel.next() {
+                while let (item, pageIndex) = await channel.next() {
                     do {
                         try await self.saveIgnoringInaccessible(item)
                         self.recordTransferredItem()
+                        pageRemaining[pageIndex, default: 0] -= 1
+                        flushCheckpoints()
                     } catch {
                         if DownloadFailurePolicy.isCancellation(error) { return }
                         if pipelineError == nil { pipelineError = error }
@@ -1999,6 +2153,10 @@ extension Notification.Name {
             // Une erreur fatale survenue chez un consommateur arrête aussi la
             // pagination : inutile de lire des pages que personne ne videra.
             if let pipelineError { throw pipelineError }
+            try self.checkStorageQuota(folder: folder, canonical: canonical)
+            activePageIndex = nextPageIndex
+            nextPageIndex += 1
+            pageOrder.append(activePageIndex)
             scannedPages += 1
             self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
             let data = try await self.fetchXMediaPage(userID: userID, cursor: cursor)
@@ -2046,14 +2204,12 @@ extension Notification.Name {
             if transferUnit?.total != discovered {
                 transferUnit?.total = discovered
             }
-            for item in downloads { channel.send(item) }
+            pageRemaining[activePageIndex] = downloads.count
+            for item in downloads { channel.send((item, activePageIndex)) }
             return true
         }, persist: { cursor in
-            if let cursor {
-                UserDefaults.standard.set(["userID": userID, "cursor": cursor], forKey: resumeKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: resumeKey)
-            }
+            pageCheckpoints[activePageIndex] = cursor
+            flushCheckpoints()
         })
         // Fin du parcours : ferme le canal et attend que les transferts en
         // cours se terminent. Une erreur fatale (429, session révoquée)
@@ -2061,13 +2217,17 @@ extension Notification.Name {
         channel.finish()
         for worker in workers { await worker.value }
         if let pipelineError { throw pipelineError }
+        try Task.checkCancellation()
+        flushCheckpoints()
         preparedCount += preparedHere
         guard completed else { return false }
+        UserDefaults.standard.removeObject(forKey: resumeKey)
 
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
             saveCollections()
         }
+        recordLastRunCount(canonical)
         LogCenter.info(L("X : \(scannedPages) pages, \(preparedCount) médias préparés.", "X: \(scannedPages) pages, \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
@@ -2306,6 +2466,7 @@ extension Notification.Name {
 
         for _ in 0..<100 {
             try Task.checkCancellation()
+            try checkStorageQuota(folder: folder, canonical: canonical)
             let page: TikTokMediaPage
             let pageMediaHeaders: [String: String]
             if !embedded.isEmpty {
@@ -2458,6 +2619,7 @@ extension Notification.Name {
             collections[index].lastRun = Date()
             saveCollections()
         }
+        recordLastRunCount(canonical)
         LogCenter.info(L("TikTok : \(scannedPages) pages, \(preparedCount) médias préparés.", "TikTok: \(scannedPages) pages, \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
@@ -2714,7 +2876,11 @@ extension Notification.Name {
         tikTokWebFetch = { url in await paginator.fetchMedia(url) }
         tikTokWebDownload = { url in await paginator.browserDownload(url) }
         let account = await Self.resolveTikTokOwnAccount(paginator)
-        if let account { tikTokSavedAccount = account.username }
+        var resolvedAuthor = tikTokSavedAccount ?? ""
+        if let account {
+            resolvedAuthor = account.username
+            tikTokSavedAccount = account.username
+        }
         var signedFeed: TikTokSignedSavedFeed?
         if let account {
             // Voie sign\u{00e9}e : les publications enregistr\u{00e9}es (`collect/item_list`)
@@ -2747,7 +2913,7 @@ extension Notification.Name {
                     "Page Sauvegard\u{00e9}s TikTok injoignable : le site n\u{2019}expose pas de lien \u{ab} Enregistr\u{00e9}s \u{bb} atteignable depuis le menu du profil \u{2014} consulte le journal (lignes \u{ab} TikTok web : \u{bb}).",
                     "TikTok Saved page unreachable: the site exposes no saved link from the profile menu \u{2014} check the log (\u{201c}TikTok web:\u{201d} lines)."))
             }
-            if let name = paginator.pageUsername { tikTokSavedAccount = name }
+            if resolvedAuthor.isEmpty, let name = paginator.pageUsername { resolvedAuthor = name }
             if let choice {
                 status = L("Ouverture du dossier \u{ab} \(choice.name) \u{bb}\u{2026}", "Opening folder \u{201c}\(choice.name)\u{201d}\u{2026}")
                 // Les dossiers vivent dans le sous-onglet Collections des
@@ -2766,6 +2932,7 @@ extension Notification.Name {
         }
         for _ in 0..<100 {
             try Task.checkCancellation()
+            try checkStorageQuota(folder: folder, canonical: canonical)
             scannedPages += 1
             status = L("Recherche des sauvegardés TikTok… page \(scannedPages)", "Searching TikTok saved posts… page \(scannedPages)")
             // Un `nil` au premier tour peut être une page encore muette :
@@ -2828,7 +2995,7 @@ extension Notification.Name {
                         // Même règle que pour `tt/` : `Referer` de la
                         // publication, UA du client qui a servi la liste.
                         mediaHeadersByMedia[id] = TikTokAPI.mediaHeaders(
-                            referer: TikTokAPI.postPageURL(author: tikTokSavedAccount, postID: post.id),
+                            referer: TikTokAPI.postPageURL(author: resolvedAuthor, postID: post.id),
                             browserAgent: paginator.pageUserAgent)
                         mediaMirrorsByMedia[id] = media.mirrors
                         if media.kind == .video { mediaExtensions[id] = "mp4" }
@@ -2859,6 +3026,7 @@ extension Notification.Name {
             collections[index].lastRun = Date()
             saveCollections()
         }
+        recordLastRunCount(canonical)
         LogCenter.info(L("TikTok : \(scannedPages) page(s) de sauvegardés, \(preparedCount) médias préparés.", "TikTok: \(scannedPages) saved-posts page(s), \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
@@ -2947,6 +3115,7 @@ extension Notification.Name {
 
         while scannedPages < 100 {
             try Task.checkCancellation()
+            try checkStorageQuota(folder: folder, canonical: canonical)
             scannedPages += 1
             var fresh: [InstagramPost] = []
             for post in page.posts where scanned.insert(post.id).inserted {
@@ -3020,6 +3189,7 @@ extension Notification.Name {
             collections[index].lastRun = Date()
             saveCollections()
         }
+        recordLastRunCount(canonical)
         LogCenter.info(L("Instagram : \(scannedPages) pages, \(preparedCount) médias préparés.", "Instagram: \(scannedPages) pages, \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
@@ -3133,20 +3303,25 @@ extension Notification.Name {
         else { UserDefaults.standard.removeObject(forKey: key) }
     }
 
-    private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
+    private func fetchPage(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> (posts: [Post], after: String?) {
         if let privateFeed {
-            return try await network.savedPosts(privateFeed, after: after)
+            return try await network.savedPostsPage(privateFeed, after: after)
         }
         let url = source.feedURL(sort: subSort, after: after)
         do {
             let body = try await network.data(url)
             // Reddit sert des listings JSON depuis la coupure des flux RSS
             // (13/11/2026) ; les autres sources restent en Atom.
-            if url.path.hasSuffix(".json") { return try RedditListing.parse(body) }
-            return try FeedParser.parse(body)
+            if url.path.hasSuffix(".json") { return try RedditListing.parsePage(body) }
+            let posts = try FeedParser.parse(body)
+            return (posts, posts.last?.id)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
             throw FeedError.loginRequired
         }
+    }
+
+    private func fetchPosts(source: FeedSource, privateFeed: SavedFeed?, after: String?) async throws -> [Post] {
+        try await fetchPage(source: source, privateFeed: privateFeed, after: after).posts
     }
 
     private static func validPageCursor(_ id: String, privateFeed: SavedFeed?) -> Bool {
@@ -3185,18 +3360,19 @@ extension Notification.Name {
                                 seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
                                 preparedCount: inout Int,
                                 fetch: (Int) async throws -> RedgifsUserSearchResponse) async throws -> Bool {
-        var visited = Set(UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? [])
         var orderedVisited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
+        var visited = Set(orderedVisited)
         var seenPages = Set<[String]>()
         for page in 1...100 {
             try Task.checkCancellation()
+            try checkStorageQuota(folder: folder, canonical: canonical)
             status = L("Recherche RedGifs… page \(page)", "Searching RedGifs… page \(page)")
             LogCenter.net(L("RedGifs \(label) : page \(page) demandée…", "RedGifs \(label): page \(page) requested…"))
             let response = try await fetch(page)
             let ids = response.gifs.map(\.id)
             LogCenter.net(L("RedGifs \(label) : page \(page) reçue, \(ids.count) médias.", "RedGifs \(label): page \(page) received, \(ids.count) media."))
-            if ids.isEmpty { break }
-            guard seenPages.insert(ids).inserted else { break }
+            if ids.isEmpty { return true }
+            guard seenPages.insert(ids).inserted else { return true }
             let fresh = ids.filter { !visited.contains($0) }
             if !fresh.isEmpty {
                 let downloads = prepareRedgifsDownloads(fresh, folder: folder,
@@ -3262,9 +3438,15 @@ extension Notification.Name {
         var renamedExisting = false
         var skippedExisting = 0
         var skippedSeen = 0
+        var skippedFilter = 0
+        let filter = downloadFilter
         for id in ids {
             let item = Media.redgifs(id.lowercased())
             guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
+            if filter.isActive, !filter.allows(kind: .gif, title: "", publishedAt: nil) {
+                skippedFilter += 1
+                continue
+            }
             let stem = FilenamePolicy.downloadStem(title: "", postID: id)
             var filename = "\(stem).mp4"
             if !usedFilenames.insert(filename.lowercased()).inserted {
@@ -3294,8 +3476,8 @@ extension Notification.Name {
                     postLink: "https://www.redgifs.com/users/\(author.split(separator: "/").last.map(String.init) ?? "")", headers: nil))
             }
         }
-        if skippedExisting > 0 || skippedSeen > 0 {
-            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen."))
+        if skippedExisting > 0 || skippedSeen > 0 || skippedFilter > 0 {
+            LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus, \(skippedFilter) écartés par les filtres.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen, \(skippedFilter) filtered out."))
         }
         if renamedExisting { reload() }
         return downloads
@@ -3343,7 +3525,9 @@ extension Notification.Name {
     /// terminés restent en place.
     private func checkStorageQuota(folder: URL, canonical: String) throws {
         guard storageQuota.isActive else { return }
-        let used = (try? CollectionFiles.scan(folder).totalBytes) ?? totalBytes
+        let used = (activeUser == canonical && reloadTask == nil)
+            ? totalBytes
+            : ((try? CollectionFiles.scan(folder).totalBytes) ?? totalBytes)
         guard storageQuota.isReached(currentBytes: used) else { return }
         storageLimitReached = true
         LogCenter.info(L("Plafond d’espace atteint (\(ByteCountFormatter.string(fromByteCount: used, countStyle: .file)) sur \(ByteCountFormatter.string(fromByteCount: storageQuota.bytes, countStyle: .file))) : parcours arrêté.",
@@ -3655,9 +3839,12 @@ extension Notification.Name {
     private func recordFailure(_ item: Download) {
         guard let canonical = currentCanonical, let folder = currentFolder else { return }
         let sourceURL: String?
-        switch item.media {
-        case .direct(let url), .redditVideo(let url): sourceURL = url.absoluteString
-        case .redgifs: sourceURL = nil
+        if item.xFetishVideo != nil {
+            sourceURL = nil
+        } else if case .direct(let url) = item.media {
+            sourceURL = url.absoluteString
+        } else {
+            sourceURL = nil
         }
         FailureJournal.shared.record(FailureEntry(
             collectionID: canonical,
@@ -3684,27 +3871,40 @@ extension Notification.Name {
         guard !retryable.isEmpty else { return }
         running = true
         status = L("Nouvel essai : \(retryable.count) médias…", "Retrying: \(retryable.count) media…")
-        Task {
+        task = Task {
             defer { running = false; task = nil }
             var resolved: [UUID] = []
             var fresh = 0
             for entry in retryable {
+                if Task.isCancelled { break }
                 guard let raw = entry.sourceURL, let url = URL(string: raw), url.scheme == "https" else { continue }
                 let folder = root.appendingPathComponent(entry.folderName, isDirectory: true)
-                try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
                 let destination = folder.appendingPathComponent(entry.filename)
                 guard !fm.fileExists(atPath: destination.path) else {
                     resolved.append(entry.id)
                     continue
                 }
                 do {
-                    let data = try await network.data(url, headers: entry.headers)
-                    try data.write(to: destination, options: .atomic)
-                    MediaMetadata(downloadedAt: Date(), postDate: nil, author: entry.author.isEmpty ? nil : entry.author, postLink: nil).save(for: destination)
+                    let temporary = try await network.download(url, headers: entry.headers)
+                    do {
+                        try Task.checkCancellation()
+                    } catch {
+                        try? fm.removeItem(at: temporary)
+                        throw error
+                    }
+                    let author = entry.author
+                    try await Task.detached(priority: .utility) {
+                        let fm = FileManager.default
+                        defer { try? fm.removeItem(at: temporary) }
+                        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+                        try fm.moveItem(at: temporary, to: destination)
+                        MediaMetadata(downloadedAt: Date(), postDate: nil, author: author.isEmpty ? nil : author, postLink: nil).save(for: destination)
+                    }.value
                     resolved.append(entry.id)
                     fresh += 1
                     LogCenter.info(L("Nouvel essai réussi : \(entry.filename).", "Retry succeeded: \(entry.filename)."))
                 } catch {
+                    if DownloadFailurePolicy.isCancellation(error) { break }
                     LogCenter.err(L("Nouvel essai échoué : \(entry.filename) : \(error.localizedDescription).", "Retry failed: \(entry.filename): \(error.localizedDescription)."))
                     FailureJournal.shared.record(FailureEntry(
                         collectionID: entry.collectionID,
@@ -3718,9 +3918,11 @@ extension Notification.Name {
             }
             FailureJournal.shared.remove(ids: resolved)
             count += fresh
-            status = fresh == 0
-                ? L("Aucun échec réparé", "No failure repaired")
-                : L("\(fresh) médias récupérés", "\(fresh) media recovered")
+            status = Task.isCancelled
+                ? L("Arrêté", "Stopped")
+                : fresh == 0
+                    ? L("Aucun échec réparé", "No failure repaired")
+                    : L("\(fresh) médias récupérés", "\(fresh) media recovered")
             if fresh > 0 { reload() }
         }
     }
@@ -3732,6 +3934,7 @@ extension Notification.Name {
         let progressID = UUID().uuidString
         defer { transferUnit?.inFlight.removeValue(forKey: progressID) }
         let temporary: URL
+        let metadataEmbedded: Bool
         if let video = item.xFetishVideo {
             transferUnit?.inFlight[progressID] = 0
             // Anti-hotlink : le stockage exige le Referer de la page vidéo.
@@ -3747,50 +3950,65 @@ extension Notification.Name {
                         Task { @MainActor in self.recordVideoProgress(progressID, received: received, total: total) }
                     })
             })
+            metadataEmbedded = false
         } else {
-            temporary = try await resolveAndDownload(item.media, headers: item.headers,
-                                                      mirrors: item.mirrors)
+            let resolved = try await resolveAndDownload(
+                item.media, headers: item.headers, mirrors: item.mirrors,
+                author: item.author, postLink: item.postLink)
+            temporary = resolved.url
+            metadataEmbedded = resolved.metadataEmbedded
         }
         defer { try? fm.removeItem(at: temporary) }
         try Task.checkCancellation()
-        try fm.moveItem(at: temporary, to: item.destination)
-        // Étiquette binaire visible Windows (Auteurs/Commentaires) : fail-safe,
-        // jamais de token privé, GIF/WebP ignorés. Ne fait jamais échouer le save.
-        await Self.embedBinaryMetadata(at: item.destination, author: item.author, postLink: item.postLink)
-        // Tri par date du post dans Fichiers/Photos : le fichier porte la
-        // date du post (la date de téléchargement reste dans le sidecar).
-        // Reposée après l'injection car la réécriture peut la réinitialiser.
-        if let postDate = item.postDate {
-            try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: item.destination.path)
+        if downloadFilter.minimumBytes > 0 {
+            let tempBytes = Int64((try? temporary.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            if tempBytes > 0, tempBytes < downloadFilter.minimumBytes {
+                LogCenter.info(L("Ignoré (< taille min) : \(item.destination.lastPathComponent).", "Skipped (< min size): \(item.destination.lastPathComponent)."))
+                return
+            }
         }
-        MediaMetadata(downloadedAt: Date(), postDate: item.postDate, author: item.author.isEmpty ? nil : item.author, postLink: item.postLink).save(for: item.destination)
-        // Une seule lecture des attributs, réutilisée pour le total et pour la
-        // table de tri : `files.insert` seul laisserait le tri par date ou par
-        // taille sans entrée pour ce fichier.
-        let attributes = try? item.destination.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
-        let size = Int64(attributes?.fileSize ?? 0)
-        files.insert(item.destination, at: 0)
+        let destination = item.destination
+        let postDate = item.postDate
+        let author = item.author
+        let postLink = item.postLink
+        let (size, fileDate, searchEntry) = try await Task.detached(priority: .utility) { () -> (Int64, Date?, String?) in
+            let fm = FileManager.default
+            try fm.moveItem(at: temporary, to: destination)
+            if !metadataEmbedded {
+                // Étiquette binaire visible Windows (Auteurs/Commentaires) : fail-safe,
+                // jamais de token privé, GIF/WebP ignorés. Ne fait jamais échouer le save.
+                await Self.embedBinaryMetadata(at: destination, author: author, postLink: postLink)
+            }
+            // Tri par date du post dans Fichiers/Photos : le fichier porte la
+            // date du post (la date de téléchargement reste dans le sidecar).
+            // Reposée après l'injection car la réécriture peut la réinitialiser.
+            if let postDate {
+                try? fm.setAttributes([.creationDate: postDate, .modificationDate: postDate], ofItemAtPath: destination.path)
+            }
+            let metadata = MediaMetadata(downloadedAt: Date(), postDate: postDate, author: author.isEmpty ? nil : author, postLink: postLink)
+            metadata.save(for: destination)
+            let parts = [metadata.author, metadata.postLink].compactMap { $0 }
+            let searchEntry = parts.isEmpty ? nil : parts.joined(separator: " ").lowercased()
+            // Une seule lecture des attributs, réutilisée pour le total et pour la
+            // table de tri : `files.insert` seul laisserait le tri par date ou par
+            // taille sans entrée pour ce fichier.
+            let attributes = try? destination.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+            let size = Int64(attributes?.fileSize ?? 0)
+            return (size, attributes?.creationDate, searchEntry)
+        }.value
+        try Task.checkCancellation()
+        let resolvedDate = postDate ?? fileDate
+        files.insert(destination, at: 0)
         totalBytes += size
-        fileSizes[item.destination] = size
-        if let date = item.postDate ?? attributes?.creationDate { fileDates[item.destination] = date }
-        applyGalleryOrdering()
+        fileSizes[destination] = size
+        if let resolvedDate { fileDates[destination] = resolvedDate }
+        if let searchEntry { searchIndex[destination] = searchEntry }
+        if reloadTask != nil {
+            pendingSavedDuringReload.append((url: destination, size: size, date: resolvedDate ?? Date(), searchEntry: searchEntry))
+        }
+        scheduleGalleryOrderingDuringRun()
         count += 1
-        LogCenter.info(L("Gardé : \(item.destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(item.destination.lastPathComponent) (\(count)/\(discovered))."))
-        // A scan started before this save must not overwrite the newly inserted file.
-        if reloadTask != nil { invalidateReload() }
-    }
-
-    /// Écarte un scan en cours sans en lancer un nouveau. `save()` vient
-    /// d'insérer le fichier dans `files` et d'ajuster `totalBytes` : rescanner le
-    /// dossier entier après chaque téléchargement coûterait O(n²) en `stat` sur
-    /// une grosse collection, pour un résultat identique. Le seul risque réel
-    /// est qu'un scan démarré avant l'insertion n'écrase la liste affichée —
-    /// invalider sa révision suffit à l'en empêcher.
-    private func invalidateReload() {
-        reloadTask?.cancel()
-        reloadRevision += 1
-        reloadTask = nil
-        loadingFiles = false
+        LogCenter.info(L("Gardé : \(destination.lastPathComponent) (\(count)/\(discovered)).", "Kept: \(destination.lastPathComponent) (\(count)/\(discovered))."))
     }
 
     /// Injection binaire fail-safe : JPG/PNG via EXIF sans recompression,
@@ -3805,13 +4023,14 @@ extension Notification.Name {
         if ["jpg", "jpeg", "png"].contains(ext) {
             tagImage(at: url, author: payload.author, comment: payload.comment)
         } else if ["mp4", "mov", "m4v"].contains(ext) {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            guard size <= 200_000_000 else { return }
             await tagMovie(at: url, author: payload.author, comment: payload.comment)
         }
     }
 
     nonisolated private static func tagImage(at url: URL, author: String, comment: String?) {
-        guard let data = try? Data(contentsOf: url),
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let type = CGImageSourceGetType(source) else { return }
         let metadata = CGImageMetadataCreateMutable()
         if !author.isEmpty,
@@ -3826,15 +4045,27 @@ extension Notification.Name {
             kCGImageDestinationMetadata as String: metadata,
             kCGImageDestinationMergeMetadata as String: true
         ]
-        let output = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(output, type, 1, nil) else { return }
-        var error: Unmanaged<CFError>?
-        let ok = withUnsafeMutablePointer(to: &error) { ptr in
-            CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, ptr)
+        let ext = url.pathExtension.isEmpty ? "jpg" : url.pathExtension
+        let temp = url.deletingLastPathComponent()
+            .appendingPathComponent("." + UUID().uuidString)
+            .appendingPathExtension(ext)
+        let written: Bool = {
+            guard let destination = CGImageDestinationCreateWithURL(temp as CFURL, type, 1, nil) else { return false }
+            var error: Unmanaged<CFError>?
+            let ok = withUnsafeMutablePointer(to: &error) { ptr in
+                CGImageDestinationCopyImageSource(destination, source, options as CFDictionary, ptr)
+            }
+            return ok
+        }()
+        guard written else {
+            try? FileManager.default.removeItem(at: temp)
+            return
         }
-        guard ok, output.length > 0 else { return }
-        // Atomic write retains the original if staging or publication fails.
-        try? output.write(to: url, options: .atomic)
+        do {
+            try MediaFileReplacement.replace(url, with: temp)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+        }
     }
 
     nonisolated private static func movieMetadataItems(author: String, comment: String?) -> [AVMetadataItem] {
@@ -3938,14 +4169,16 @@ extension Notification.Name {
         }
     }
     private func resolveAndDownload(_ media: Media, headers: [String: String]? = nil,
-                                     mirrors: [URL] = []) async throws -> URL {
+                                    mirrors: [URL] = [],
+                                    author: String = "",
+                                    postLink: String? = nil) async throws -> (url: URL, metadataEmbedded: Bool) {
         switch media {
         case .direct(let url):
             LogCenter.net(L("Direct : \(url.host ?? "serveur")…", "Direct: \(url.host ?? "server")…"))
             do {
                 let saved = try await network.download(url, headers: headers)
                 tikTokCDNRefusals = 0
-                return saved
+                return (saved, false)
             } catch {
                 // Repli général sur refus 403/404, quelle que soit la source :
                 // d'abord les miroirs déclarés pour ce post (ex. source
@@ -3962,7 +4195,7 @@ extension Notification.Name {
                         do {
                             let saved = try await network.download(candidate, headers: headers)
                             tikTokCDNRefusals = 0
-                            return saved
+                            return (saved, false)
                         } catch { continue }
                     }
                 }
@@ -3985,7 +4218,7 @@ extension Notification.Name {
                         let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                         try data.write(to: temporary)
                         tikTokCDNRefusals = 0
-                        return temporary
+                        return (temporary, false)
                     }
                 }
                 if let browserDownload = tikTokWebDownload {
@@ -3995,7 +4228,7 @@ extension Notification.Name {
                         let temporary = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                         try data.write(to: temporary)
                         tikTokCDNRefusals = 0
-                        return temporary
+                        return (temporary, false)
                     }
                 }
                 tikTokCatchCDNRefusal()
@@ -4003,12 +4236,12 @@ extension Notification.Name {
             }
         case .redgifs(let id):
             do {
-                return try await downloadRedgifs(id: id)
+                return (try await downloadRedgifs(id: id), false)
             } catch NetworkError.refused(let code) where code == 401 {
                 // Token expiré entre le cache et l'appel : un seul refresh + nouvel essai.
                 LogCenter.net(L("RedGIFs : session expirée, nouvel essai…", "RedGIFs: session expired, retrying…"))
                 token = nil
-                return try await downloadRedgifs(id: id)
+                return (try await downloadRedgifs(id: id), false)
             }
         case .redditVideo(let base):
             LogCenter.net(L("Vidéo Reddit : manifeste \(base.host ?? "serveur")…", "Reddit video: manifest \(base.host ?? "server")…"))
@@ -4018,16 +4251,17 @@ extension Notification.Name {
             let video = try await network.download(tracks.video)
             guard let audioURL = tracks.audio else {
                 LogCenter.info(L("Vidéo sans piste son, gardée telle quelle.", "Video without audio track, kept as is."))
-                return video
+                return (video, false)
             }
             defer { try? fm.removeItem(at: video) }
             LogCenter.net(L("Vidéo + son : assemblage…", "Video + audio: merging…"))
             let audio = try await network.download(audioURL)
             defer { try? fm.removeItem(at: audio) }
-            return try await merge(video: video, audio: audio)
+            let merged = try await merge(video: video, audio: audio, author: author, postLink: postLink)
+            return (merged, true)
         }
     }
-    nonisolated private func merge(video: URL, audio: URL) async throws -> URL {
+    nonisolated private func merge(video: URL, audio: URL, author: String = "", postLink: String? = nil) async throws -> URL {
         let fm = FileManager.default
         let composition = AVMutableComposition()
         let v = AVURLAsset(url: video), a = AVURLAsset(url: audio)
@@ -4042,6 +4276,9 @@ extension Notification.Name {
         let output = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("mp4")
         guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough) else { throw NetworkError.invalid(L("Assemblage vidéo indisponible.", "Video merging unavailable.")) }
         export.outputURL = output; export.outputFileType = .mp4
+        let payload = BinaryMetadata.payload(author: author, postLink: postLink)
+        let items = Self.movieMetadataItems(author: payload.author, comment: payload.comment)
+        if !items.isEmpty { export.metadata = items }
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in export.exportAsynchronously { continuation.resume() } }
         } onCancel: {

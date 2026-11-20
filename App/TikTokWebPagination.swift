@@ -269,8 +269,9 @@ import MediaCore
                 }
               }
             } catch (e) {}
-            var r = await fetch(target, { method: 'GET', credentials: 'include',
-                                          headers: { 'Accept': 'application/json, text/plain, */*' } });
+            var rawFetch = window.fetch;
+            var r = await rawFetch(target, { method: 'GET', credentials: 'include',
+                                             headers: { 'Accept': 'application/json, text/plain, */*' } });
             status = r.status;
             text = await r.text();
           } catch (e) {
@@ -510,18 +511,31 @@ import MediaCore
             view.frame.origin.x = -view.frame.width
             window.addSubview(view)
         }
-        let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            loadContinuation = continuation
-            watchdog = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
-                guard let self else { return }
-                self.finishLoad(false)
+        let loaded = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                loadContinuation = continuation
+                watchdog = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
+                    guard let self else { return }
+                    self.finishLoad(false)
+                }
+                view.load(URLRequest(url: url))
             }
-            view.load(URLRequest(url: url))
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finishLoad(false)
+            }
         }
-        guard loaded else { return false }
+        guard loaded, !Task.isCancelled else {
+            close()
+            return false
+        }
         // Laisse TikTok hydrater la page avant le premier défilement.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
+        if Task.isCancelled {
+            close()
+            return false
+        }
         return true
     }
 
@@ -592,16 +606,24 @@ import MediaCore
         let literal = url.absoluteString
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
-        return await withCheckedContinuation { (continuation: CheckedContinuation<APIResponse?, Never>) in
-            let timeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(TimingPolicy.signedFetch))
-                guard let self, let call = self.apiCalls[id] else { return }
-                self.apiCalls[id] = nil
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<APIResponse?, Never>) in
+                let timeout = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(TimingPolicy.signedFetch))
+                    guard let self, let call = self.apiCalls[id] else { return }
+                    self.apiCalls[id] = nil
+                    call.continuation.resume(returning: nil)
+                }
+                apiCalls[id] = APICall(continuation: continuation, timeout: timeout)
+                webView.evaluateJavaScript("window.__tiktokSignedFetch && window.__tiktokSignedFetch('\(literal)', '\(id)')",
+                                           completionHandler: nil)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, let call = self.apiCalls.removeValue(forKey: id) else { return }
+                call.timeout.cancel()
                 call.continuation.resume(returning: nil)
             }
-            apiCalls[id] = APICall(continuation: continuation, timeout: timeout)
-            webView.evaluateJavaScript("window.__tiktokSignedFetch && window.__tiktokSignedFetch('\(literal)', '\(id)')",
-                                       completionHandler: nil)
         }
     }
 
@@ -634,14 +656,20 @@ import MediaCore
     func navigate(_ url: URL) async -> Bool {
         guard let view = webView else { return false }
         pendingBodies.removeAll()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            loadContinuation = continuation
-            watchdog = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
-                guard let self else { return }
-                self.finishLoad(false)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                loadContinuation = continuation
+                watchdog = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
+                    guard let self else { return }
+                    self.finishLoad(false)
+                }
+                view.load(URLRequest(url: url))
             }
-            view.load(URLRequest(url: url))
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finishLoad(false)
+            }
         }
     }
 
@@ -739,24 +767,36 @@ import MediaCore
             let entry = pendingBodies.remove(at: index)
             return Data(entry.body.utf8)
         }
-        let body: String? = await withCheckedContinuation { continuation in
-            waiting = continuation
-            waitingRoute = route
-            timeoutTask = Task { [weak self] in
-                var waited = 0
-                while waited < 20 {
-                    try? await Task.sleep(nanoseconds: 4_000_000_000)
-                    if Task.isCancelled { return }
-                    guard let self, self.waiting != nil else { return }
-                    self.scroll()
-                    waited += 4
+        let body: String? = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                waiting = continuation
+                waitingRoute = route
+                timeoutTask = Task { [weak self] in
+                    var waited = 0
+                    while waited < 20 {
+                        try? await Task.sleep(nanoseconds: 4_000_000_000)
+                        if Task.isCancelled { return }
+                        guard let self, self.waiting != nil else { return }
+                        self.scroll()
+                        waited += 4
+                    }
+                    guard let self, let waiting = self.waiting else { return }
+                    self.waiting = nil
+                    self.timeoutTask = nil
+                    waiting.resume(returning: nil)
                 }
-                guard let self, let waiting = self.waiting else { return }
-                self.waiting = nil
-                self.timeoutTask = nil
-                waiting.resume(returning: nil)
+                scroll()
             }
-            scroll()
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.timeoutTask?.cancel()
+                self.timeoutTask = nil
+                if let waiting = self.waiting {
+                    self.waiting = nil
+                    waiting.resume(returning: nil)
+                }
+            }
         }
         timeoutTask?.cancel()
         timeoutTask = nil
@@ -770,19 +810,27 @@ import MediaCore
     func fetchMedia(_ url: URL) async -> Data? {
         guard webView != nil else { return nil }
         let id = UUID().uuidString
-        return await withCheckedContinuation { continuation in
-            let timeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(TimingPolicy.mediaTransfer))
-                guard let self, let transfer = self.mediaTransfers[id] else { return }
-                self.mediaTransfers[id] = nil
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let timeout = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(TimingPolicy.mediaTransfer))
+                    guard let self, let transfer = self.mediaTransfers[id] else { return }
+                    self.mediaTransfers[id] = nil
+                    transfer.continuation.resume(returning: nil)
+                }
+                mediaTransfers[id] = MediaTransfer(chunks: [:], continuation: continuation, timeout: timeout)
+                let literal = url.absoluteString
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "'", with: "\\'")
+                webView?.evaluateJavaScript("window.__tiktokDownload && window.__tiktokDownload('\(literal)', '\(id)')",
+                                           completionHandler: nil)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                guard let self, let transfer = self.mediaTransfers.removeValue(forKey: id) else { return }
+                transfer.timeout.cancel()
                 transfer.continuation.resume(returning: nil)
             }
-            mediaTransfers[id] = MediaTransfer(chunks: [:], continuation: continuation, timeout: timeout)
-            let literal = url.absoluteString
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "'", with: "\\'")
-            webView?.evaluateJavaScript("window.__tiktokDownload && window.__tiktokDownload('\(literal)', '\(id)')",
-                                       completionHandler: nil)
         }
     }
 
@@ -791,6 +839,8 @@ import MediaCore
         timeoutTask = nil
         watchdog?.cancel()
         watchdog = nil
+        itemListResponses = 0
+        emptyItemListResponses = 0
         for call in apiCalls.values {
             call.timeout.cancel()
             call.continuation.resume(returning: nil)
@@ -847,15 +897,6 @@ extension TikTokWebPaginator: WKNavigationDelegate {
         webView.evaluateJavaScript("navigator.userAgent",
                                    completionHandler: { [weak self] result, _ in
             self?.pageUserAgent = result as? String
-        })
-        // Pseudo du compte connecté, premier lien `@pseudo` de la page : il
-        // nomme la collection `ts/…`. Vide si la page n'en expose aucun.
-        webView.evaluateJavaScript("(function(){var a=document.querySelector('a[href*=\"/@\"]');var m=a?String(a.getAttribute('href')).match(/@([A-Za-z0-9._]{1,24})/):null;return m?m[1]:'';})();",
-                                   completionHandler: { [weak self] result, _ in
-            if let name = result as? String, !name.isEmpty {
-                self?.pageUsername = name
-                LogCenter.info(L("TikTok web : compte connecté \(name).", "TikTok web: signed-in account \(name)."))
-            }
         })
     }
 

@@ -46,16 +46,22 @@ import MediaCore
             view.frame.origin.x = -view.frame.width
             window.addSubview(view)
         }
-        let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            loadContinuation = continuation
-            watchdog = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
-                guard let self else { return }
-                self.finishLoad(false)
+        let loaded = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                loadContinuation = continuation
+                watchdog = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(TimingPolicy.webViewLoad))
+                    guard let self else { return }
+                    self.finishLoad(false)
+                }
+                view.load(URLRequest(url: url))
             }
-            view.load(URLRequest(url: url))
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finishLoad(false)
+            }
         }
-        guard loaded else {
+        guard loaded, !Task.isCancelled else {
             close()
             return nil
         }
@@ -71,19 +77,25 @@ import MediaCore
         """
         var blob = ""
         for _ in 0..<TimingPolicy.webViewBlobAttempts {
+            if Task.isCancelled { break }
             blob = await evaluateString(script) ?? ""
             if !blob.isEmpty { break }
             try? await Task.sleep(for: .seconds(TimingPolicy.webViewBlobStep))
         }
         close()
-        guard !blob.isEmpty else { return nil }
+        guard !Task.isCancelled, !blob.isEmpty else { return nil }
         return Data(blob.utf8)
     }
 
     func close() {
         watchdog?.cancel()
         watchdog = nil
-        loadContinuation = nil
+        if let loadContinuation {
+            self.loadContinuation = nil
+            loadContinuation.resume(returning: false)
+        }
+        webView?.stopLoading()
+        webView?.navigationDelegate = nil
         webView?.removeFromSuperview()
         webView = nil
     }

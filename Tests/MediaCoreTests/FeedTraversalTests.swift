@@ -138,4 +138,23 @@ final class FeedTraversalTests: XCTestCase {
         XCTAssertEqual(downloaded, ["t3_one"])
         XCTAssertTrue(events.contains { $0.contains("repeated") || $0.contains("répétée") })
     }
+
+    @MainActor func testSavedCommentsOnlyPageAdvancesUsingAfterCursor() async throws {
+        var saved = FeedCheckpoint()
+        var downloaded: [String] = []
+        let completed = try await FeedTraversal.run(
+            checkpoint: saved,
+            validCursor: { $0.hasPrefix("t3_") || $0.hasPrefix("t1_") },
+            fetchPage: { after in
+                if after == nil { return ([], "t1_comment1") }
+                if after == "t1_comment1" { return ([self.post("t3_older")], nil) }
+                return ([], nil)
+            },
+            process: { downloaded += $0.map(\.id) },
+            persist: { saved = $0 }
+        )
+        XCTAssertTrue(completed)
+        XCTAssertEqual(downloaded, ["t3_older"])
+        XCTAssertNil(saved.cursor)
+    }
 }

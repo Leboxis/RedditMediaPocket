@@ -27,19 +27,7 @@ struct SettingsRow: View {
 
     var body: some View {
         HStack(spacing: DS.space(3)) {
-            Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(DS.onSurface)
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(statusColor)
-            }
+            rowLabel
             Spacer(minLength: DS.space(3))
             if !menuItems.isEmpty {
                 Menu {
@@ -65,22 +53,37 @@ struct SettingsRow: View {
             }
         }
         .padding(.vertical, DS.space(1))
-        .contentShape(Rectangle())
-        .modify { content in
-            if let tap {
-                content.onTapGesture(perform: tap)
-            } else {
-                content
+        .opacity(enabled ? 1 : 0.45)
+        .disabled(!enabled)
+    }
+
+    @ViewBuilder private var rowLabel: some View {
+        let info = HStack(spacing: DS.space(3)) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 30, height: 30)
+                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(DS.onSurface)
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
             }
         }
-        .disabled(!enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(title) : \(status)")
-    }
-}
 
-private extension View {
-    @ViewBuilder func modify(@ViewBuilder _ transform: (Self) -> some View) -> some View {
-        transform(self)
+        if let tap {
+            Button(action: tap) { info }
+                .buttonStyle(.plain)
+        } else {
+            info
+        }
     }
 }

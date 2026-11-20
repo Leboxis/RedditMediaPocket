@@ -33,12 +33,13 @@ struct ContentView: View {
                 .tabItem { Label(L("Réglages", "Settings"), systemImage: "gearshape") }
                 .tag(3)
         }
-        .tint(DS.accent)
-        .overlay(alignment: .top) {
-            KDriveUploadBanner().padding(.top, DS.space(2))
+        .tint(DS.accentEmphasis)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            KDriveUploadBanner()
+                .padding(.top, DS.space(1))
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active { model.reload() }
+            if phase == .active { model.reloadIfFolderChanged() }
             if phase == .background { model.stop() }
         }
         .alert("Pocket", isPresented: Binding(

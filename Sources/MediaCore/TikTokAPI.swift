@@ -699,7 +699,7 @@ public enum TikTokWeb {
         let author = text(dictionary(item, "author"), "uniqueId")
             ?? text(dictionary(item, "author"), "unique_id")
         return TikTokVideoDetail(id: id, text: text(item, "desc") ?? "",
-                                 publishedAt: parseDate(text(item, "createTime")),
+                                 publishedAt: parseDate(item["createTime"]),
                                  author: author, media: media)
     }
 
@@ -839,7 +839,7 @@ public enum TikTokWeb {
             let media = mediaList(item)
             guard !media.isEmpty else { continue }
             posts.append(TikTokPost(id: id, text: text(item, "desc") ?? "",
-                                    publishedAt: parseDate(text(item, "createTime")), media: media))
+                                    publishedAt: parseDate(item["createTime"]), media: media))
         }
         return posts
     }
@@ -993,7 +993,18 @@ public enum TikTokWeb {
         return (node[key] as? NSNumber)?.intValue ?? 0
     }
 
-    /// `createTime` de TikTok est un secondaire Unix, en chaîne ou en nombre.
+    /// `createTime` de TikTok est un horodatage Unix en secondes, en chaîne ou en nombre.
+    static func parseDate(_ value: Any?) -> Date? {
+        if let text = value as? String {
+            return parseDate(text)
+        }
+        if let number = value as? NSNumber {
+            let seconds = number.doubleValue
+            return seconds > 0 ? Date(timeIntervalSince1970: seconds) : nil
+        }
+        return nil
+    }
+
     static func parseDate(_ text: String?) -> Date? {
         guard let text, let seconds = Double(text), seconds > 0 else { return nil }
         return Date(timeIntervalSince1970: seconds)

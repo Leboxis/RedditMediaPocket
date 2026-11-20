@@ -20,6 +20,7 @@ import MediaCore
     @Published private(set) var apiAccepted = false
     @Published private(set) var apiRejected = false
     private var credentialValues: [String] = []
+    private var cachedCookies: [HTTPCookie] = []
     @Published private(set) var clearing = false
     /// Cache court du jeton CSRF : chaque page GraphQL relisait tous les
     /// cookies WebKit, un aller-retour asynchrone à chaque page. X renouvelle
@@ -54,6 +55,7 @@ import MediaCore
     /// chaque appel : un jeton renouvelé est donc déjà pris en compte.
     func refresh() async {
         let cookies = await allCookies()
+        cachedCookies = cookies
         let identity = cookies.filter { $0.name == "auth_token" }
             .map { "\($0.domain)|\($0.path)|\($0.value)" }.sorted()
         let ready = !clearing && XTwitterCookiePolicy.hasLoginCookie(cookies: cookies)
@@ -96,8 +98,8 @@ import MediaCore
         if let csrfCache, Date().timeIntervalSince(csrfCache.date) < 30 {
             return csrfCache.value
         }
-        let cookies = await allCookies()
-        guard let token = XTwitterCookiePolicy.csrfToken(cookies: cookies), !token.isEmpty else {
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
+        guard let token = XTwitterCookiePolicy.csrfToken(cookies: cachedCookies), !token.isEmpty else {
             return nil
         }
         csrfCache = (token, Date())
@@ -108,6 +110,7 @@ import MediaCore
     /// peut-être périmé, le prochain appel doit relire les cookies.
     func invalidateCSRF() {
         csrfCache = nil
+        cachedCookies = []
     }
 
     /// En-tête `Cookie` pour les requêtes API. Le CDN média en est exclu par
@@ -115,9 +118,9 @@ import MediaCore
     /// le jeton de session.
     func cookieHeader(for url: URL) async -> String? {
         guard !clearing, XTwitterCookiePolicy.allows(url) else { return nil }
-        let cookies = await allCookies()
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
         guard !clearing else { return nil }
-        return XTwitterCookiePolicy.header(cookies: cookies, for: url)
+        return XTwitterCookiePolicy.header(cookies: cachedCookies, for: url)
     }
 
     func logout() async {
@@ -127,7 +130,7 @@ import MediaCore
         }
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
-        credentialValues = []; clearing = false
+        credentialValues = []; cachedCookies = []; clearing = false
         csrfCache = nil
     }
 }
