@@ -12,6 +12,15 @@ import Foundation
 /// et `Sec-Fetch-Mode: cors` sont ceux d'une requête XHR, et le `Referer`
 /// pointe la page du subreddit ou du profil, sur le même hôte que l'appel.
 public enum RedditListingHeaders {
+    /// Vrai pour un listing JSON de subreddit (`/r/<sub>/<tri>.json`) : c'est
+    /// la seule forme refusée par Reddit avec la session, même depuis
+    /// `old.reddit.com` et avec les en-têtes du site.
+    public static func isSubredditListing(_ url: URL) -> Bool {
+        guard RedditCookiePolicy.allows(url), url.path.hasSuffix(".json") else { return false }
+        let segments = url.path.split(separator: "/").filter { !$0.isEmpty }.map(String.init)
+        return segments.first == "r" && segments.count >= 2
+    }
+
     public static func forListing(_ url: URL) -> [String: String] {
         guard RedditCookiePolicy.allows(url), url.path.hasSuffix(".json") else { return [:] }
         var headers: [String: String] = [

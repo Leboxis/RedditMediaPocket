@@ -59,4 +59,21 @@ final class RedditListingHeadersTests: XCTestCase {
                            "https://www.reddit.com/r/pics/")
         }
     }
+
+    /// Le repli navigateur ne s'applique qu'aux listings de subreddit : les
+    /// profils et les sauvegardes passent déjà par URLSession.
+    func testSubredditClassification() {
+        XCTAssertTrue(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://www.reddit.com/r/pics/new.json?limit=100")!))
+        XCTAssertTrue(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://old.reddit.com/r/earth/top.json?t=month")!))
+        XCTAssertFalse(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://www.reddit.com/user/snoowiiz/submitted.json")!))
+        XCTAssertFalse(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://www.reddit.com/r/pics/new.rss")!))
+        XCTAssertFalse(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://www.reddit.com/comments/abc123.json")!))
+        XCTAssertFalse(RedditListingHeaders.isSubredditListing(
+            URL(string: "https://example.com/r/pics/new.json")!))
+    }
 }

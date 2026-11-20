@@ -159,7 +159,10 @@ import MediaCore
             // de subreddit (`/r/<sub>/<tri>.json`) alors que les listings
             // d'utilisateur passent. Dans les deux cas, une seule nouvelle
             // tentative est faite sur `old.reddit.com` (qui ne boucle pas).
-            guard let fallback = RedditFeedHosts.fallback(from: url, status: code) else { throw NetworkError.refused(code) }
+            guard let fallback = RedditFeedHosts.fallback(from: url, status: code) else {
+                if let data = await redditBrowserFallback(url) { return (data, [:]) }
+                throw NetworkError.refused(code)
+            }
             LogCenter.info(L("Listing Reddit refusé (HTTP \(code)) sur \(LogDiagnostics.requestSummary(url)) — nouvel essai sur \(LogDiagnostics.requestSummary(fallback)).",
                              "Reddit listing refused (HTTP \(code)) on \(LogDiagnostics.requestSummary(url)) — retrying on \(LogDiagnostics.requestSummary(fallback))."))
             do {
@@ -170,9 +173,44 @@ import MediaCore
             } catch {
                 LogCenter.err(L("Repli \(fallback.host ?? "") refusé : \(error.localizedDescription)",
                                 "Fallback \(fallback.host ?? "") refused: \(error.localizedDescription)"))
+                if let data = await redditBrowserFallback(url) { return (data, [:]) }
                 throw NetworkError.refused(code)
             }
         }
+    }
+
+    /// Dernier recours des listings `/r/<sub>/<tri>.json` : ni `www`, ni
+    /// `old.reddit.com` ne les servent à `URLSession`, même avec la session.
+    /// Un `fetch` depuis une WKWebView connectée au store Reddit porte
+    /// l'empreinte du navigateur et doit passer là où HTTP échoue.
+    private func redditBrowserFallback(_ url: URL) async -> Data? {
+        guard RedditListingHeaders.isSubredditListing(url) else { return nil }
+        let segments = url.path.split(separator: "/").filter { !$0.isEmpty }.map(String.init)
+        guard segments.count >= 2 else { return nil }
+        LogCenter.info(L("Subreddit : essai depuis le navigateur intégré (session Reddit)…",
+                         "Subreddit: retrying from the embedded browser (Reddit session)…"))
+        let fetcher = RedditWebFetcher()
+        guard await fetcher.start(subreddit: segments[1]) else {
+            LogCenter.err(L("Subreddit : page du subreddit non chargée dans le navigateur intégré.",
+                            "Subreddit: subreddit page did not load in the embedded browser."))
+            fetcher.close()
+            return nil
+        }
+        defer { fetcher.close() }
+        guard let response = await fetcher.fetch(url) else {
+            LogCenter.err(L("Subreddit : le navigateur intégré n'a pas répondu.",
+                            "Subreddit: embedded browser did not answer."))
+            return nil
+        }
+        guard response.status == 200, !response.body.isEmpty,
+              let data = response.body.data(using: .utf8) else {
+            LogCenter.err(L("Subreddit : navigateur intégré → HTTP \(response.status), \(response.body.count) octets.",
+                            "Subreddit: embedded browser → HTTP \(response.status), \(response.body.count) bytes."))
+            return nil
+        }
+        LogCenter.info(L("Subreddit : listing servi par le navigateur intégré (\(data.count) octets).",
+                         "Subreddit: listing served by the embedded browser (\(data.count) bytes)."))
+        return data
     }
 
     private func fetchOnce(_ url: URL, bearer: String?, headers: [String: String]?,
