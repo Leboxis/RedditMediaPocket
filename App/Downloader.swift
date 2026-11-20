@@ -548,6 +548,9 @@ extension Notification.Name {
         }
         if activeUser == nil { activeUser = liveCollections.first?.id ?? collections.first?.id }
         if let current = collections.first(where: { $0.id == activeUser }) { display(current) }
+        // Champ de saisie vide au lancement : le placeholder reprend la main,
+        // la collection active reste sélectionnée (pastille + type de source).
+        username = ""
         reload()
     }
 
@@ -623,6 +626,10 @@ extension Notification.Name {
                 collection.archived = false
                 return collection
             }
+            // Un id canonique n'existe qu'une fois (ex. deux collections
+            // `ttv/videos` d'avant le dossier global affichaient deux pastilles).
+            var seenIDs = Set<String>()
+            collections = collections.filter { seenIDs.insert($0.id).inserted }
             if saved.contains(where: \.archived) { saveCollections() }
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
@@ -686,10 +693,13 @@ extension Notification.Name {
                 collections.append(UserCollection(name: model, isXFetish: true))
             } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTwitter: true))
-            } else if folder.hasPrefix("ttv."), !folder.dropFirst(4).isEmpty {
-                // Vidéo TikTok isolée : la clé de dossier porte l'identifiant
-                // stable de la publication (chiffres, ou code de partage).
-                collections.append(UserCollection(name: String(folder.dropFirst(4)), isTikTokVideo: true))
+            } else if folder.hasPrefix("ttv."), folder != "ttv." {
+                // Vidéos TikTok isolées : dossier global unique `ttv.videos`,
+                // une seule collection `ttv/videos` (les anciens dossiers
+                // `ttv.<id>` par lien se fondent dedans, sans doublon).
+                if !collections.contains(where: { $0.id == "ttv/videos" }) {
+                    collections.append(UserCollection(name: "videos", isTikTokVideo: true))
+                }
             } else if folder.hasPrefix("tk."), let handle = try? TikTokAPI.username(String(folder.dropFirst(3))) {
                 collections.append(UserCollection(name: handle, isTikTok: true))
             } else if folder.hasPrefix("ts."), !folder.dropFirst(3).isEmpty {
@@ -702,6 +712,9 @@ extension Notification.Name {
                 collections.append(UserCollection(name: folder))
             }
         }
+        // Dédoublonnage par id canonique après migration des dossiers.
+        var seen = Set<String>()
+        collections = collections.filter { seen.insert($0.id).inserted }
         saveCollections()
     }
 

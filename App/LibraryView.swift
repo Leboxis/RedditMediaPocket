@@ -133,7 +133,7 @@ struct LibraryView: View {
             if !model.collections.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: DS.space(2)) {
-                        ForEach(model.collections.sorted { $0.displayName < $1.displayName }) { collection in
+                        ForEach(model.collections.sorted { $0.displayName < $1.displayName }, id: \.id) { collection in
                             userChip(collection)
                         }
                     }
