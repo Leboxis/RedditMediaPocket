@@ -29,6 +29,14 @@ jobs:
           brew install xcodegen
           python3 scripts/make_icon.py
           xcodegen generate
+      - name: Tests unitaires iOS sur simulateur
+        run: |
+          DEST=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9A-Za-z ]+' | sed 's/[[:space:]]*$//')
+          echo "Simulateur retenu : $DEST"
+          xcodebuild test -project RedditMediaPocket.xcodeproj -scheme RedditMediaPocket \
+            -destination "platform=iOS Simulator,name=$DEST" \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
+            -only-testing:RedditMediaPocketTests
       - name: Build unsigned iPhone app
         env:
           BUILD_NUMBER: ${{ github.run_number }}
@@ -70,3 +78,22 @@ jobs:
               --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
               --notes-file RELEASE_NOTES.md --latest
           fi
+
+  backend:
+    name: Vérifier le backend Cloudflare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Installer les dépendances
+        run: npm ci
+      - name: Vérifier le typage du Worker
+        run: npm run typecheck

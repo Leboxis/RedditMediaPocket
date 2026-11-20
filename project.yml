@@ -35,3 +35,14 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Ajouter les médias téléchargés à ta photothèque.
         CODE_SIGNING_ALLOWED: NO
+  RedditMediaPocketTests:
+    type: unitTestBundle
+    platform: iOS
+    sources: [Tests/AppTests]
+    dependencies:
+      - target: RedditMediaPocket
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.leboxis.RedditMediaPocketTests
+        SWIFT_VERSION: '5.0'
+        CODE_SIGNING_ALLOWED: NO
