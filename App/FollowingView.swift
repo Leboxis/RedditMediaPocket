@@ -48,52 +48,28 @@ struct FollowingView: View {
         NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
+    private var hasSyncKey: Bool {
+        KeychainStore.get() != nil
+    }
+
     var body: some View {
         let markedNames = downloadedUsernames
         NavigationStack {
             VStack(spacing: 0) {
-                if !session.hasSession {
-                    VStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle.badge.questionmark")
-                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
-                        Text(L("Connecte-toi à Reddit dans les Réglages pour voir les comptes que tu suis.",
-                               "Sign in to Reddit in Settings to see the accounts you follow."))
-                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(DS.space(6))
-                } else if loading || (friends == nil && errorMessage == nil) {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text(L("Chargement des suivis…", "Loading followed accounts…"))
-                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage {
-                    VStack(spacing: DS.space(3)) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(DS.error)
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .multilineTextAlignment(.center)
-                        Button(L("Réessayer", "Retry")) { retryCount += 1 }
-                            .buttonStyle(DSPrimaryButtonStyle())
-                    }
-                    .padding(DS.space(6))
-                } else if let friends {
-                    if friends.isEmpty {
-                        VStack(spacing: 10) {
-                            Image(systemName: "person.2")
-                                .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
-                            Text(L("Aucun compte suivi (ou liste privée indisponible).",
-                                   "No followed accounts (or the list is unavailable)."))
-                                .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                                .multilineTextAlignment(.center)
+                if let friends, !friends.isEmpty {
+                    List {
+                        if !session.hasSession {
+                            Section {
+                                Label(
+                                    L("Non connecté à Reddit — liste synchronisée affichée.",
+                                      "Not signed in to Reddit — showing synced list."),
+                                    systemImage: "icloud"
+                                )
+                                .font(.footnote)
+                                .foregroundStyle(DS.onSurfaceMuted)
+                            }
                         }
-                        .padding(DS.space(6))
-                    } else {
-                        List {
+                        Section {
                             ForEach(friends, id: \.self) { name in
                                 let isDownloaded = markedNames.contains(name.lowercased())
                                 HStack(spacing: 10) {
@@ -159,8 +135,54 @@ struct FollowingView: View {
                                 }
                             }
                         }
-                        .listStyle(.insetGrouped)
                     }
+                    .listStyle(.insetGrouped)
+                    .refreshable { await rafraichir() }
+                } else if loading || (session.hasSession && friends == nil && errorMessage == nil) {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text(L("Chargement des suivis…", "Loading followed accounts…"))
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let errorMessage {
+                    VStack(spacing: DS.space(3)) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 36)).foregroundStyle(DS.error)
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
+                        Button(L("Réessayer", "Retry")) { retryCount += 1 }
+                            .buttonStyle(DSPrimaryButtonStyle())
+                    }
+                    .padding(DS.space(6))
+                } else if !session.hasSession {
+                    VStack(spacing: 12) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                        Text(L("Connecte-toi à Reddit dans les Réglages ou restaure tes suivis via la synchronisation Cloudflare.",
+                               "Sign in to Reddit in Settings or restore your followed accounts via Cloudflare sync."))
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
+                        if hasSyncKey {
+                            Button(L("Synchroniser depuis le serveur", "Sync from server")) {
+                                retryCount += 1
+                            }
+                            .buttonStyle(DSPrimaryButtonStyle())
+                        }
+                    }
+                    .padding(DS.space(6))
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "person.2")
+                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                        Text(L("Aucun compte suivi (ou liste privée indisponible).",
+                               "No followed accounts (or the list is unavailable)."))
+                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(DS.space(6))
                 }
             }
             .navigationTitle(L("Suivis", "Following"))
@@ -188,11 +210,27 @@ struct FollowingView: View {
         .errorAlert(kDriveError ?? errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
             etats = SuiviStore.charger()
-            if session.hasSession, friends == nil { await load() }
+            let connus = SuiviStore.pseudosConnus()
+            if !connus.isEmpty {
+                friends = connus
+            }
+            if session.hasSession {
+                await load()
+            } else {
+                errorMessage = nil
+                if (connus.isEmpty || retryCount > 0), hasSyncKey {
+                    await restaurerDepuisServeur()
+                } else {
+                    friends = connus
+                }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .pocketDonneesRestaurees)) { _ in
-            // Une restauration vient d'écrire les états : on relit les dates.
+            // Une restauration vient d'écrire les suivis et leurs états : on relit tout.
             etats = SuiviStore.charger()
+            if !session.hasSession || (friends ?? []).isEmpty {
+                friends = SuiviStore.pseudosConnus()
+            }
         }
     }
 
@@ -204,9 +242,27 @@ struct FollowingView: View {
             let result = try await model.followedUsers()
             try Task.checkCancellation()
             friends = result
+            SuiviStore.enregistrerListe(result)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor private func restaurerDepuisServeur() async {
+        loading = true
+        defer { loading = false }
+        errorMessage = nil
+        await SyncService.shared.restaurer()
+        etats = SuiviStore.charger()
+        friends = SuiviStore.pseudosConnus()
+    }
+
+    @MainActor private func rafraichir() async {
+        if session.hasSession {
+            await load()
+        } else {
+            await restaurerDepuisServeur()
         }
     }
 

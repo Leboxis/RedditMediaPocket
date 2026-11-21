@@ -1,8 +1,8 @@
 -- Schéma initial de la base D1 « ma-base ».
 -- Une seule catégorie est stockée : `suivi`.
---   suivi -> état des comptes Reddit suivis (nom = "suivis") :
---            coche « déjà téléchargé », date du dernier téléchargement complet,
---            date du dernier upload. Aucune session, aucun jeton, aucun média.
+--   suivi -> liste complète des comptes Reddit suivis et leur statut (nom = "suivis") :
+--            pseudos suivis, coche « déjà téléchargé », date du dernier téléchargement
+--            complet et date du dernier upload. Aucune session, aucun jeton, aucun média.
 -- Le format exact du champ `data` est décrit côté iOS dans App/Models/PocketSnapshot.swift.
 
 CREATE TABLE IF NOT EXISTS items (

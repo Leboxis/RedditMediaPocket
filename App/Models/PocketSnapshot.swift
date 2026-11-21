@@ -17,22 +17,70 @@ struct CompteSuiviEtat: Codable, Sendable, Equatable {
     var dernierUpload: Date?
 }
 
-/// Stockage local des états de suivi, séparé de la liste des pseudos marqués.
+/// Stockage local des suivis Reddit et de leurs états, séparé des coches historiques.
 enum SuiviStore {
     static let cle = "following.etats"
+    static let cleListe = "following.liste"
+    static let cleMarques = "following.downloadedUsernames"
 
-    static func charger() -> [String: CompteSuiviEtat] {
-        guard let donnees = UserDefaults.standard.data(forKey: cle),
+    static func charger(defaults: UserDefaults = .standard) -> [String: CompteSuiviEtat] {
+        guard let donnees = defaults.data(forKey: cle),
               let etats = try? JSONDecoder().decode([String: CompteSuiviEtat].self, from: donnees) else {
             return [:]
         }
         return etats
     }
 
-    static func enregistrer(_ etats: [String: CompteSuiviEtat]) {
+    static func enregistrer(_ etats: [String: CompteSuiviEtat], defaults: UserDefaults = .standard, notifier: Bool = true) {
         guard let donnees = try? JSONEncoder().encode(etats) else { return }
-        UserDefaults.standard.set(donnees, forKey: cle)
-        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
+        defaults.set(donnees, forKey: cle)
+        if notifier {
+            NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
+        }
+    }
+
+    /// Nettoie et dédoublonne les pseudos sans casser leur casse d'origine ni leur ordre.
+    static func normaliserListe(_ pseudos: [String]) -> [String] {
+        var vus = Set<String>()
+        var resultat: [String] = []
+        for brut in pseudos {
+            let propre = brut.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !propre.isEmpty else { continue }
+            guard vus.insert(propre.lowercased()).inserted else { continue }
+            resultat.append(propre)
+        }
+        return resultat
+    }
+
+    /// Liste synchronisée des comptes Reddit suivis (casse d'origine conservée).
+    static func chargerListe(defaults: UserDefaults = .standard) -> [String] {
+        guard let donnees = defaults.data(forKey: cleListe),
+              let pseudos = try? JSONDecoder().decode([String].self, from: donnees) else {
+            return []
+        }
+        return normaliserListe(pseudos)
+    }
+
+    /// Enregistre la liste complète des comptes suivis et déclenche la synchro si elle change.
+    static func enregistrerListe(_ pseudos: [String], defaults: UserDefaults = .standard, notifier: Bool = true) {
+        let propre = normaliserListe(pseudos)
+        guard propre != chargerListe(defaults: defaults) else { return }
+        guard let donnees = try? JSONEncoder().encode(propre) else { return }
+        defaults.set(donnees, forKey: cleListe)
+        if notifier {
+            NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
+        }
+    }
+
+    /// Retourne les suivis connus hors connexion Reddit : la liste synchronisée si présente,
+    /// sinon un repli sur les comptes ayant déjà un statut ou une coche (anciennes sauvegardes).
+    static func pseudosConnus(defaults: UserDefaults = .standard) -> [String] {
+        let liste = chargerListe(defaults: defaults)
+        if !liste.isEmpty { return liste }
+        let etats = charger(defaults: defaults)
+        let donneesMarques = defaults.data(forKey: cleMarques) ?? Data()
+        let marques = (try? JSONDecoder().decode([String].self, from: donneesMarques)) ?? []
+        return Set(etats.keys).union(marques).sorted()
     }
 
     /// N'accepte que les collections d'utilisateur Reddit (`u/pseudo`).
@@ -59,28 +107,35 @@ enum SuiviStore {
     }
 }
 
-/// La seule copie envoyée au serveur : les comptes suivis Reddit et leurs dates.
+/// La seule copie envoyée au serveur : tous les comptes suivis Reddit et leurs statuts.
 struct PocketSnapshot: Codable {
+    /// Liste complète des comptes Reddit suivis (casse d'origine conservée).
+    var suivis: [String]
+    /// Statut (coche, dernier téléchargement, dernier upload) indexé par pseudo en minuscules.
     var comptes: [String: CompteSuiviEtat]
 
-    private enum CodingKeys: String, CodingKey { case comptes }
+    private enum CodingKeys: String, CodingKey { case suivis, comptes }
 
-    init(comptes: [String: CompteSuiviEtat] = [:]) {
+    init(suivis: [String] = [], comptes: [String: CompteSuiviEtat] = [:]) {
+        self.suivis = SuiviStore.normaliserListe(suivis)
         self.comptes = comptes
     }
 
-    /// Tolère une ancienne copie qui ne contenait pas ce champ.
+    /// Tolère une ancienne copie qui ne contenait pas l'un de ces champs.
     init(from decoder: Decoder) throws {
         let conteneur = try decoder.container(keyedBy: CodingKeys.self)
+        let bruts = try conteneur.decodeIfPresent([String].self, forKey: .suivis) ?? []
+        suivis = SuiviStore.normaliserListe(bruts)
         comptes = try conteneur.decodeIfPresent([String: CompteSuiviEtat].self, forKey: .comptes) ?? [:]
     }
 
     @MainActor
-    static func capturer() -> PocketSnapshot {
-        var etats = SuiviStore.charger()
+    static func capturer(defaults: UserDefaults = .standard) -> PocketSnapshot {
+        let suivis = SuiviStore.chargerListe(defaults: defaults)
+        var etats = SuiviStore.charger(defaults: defaults)
 
         // La coche vit encore dans la clé historique `following.downloadedUsernames`.
-        let donneesMarques = UserDefaults.standard.data(forKey: "following.downloadedUsernames") ?? Data()
+        let donneesMarques = defaults.data(forKey: SuiviStore.cleMarques) ?? Data()
         let marques = Set((try? JSONDecoder().decode([String].self, from: donneesMarques)) ?? [])
 
         for (pseudo, etat) in etats {
@@ -91,15 +146,16 @@ struct PocketSnapshot: Codable {
         for pseudo in marques where etats[pseudo] == nil {
             etats[pseudo] = CompteSuiviEtat(marque: true)
         }
-        return PocketSnapshot(comptes: etats)
+        return PocketSnapshot(suivis: suivis, comptes: etats)
     }
 
     @MainActor
-    func appliquer() {
-        SuiviStore.enregistrer(comptes)
+    func appliquer(defaults: UserDefaults = .standard) {
+        SuiviStore.enregistrerListe(suivis, defaults: defaults, notifier: false)
+        SuiviStore.enregistrer(comptes, defaults: defaults, notifier: false)
         let marques = comptes.filter { $0.value.marque }.keys.sorted()
         if let donnees = try? JSONEncoder().encode(marques) {
-            UserDefaults.standard.set(donnees, forKey: "following.downloadedUsernames")
+            defaults.set(donnees, forKey: SuiviStore.cleMarques)
         }
     }
 

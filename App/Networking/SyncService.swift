@@ -31,13 +31,6 @@ final class SyncService: ObservableObject {
     private func observerLesChangements() {
         observateurs.append(
             NotificationCenter.default.addObserver(
-                forName: UserDefaults.didChangeNotification, object: nil, queue: .main
-            ) { [weak self] _ in
-                Task { @MainActor in self?.planifierSynchronisation() }
-            }
-        )
-        observateurs.append(
-            NotificationCenter.default.addObserver(
                 forName: .pocketDonneesDidChange, object: nil, queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in self?.planifierSynchronisation() }

@@ -185,13 +185,21 @@ private struct DownloadSettings: View {
                             .foregroundStyle(.secondary)
                     }
                     Button(L("Synchroniser maintenant", "Sync now")) {
-                        Task { await synchronisation.synchroniser() }
+                        Task {
+                            if reddit.hasSession, let suivis = try? await model.followedUsers() {
+                                SuiviStore.enregistrerListe(suivis, notifier: false)
+                            }
+                            await synchronisation.synchroniser()
+                        }
+                    }
+                    Button(L("Restaurer depuis le serveur", "Restore from server")) {
+                        Task { await synchronisation.restaurer() }
                     }
                     Button(L("Clé API", "API key")) { clePresentee = true }
                 } header: {
                     Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
                 } footer: {
-                    Text(L("Seul l'état des comptes Reddit suivis est envoyé : la coche « déjà téléchargé », la date du dernier téléchargement complet et celle du dernier upload. Ces informations reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "Only the state of followed Reddit accounts is sent: the “already downloaded” checkmark, the last full download date and the last upload date. This data comes back after a reinstall. No session, token or media leaves the iPhone."))
+                    Text(L("La liste des comptes Reddit suivis et leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion à Reddit et reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "The list of followed Reddit accounts and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when not signed in to Reddit and come back after a reinstall. No session, token or media leaves the iPhone."))
                 }
             }
             .sheet(isPresented: $clePresentee) {
