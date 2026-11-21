@@ -4,6 +4,8 @@ import MediaCore
 /// Notification envoyée quand un journal change, pour déclencher la synchronisation.
 extension Notification.Name {
     static let pocketDonneesDidChange = Notification.Name("pocketDonneesDidChange")
+    /// Envoyée quand une copie distante vient d'être appliquée, pour recharger l'interface.
+    static let pocketDonneesRestaurees = Notification.Name("pocketDonneesRestaurees")
 }
 
 /// Une ligne du journal de bord telle qu'elle est envoyée au serveur.

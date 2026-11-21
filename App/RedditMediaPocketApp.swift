@@ -38,6 +38,9 @@ struct ContentView: View {
             await SyncService.shared.demarrer()
             model.appliquerDonneesDuServeur()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pocketDonneesRestaurees)) { _ in
+            model.appliquerDonneesDuServeur()
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             KDriveUploadBanner()
                 .padding(.top, DS.space(1))

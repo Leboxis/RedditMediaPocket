@@ -102,6 +102,7 @@ final class SyncService: ObservableObject {
             copie.appliquer()
             etat = L("Données restaurées", "Data restored")
             derniereSynchronisation = Date()
+            NotificationCenter.default.post(name: .pocketDonneesRestaurees, object: nil)
         } catch {
             etat = L("Restauration impossible", "Restore failed")
         }

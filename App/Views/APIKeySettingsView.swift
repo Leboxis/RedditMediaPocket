@@ -58,6 +58,8 @@ struct APIKeySettingsView: View {
             message = L("Clé enregistrée avec succès.", "Key saved successfully.")
             cle = ""
             dismiss()
+            // Après réinstallation, la clé a été effacée : on relance la restauration.
+            Task { await SyncService.shared.restaurer() }
         } catch {
             message = L("Enregistrement impossible : \(error.localizedDescription)", "Could not save: \(error.localizedDescription)")
         }
