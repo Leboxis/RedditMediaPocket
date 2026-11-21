@@ -21,11 +21,12 @@ struct CompteSuiviEtat: Codable, Sendable, Equatable {
 enum PlateformeSuivi: String, CaseIterable, Identifiable, Sendable {
     case reddit
     case x
+    case tiktok
 
     var id: String { rawValue }
 }
 
-/// Stockage local des suivis (Reddit et X) et de leurs états, séparé des coches historiques.
+/// Stockage local des suivis (Reddit, X et TikTok) et de leurs états, séparé des coches historiques.
 enum SuiviStore {
     static let cle = "following.etats"
     static let cleListe = "following.liste"
@@ -35,16 +36,32 @@ enum SuiviStore {
     static let cleListeX = "following.x.liste"
     static let cleMarquesX = "following.x.downloadedUsernames"
 
+    static let cleEtatsTikTok = "following.tiktok.etats"
+    static let cleListeTikTok = "following.tiktok.liste"
+    static let cleMarquesTikTok = "following.tiktok.downloadedUsernames"
+
     private static func cleEtats(pour plateforme: PlateformeSuivi) -> String {
-        plateforme == .reddit ? cle : cleEtatsX
+        switch plateforme {
+        case .reddit: return cle
+        case .x: return cleEtatsX
+        case .tiktok: return cleEtatsTikTok
+        }
     }
 
     private static func cleListe(pour plateforme: PlateformeSuivi) -> String {
-        plateforme == .reddit ? cleListe : cleListeX
+        switch plateforme {
+        case .reddit: return cleListe
+        case .x: return cleListeX
+        case .tiktok: return cleListeTikTok
+        }
     }
 
     private static func cleMarques(pour plateforme: PlateformeSuivi) -> String {
-        plateforme == .reddit ? cleMarques : cleMarquesX
+        switch plateforme {
+        case .reddit: return cleMarques
+        case .x: return cleMarquesX
+        case .tiktok: return cleMarquesTikTok
+        }
     }
 
     static func charger(plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard) -> [String: CompteSuiviEtat] {
@@ -99,20 +116,50 @@ enum SuiviStore {
     /// Ajoute manuellement un pseudo X (accepte `@pseudo`, `pseudo`, `tw/pseudo` ou une URL x.com).
     @discardableResult
     static func ajouterSuiviX(_ saisie: String, defaults: UserDefaults = .standard, notifier: Bool = true) throws -> String {
-        let pseudo = try XTwitterAPI.username(saisie)
-        var liste = chargerListe(plateforme: .x, defaults: defaults)
+        try ajouterSuiviManuel(saisie, plateforme: .x, defaults: defaults, notifier: notifier)
+    }
+
+    /// Ajoute manuellement un pseudo TikTok (accepte `@pseudo`, `pseudo`, `tt/pseudo` ou une URL tiktok.com/@pseudo).
+    @discardableResult
+    static func ajouterSuiviTikTok(_ saisie: String, defaults: UserDefaults = .standard, notifier: Bool = true) throws -> String {
+        try ajouterSuiviManuel(saisie, plateforme: .tiktok, defaults: defaults, notifier: notifier)
+    }
+
+    /// Ajoute manuellement un pseudo X ou TikTok en validant son format.
+    @discardableResult
+    static func ajouterSuiviManuel(_ saisie: String, plateforme: PlateformeSuivi, defaults: UserDefaults = .standard, notifier: Bool = true) throws -> String {
+        let pseudo: String
+        switch plateforme {
+        case .x:
+            pseudo = try XTwitterAPI.username(saisie)
+        case .tiktok:
+            pseudo = try TikTokAPI.username(saisie)
+        case .reddit:
+            pseudo = try MediaExtractor.username(saisie)
+        }
+        var liste = chargerListe(plateforme: plateforme, defaults: defaults)
         if !liste.contains(where: { $0.caseInsensitiveCompare(pseudo) == .orderedSame }) {
             liste.append(pseudo)
-            enregistrerListe(liste, plateforme: .x, defaults: defaults, notifier: notifier)
+            enregistrerListe(liste, plateforme: plateforme, defaults: defaults, notifier: notifier)
         }
         return pseudo
     }
 
     /// Retire un pseudo de la liste manuelle X (sans effacer son historique si jamais il est réajouté).
     static func supprimerSuiviX(_ pseudo: String, defaults: UserDefaults = .standard, notifier: Bool = true) {
-        let liste = chargerListe(plateforme: .x, defaults: defaults)
+        supprimerSuiviManuel(pseudo, plateforme: .x, defaults: defaults, notifier: notifier)
+    }
+
+    /// Retire un pseudo de la liste manuelle TikTok.
+    static func supprimerSuiviTikTok(_ pseudo: String, defaults: UserDefaults = .standard, notifier: Bool = true) {
+        supprimerSuiviManuel(pseudo, plateforme: .tiktok, defaults: defaults, notifier: notifier)
+    }
+
+    /// Retire un pseudo d'une liste manuelle (X ou TikTok).
+    static func supprimerSuiviManuel(_ pseudo: String, plateforme: PlateformeSuivi, defaults: UserDefaults = .standard, notifier: Bool = true) {
+        let liste = chargerListe(plateforme: plateforme, defaults: defaults)
             .filter { $0.caseInsensitiveCompare(pseudo) != .orderedSame }
-        enregistrerListe(liste, plateforme: .x, defaults: defaults, notifier: notifier)
+        enregistrerListe(liste, plateforme: plateforme, defaults: defaults, notifier: notifier)
     }
 
     /// Retourne les suivis connus hors connexion : la liste synchronisée si présente,
@@ -138,7 +185,7 @@ enum SuiviStore {
         }
     }
 
-    /// Reconnaît les collections d'utilisateur Reddit (`u/pseudo`) et X (`tw/pseudo`).
+    /// Reconnaît les collections d'utilisateur Reddit (`u/pseudo`), X (`tw/pseudo`) et TikTok (`tt/pseudo`).
     static func identifiantCollection(_ libelle: String) -> (plateforme: PlateformeSuivi, pseudo: String)? {
         if libelle.hasPrefix("u/") {
             let pseudo = String(libelle.dropFirst(2)).lowercased()
@@ -147,6 +194,10 @@ enum SuiviStore {
         if libelle.hasPrefix("tw/") {
             let pseudo = String(libelle.dropFirst(3)).lowercased()
             return pseudo.isEmpty ? nil : (.x, pseudo)
+        }
+        if libelle.hasPrefix("tt/") {
+            let pseudo = String(libelle.dropFirst(3)).lowercased()
+            return pseudo.isEmpty ? nil : (.tiktok, pseudo)
         }
         return nil
     }
@@ -178,7 +229,7 @@ enum SuiviStore {
     }
 }
 
-/// La seule copie envoyée au serveur : tous les comptes suivis (Reddit et X) et leurs statuts.
+/// La seule copie envoyée au serveur : tous les comptes suivis (Reddit, X et TikTok) et leurs statuts.
 struct PocketSnapshot: Codable {
     /// Liste complète des comptes Reddit suivis (casse d'origine conservée).
     var suivis: [String]
@@ -188,19 +239,29 @@ struct PocketSnapshot: Codable {
     var suivisX: [String]
     /// Statut X (coche, dernier téléchargement, dernier upload) indexé par pseudo en minuscules.
     var comptesX: [String: CompteSuiviEtat]
+    /// Liste manuelle des comptes TikTok suivis (casse d'origine conservée).
+    var suivisTikTok: [String]
+    /// Statut TikTok (coche, dernier téléchargement, dernier upload) indexé par pseudo en minuscules.
+    var comptesTikTok: [String: CompteSuiviEtat]
 
-    private enum CodingKeys: String, CodingKey { case suivis, comptes, suivisX, comptesX }
+    private enum CodingKeys: String, CodingKey {
+        case suivis, comptes, suivisX, comptesX, suivisTikTok, comptesTikTok
+    }
 
     init(
         suivis: [String] = [],
         comptes: [String: CompteSuiviEtat] = [:],
         suivisX: [String] = [],
-        comptesX: [String: CompteSuiviEtat] = [:]
+        comptesX: [String: CompteSuiviEtat] = [:],
+        suivisTikTok: [String] = [],
+        comptesTikTok: [String: CompteSuiviEtat] = [:]
     ) {
         self.suivis = SuiviStore.normaliserListe(suivis)
         self.comptes = comptes
         self.suivisX = SuiviStore.normaliserListe(suivisX)
         self.comptesX = comptesX
+        self.suivisTikTok = SuiviStore.normaliserListe(suivisTikTok)
+        self.comptesTikTok = comptesTikTok
     }
 
     /// Tolère une ancienne copie qui ne contenait pas certains champs.
@@ -212,6 +273,9 @@ struct PocketSnapshot: Codable {
         let brutsX = try conteneur.decodeIfPresent([String].self, forKey: .suivisX) ?? []
         suivisX = SuiviStore.normaliserListe(brutsX)
         comptesX = try conteneur.decodeIfPresent([String: CompteSuiviEtat].self, forKey: .comptesX) ?? [:]
+        let brutsTikTok = try conteneur.decodeIfPresent([String].self, forKey: .suivisTikTok) ?? []
+        suivisTikTok = SuiviStore.normaliserListe(brutsTikTok)
+        comptesTikTok = try conteneur.decodeIfPresent([String: CompteSuiviEtat].self, forKey: .comptesTikTok) ?? [:]
     }
 
     private static func fusionnerEtats(plateforme: PlateformeSuivi, defaults: UserDefaults) -> [String: CompteSuiviEtat] {
@@ -234,7 +298,9 @@ struct PocketSnapshot: Codable {
             suivis: SuiviStore.chargerListe(plateforme: .reddit, defaults: defaults),
             comptes: fusionnerEtats(plateforme: .reddit, defaults: defaults),
             suivisX: SuiviStore.chargerListe(plateforme: .x, defaults: defaults),
-            comptesX: fusionnerEtats(plateforme: .x, defaults: defaults)
+            comptesX: fusionnerEtats(plateforme: .x, defaults: defaults),
+            suivisTikTok: SuiviStore.chargerListe(plateforme: .tiktok, defaults: defaults),
+            comptesTikTok: fusionnerEtats(plateforme: .tiktok, defaults: defaults)
         )
     }
 
@@ -254,6 +320,15 @@ struct PocketSnapshot: Codable {
         SuiviStore.enregistrerMarques(
             Set(comptesX.filter { $0.value.marque }.keys),
             plateforme: .x,
+            defaults: defaults,
+            notifier: false
+        )
+
+        SuiviStore.enregistrerListe(suivisTikTok, plateforme: .tiktok, defaults: defaults, notifier: false)
+        SuiviStore.enregistrer(comptesTikTok, plateforme: .tiktok, defaults: defaults, notifier: false)
+        SuiviStore.enregistrerMarques(
+            Set(comptesTikTok.filter { $0.value.marque }.keys),
+            plateforme: .tiktok,
             defaults: defaults,
             notifier: false
         )

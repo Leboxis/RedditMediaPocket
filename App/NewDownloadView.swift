@@ -136,16 +136,26 @@ struct NewDownloadView: View {
             if model.running { model.stop() } else { start() }
         } label: {
             HStack(spacing: DS.space(2)) {
-                Image(systemName: model.running ? "stop.fill" : "arrow.down")
-                    .font(.system(size: 19, weight: .semibold))
-                Text(model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
+                if model.stopping {
+                    ProgressView()
+                        .tint(DS.onSurfaceMuted)
+                } else {
+                    Image(systemName: model.running ? "stop.fill" : "arrow.down")
+                        .font(.system(size: 19, weight: .semibold))
+                }
+                Text(model.stopping
+                     ? L("Arrêt en cours…", "Stopping…")
+                     : model.running ? L("Arrêter", "Stop") : L("Télécharger", "Download"))
                     .font(DS.headline)
             }
             .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(Rectangle())
         }
-        .disabled(cannotStart)
+        .disabled(cannotStart || model.stopping)
         .buttonStyle(DSPrimaryButtonStyle())
-        .accessibilityLabel(model.running ? L("Arrêter le téléchargement", "Stop download") : L("Télécharger", "Download"))
+        .accessibilityLabel(model.stopping
+                            ? L("Arrêt en cours", "Stopping")
+                            : model.running ? L("Arrêter le téléchargement", "Stop download") : L("Télécharger", "Download"))
     }
 
     private var placeholder: String {

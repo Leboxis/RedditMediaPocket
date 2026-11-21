@@ -133,4 +133,56 @@ final class PocketSnapshotTests: XCTestCase {
         SuiviStore.supprimerSuiviX("bobx", defaults: cible, notifier: false)
         XCTAssertEqual(SuiviStore.chargerListe(plateforme: .x, defaults: cible), ["Alice_X"])
     }
+
+    @MainActor
+    func testSuivisTikTokManuelsStatutsEtSynchronisation() throws {
+        let telechargement = Date(timeIntervalSince1970: 1_760_020_000)
+        let upload = Date(timeIntervalSince1970: 1_760_023_600)
+
+        let ajoute1 = try SuiviStore.ajouterSuiviTikTok("@Alice.TT", defaults: defaults, notifier: false)
+        let ajoute2 = try SuiviStore.ajouterSuiviTikTok("https://www.tiktok.com/@Bob_TT?lang=fr", defaults: defaults, notifier: false)
+        // Doublon insensible à la casse ignoré.
+        _ = try SuiviStore.ajouterSuiviTikTok("alice.tt", defaults: defaults, notifier: false)
+        XCTAssertEqual(ajoute1, "Alice.TT")
+        XCTAssertEqual(ajoute2, "Bob_TT")
+        XCTAssertEqual(SuiviStore.chargerListe(plateforme: .tiktok, defaults: defaults), ["Alice.TT", "Bob_TT"])
+
+        XCTAssertThrowsError(try SuiviStore.ajouterSuiviTikTok("pseudo invalide !", defaults: defaults, notifier: false))
+
+        SuiviStore.enregistrer(
+            ["alice.tt": CompteSuiviEtat(marque: false, dernierTelechargement: telechargement, dernierUpload: upload)],
+            plateforme: .tiktok,
+            defaults: defaults,
+            notifier: false
+        )
+        SuiviStore.enregistrerMarques(["alice.tt"], plateforme: .tiktok, defaults: defaults, notifier: false)
+
+        let idTikTok = SuiviStore.identifiantCollection("tt/Alice.TT")
+        XCTAssertEqual(idTikTok?.plateforme, .tiktok)
+        XCTAssertEqual(idTikTok?.pseudo, "alice.tt")
+
+        let capture = PocketSnapshot.capturer(defaults: defaults)
+        XCTAssertEqual(capture.suivisTikTok, ["Alice.TT", "Bob_TT"])
+        XCTAssertEqual(capture.comptesTikTok["alice.tt"]?.marque, true)
+        XCTAssertEqual(capture.comptesTikTok["alice.tt"]?.dernierTelechargement, telechargement)
+        XCTAssertEqual(capture.comptesTikTok["alice.tt"]?.dernierUpload, upload)
+
+        let cibleSuite = "PocketSnapshotTests.tiktok.\(UUID().uuidString)"
+        let cible = UserDefaults(suiteName: cibleSuite)!
+        defer { cible.removePersistentDomain(forName: cibleSuite) }
+
+        let octets = try XCTUnwrap(capture.jsonValue?.donneesJSON())
+        let restaure = try JSONDecoder().decode(PocketSnapshot.self, from: octets)
+        restaure.appliquer(defaults: cible)
+
+        XCTAssertEqual(SuiviStore.pseudosConnus(plateforme: .tiktok, defaults: cible), ["Alice.TT", "Bob_TT"])
+        let etatsTT = SuiviStore.charger(plateforme: .tiktok, defaults: cible)
+        XCTAssertEqual(etatsTT["alice.tt"]?.marque, true)
+        XCTAssertEqual(etatsTT["alice.tt"]?.dernierTelechargement, telechargement)
+        XCTAssertEqual(etatsTT["alice.tt"]?.dernierUpload, upload)
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .tiktok, defaults: cible), ["alice.tt"])
+
+        SuiviStore.supprimerSuiviTikTok("bob_tt", defaults: cible, notifier: false)
+        XCTAssertEqual(SuiviStore.chargerListe(plateforme: .tiktok, defaults: cible), ["Alice.TT"])
+    }
 }

@@ -13,20 +13,22 @@ struct FollowingView: View {
     @State private var plateforme: PlateformeSuivi = .reddit
     @State private var friends: [String]?
     @State private var xFriends: [String] = []
+    @State private var tikTokFriends: [String] = []
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
-    @State private var kDriveFolders: [String: KDriveFolderItem]?
+    @State private var kDriveIndex: [String: KDriveFolderItem]?
     @State private var kDriveLoading = false
-    @State private var kDriveError: String?
-    @State private var ajoutXPresente = false
-    @State private var nouveauPseudoX = ""
-    @State private var erreurAjoutX: String?
+    @State private var ajoutManuelPresente = false
+    @State private var nouveauPseudoManuel = ""
+    @State private var erreurAjoutManuel: String?
     @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
     @AppStorage("following.x.downloadedUsernames") private var xDownloadedUsernamesData = Data()
+    @AppStorage("following.tiktok.downloadedUsernames") private var tikTokDownloadedUsernamesData = Data()
     /// Dates de téléchargement et d'upload, synchronisées avec le serveur.
     @State private var etats: [String: CompteSuiviEtat] = [:]
     @State private var xEtats: [String: CompteSuiviEtat] = [:]
+    @State private var tikTokEtats: [String: CompteSuiviEtat] = [:]
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
@@ -37,7 +39,12 @@ struct FollowingView: View {
     }
 
     private func downloadedUsernames(pour plateforme: PlateformeSuivi) -> Set<String> {
-        let data = plateforme == .reddit ? downloadedUsernamesData : xDownloadedUsernamesData
+        let data: Data
+        switch plateforme {
+        case .reddit: data = downloadedUsernamesData
+        case .x: data = xDownloadedUsernamesData
+        case .tiktok: data = tikTokDownloadedUsernamesData
+        }
         return Set((try? JSONDecoder().decode([String].self, from: data)) ?? [])
     }
 
@@ -50,12 +57,16 @@ struct FollowingView: View {
             names.insert(key)
         }
         guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
-        if plateforme == .reddit {
+        switch plateforme {
+        case .reddit:
             downloadedUsernamesData = data
             etats = SuiviStore.charger(plateforme: .reddit)
-        } else {
+        case .x:
             xDownloadedUsernamesData = data
             xEtats = SuiviStore.charger(plateforme: .x)
+        case .tiktok:
+            tikTokDownloadedUsernamesData = data
+            tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
         }
         // La coche fait partie de l'état synchronisé : on pousse vers Cloudflare.
         NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
@@ -65,11 +76,8 @@ struct FollowingView: View {
         KeychainStore.get() != nil
     }
 
-    private var activeListIsEmpty: Bool {
-        switch plateforme {
-        case .reddit: return (friends ?? []).isEmpty
-        case .x: return xFriends.isEmpty
-        }
+    private var nomPlateformeManuelle: String {
+        plateforme == .tiktok ? "TikTok" : "X"
     }
 
     var body: some View {
@@ -78,6 +86,7 @@ struct FollowingView: View {
                 Picker(L("Plateforme", "Platform"), selection: $plateforme) {
                     Text("Reddit").tag(PlateformeSuivi.reddit)
                     Text("X").tag(PlateformeSuivi.x)
+                    Text("TikTok").tag(PlateformeSuivi.tiktok)
                 }
                 .pickerStyle(.segmented)
                 .padding(.horizontal, DS.space(4))
@@ -87,54 +96,56 @@ struct FollowingView: View {
                 case .reddit:
                     redditContent
                 case .x:
-                    xContent
+                    manualPlatformContent(plateforme: .x)
+                case .tiktok:
+                    manualPlatformContent(plateforme: .tiktok)
                 }
             }
             .navigationTitle(L("Suivis", "Following"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Task { await checkKDrive() }
-                    } label: {
-                        if kDriveLoading {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "externaldrive")
-                        }
-                    }
-                    .disabled(!kDriveConfigured || kDriveLoading || model.running || activeListIsEmpty)
-                    .accessibilityLabel(L("Vérifier sur kDrive", "Check on kDrive"))
-                }
-                if plateforme == .x {
+                if plateforme != .reddit {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            nouveauPseudoX = ""
-                            ajoutXPresente = true
+                            nouveauPseudoManuel = ""
+                            ajoutManuelPresente = true
                         } label: {
                             Image(systemName: "plus")
                         }
-                        .accessibilityLabel(L("Ajouter un compte X", "Add X account"))
+                        .accessibilityLabel(L("Ajouter un compte \(nomPlateformeManuelle)", "Add \(nomPlateformeManuelle) account"))
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("Fermer", "Close")) { dismiss() }
                 }
             }
-            .alert(L("Ajouter un suivi X", "Add X follow"), isPresented: $ajoutXPresente) {
-                TextField(L("@pseudo ou lien x.com/…", "@username or x.com/… link"), text: $nouveauPseudoX)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button(L("Ajouter", "Add")) { ajouterSuiviX() }
-                Button(L("Annuler", "Cancel"), role: .cancel) { nouveauPseudoX = "" }
+            .alert(
+                L("Ajouter un suivi \(nomPlateformeManuelle)", "Add \(nomPlateformeManuelle) follow"),
+                isPresented: $ajoutManuelPresente
+            ) {
+                TextField(
+                    plateforme == .tiktok
+                        ? L("@pseudo ou lien tiktok.com/@…", "@username or tiktok.com/@… link")
+                        : L("@pseudo ou lien x.com/…", "@username or x.com/… link"),
+                    text: $nouveauPseudoManuel
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                Button(L("Ajouter", "Add")) { ajouterSuiviManuel() }
+                Button(L("Annuler", "Cancel"), role: .cancel) { nouveauPseudoManuel = "" }
             } message: {
-                Text(L("Ajoute un compte X manuellement pour suivre son statut et le synchroniser.",
-                       "Add an X account manually to track its status and sync it."))
+                Text(L("Ajoute un compte \(nomPlateformeManuelle) manuellement pour suivre son statut et le synchroniser.",
+                       "Add a \(nomPlateformeManuelle) account manually to track its status and sync it."))
             }
         }
         .tint(DS.accentEmphasis)
-        .errorAlert(erreurAjoutX ?? kDriveError ?? errorMessage) {
-            erreurAjoutX = nil
+        .errorAlert(erreurAjoutManuel ?? errorMessage) {
+            erreurAjoutManuel = nil
+        }
+        .task {
+            if kDriveConfigured, !model.running, kDriveIndex == nil {
+                await checkKDrive()
+            }
         }
         .task(id: "\(session.hasSession)-\(retryCount)") {
             rechargerStockageLocal()
@@ -143,7 +154,7 @@ struct FollowingView: View {
                 await load()
             } else {
                 errorMessage = nil
-                if (connus.isEmpty && xFriends.isEmpty || retryCount > 0), hasSyncKey {
+                if ((connus.isEmpty && xFriends.isEmpty && tikTokFriends.isEmpty) || retryCount > 0), hasSyncKey {
                     await restaurerDepuisServeur()
                 } else {
                     friends = connus
@@ -154,7 +165,9 @@ struct FollowingView: View {
             // Une restauration vient d'écrire les suivis et leurs états : on relit tout.
             etats = SuiviStore.charger(plateforme: .reddit)
             xEtats = SuiviStore.charger(plateforme: .x)
+            tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
             xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+            tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
             if !session.hasSession || (friends ?? []).isEmpty {
                 friends = SuiviStore.pseudosConnus(plateforme: .reddit)
             }
@@ -190,7 +203,7 @@ struct FollowingView: View {
                                     statusDetails(
                                         displayName: name,
                                         etat: etats[name.lowercased()],
-                                        kDriveFolder: kDriveFolders?[name]
+                                        kDriveFolder: kDriveFolder(pour: name)
                                     )
                                 }
                             }
@@ -255,18 +268,24 @@ struct FollowingView: View {
     }
 
     @ViewBuilder
-    private var xContent: some View {
-        let markedNames = downloadedUsernames(pour: .x)
-        if xFriends.isEmpty {
+    private func manualPlatformContent(plateforme: PlateformeSuivi) -> some View {
+        let markedNames = downloadedUsernames(pour: plateforme)
+        let liste = plateforme == .tiktok ? tikTokFriends : xFriends
+        let etatsPlateforme = plateforme == .tiktok ? tikTokEtats : xEtats
+        let nom = plateforme == .tiktok ? "TikTok" : "X"
+        let marque: SourceMark = plateforme == .tiktok ? .tiktok : .x
+        let prefixe = plateforme == .tiktok ? "tt" : "tw"
+
+        if liste.isEmpty {
             VStack(spacing: 12) {
-                SourceMarkView(mark: .x, tint: DS.onSurfaceMuted, size: 36)
-                Text(L("Aucun compte X suivi. Ajoute un nom d'utilisateur manuellement pour suivre son statut et le synchroniser.",
-                       "No followed X accounts. Add a username manually to track its status and sync it."))
+                SourceMarkView(mark: marque, tint: DS.onSurfaceMuted, size: 36)
+                Text(L("Aucun compte \(nom) suivi. Ajoute un nom d'utilisateur manuellement pour suivre son statut et le synchroniser.",
+                       "No followed \(nom) accounts. Add a username manually to track its status and sync it."))
                     .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
                     .multilineTextAlignment(.center)
-                Button(L("Ajouter un compte X", "Add X account")) {
-                    nouveauPseudoX = ""
-                    ajoutXPresente = true
+                Button(L("Ajouter un compte \(nom)", "Add \(nom) account")) {
+                    nouveauPseudoManuel = ""
+                    ajoutManuelPresente = true
                 }
                 .buttonStyle(DSPrimaryButtonStyle())
                 if hasSyncKey {
@@ -281,31 +300,31 @@ struct FollowingView: View {
         } else {
             List {
                 Section {
-                    ForEach(xFriends, id: \.self) { name in
+                    ForEach(liste, id: \.self) { name in
                         let isDownloaded = markedNames.contains(name.lowercased())
-                        let target = "tw/\(name)"
+                        let target = "\(prefixe)/\(name)"
                         HStack(spacing: 10) {
-                            SourceMarkView(mark: .x, tint: DS.accentEmphasis, size: 18)
+                            SourceMarkView(mark: marque, tint: DS.accentEmphasis, size: 18)
                                 .frame(width: 24, height: 24)
                             statusDetails(
                                 displayName: "@\(name)",
-                                etat: xEtats[name.lowercased()],
-                                kDriveFolder: kDriveFolders?[target]
+                                etat: etatsPlateforme[name.lowercased()],
+                                kDriveFolder: kDriveFolder(pour: target)
                             )
                             Spacer(minLength: 8)
                             rowActions(
                                 username: name,
                                 isDownloaded: isDownloaded,
-                                plateforme: .x,
+                                plateforme: plateforme,
                                 downloadTarget: target
                             )
                         }
                     }
-                    .onDelete(perform: supprimerSuivisX)
+                    .onDelete { offsets in supprimerSuivisManuels(offsets, plateforme: plateforme) }
                 }
             }
             .listStyle(.insetGrouped)
-            .refreshable { await restaurerDepuisServeur() }
+            .refreshable { await rafraichir() }
         }
     }
 
@@ -328,10 +347,13 @@ struct FollowingView: View {
                 }
             }
             if let folder = kDriveFolder {
-                Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(DS.accentEmphasis)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(kDriveBadgeText(folder))
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(DS.accentEmphasis)
             }
         }
     }
@@ -371,30 +393,41 @@ struct FollowingView: View {
     private func rechargerStockageLocal() {
         etats = SuiviStore.charger(plateforme: .reddit)
         xEtats = SuiviStore.charger(plateforme: .x)
+        tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
         xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+        tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
         let connusReddit = SuiviStore.pseudosConnus(plateforme: .reddit)
         if !connusReddit.isEmpty {
             friends = connusReddit
         }
     }
 
-    private func ajouterSuiviX() {
-        erreurAjoutX = nil
+    private func ajouterSuiviManuel() {
+        erreurAjoutManuel = nil
         do {
-            _ = try SuiviStore.ajouterSuiviX(nouveauPseudoX)
-            xFriends = SuiviStore.pseudosConnus(plateforme: .x)
-            nouveauPseudoX = ""
+            _ = try SuiviStore.ajouterSuiviManuel(nouveauPseudoManuel, plateforme: plateforme)
+            if plateforme == .tiktok {
+                tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
+            } else {
+                xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+            }
+            nouveauPseudoManuel = ""
         } catch {
-            erreurAjoutX = error.localizedDescription
+            erreurAjoutManuel = error.localizedDescription
         }
     }
 
-    private func supprimerSuivisX(_ offsets: IndexSet) {
-        let aSupprimer = offsets.map { xFriends[$0] }
+    private func supprimerSuivisManuels(_ offsets: IndexSet, plateforme: PlateformeSuivi) {
+        let source = plateforme == .tiktok ? tikTokFriends : xFriends
+        let aSupprimer = offsets.map { source[$0] }
         for pseudo in aSupprimer {
-            SuiviStore.supprimerSuiviX(pseudo)
+            SuiviStore.supprimerSuiviManuel(pseudo, plateforme: plateforme)
         }
-        xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+        if plateforme == .tiktok {
+            tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
+        } else {
+            xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+        }
     }
 
     @MainActor private func load() async {
@@ -419,8 +452,10 @@ struct FollowingView: View {
         await SyncService.shared.restaurer()
         etats = SuiviStore.charger(plateforme: .reddit)
         xEtats = SuiviStore.charger(plateforme: .x)
+        tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
         friends = SuiviStore.pseudosConnus(plateforme: .reddit)
         xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+        tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
     }
 
     @MainActor private func rafraichir() async {
@@ -429,7 +464,16 @@ struct FollowingView: View {
         } else {
             await restaurerDepuisServeur()
         }
+        if kDriveConfigured, !model.running {
+            await checkKDrive()
+        }
     }
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 
     /// Date compacte et lisible (jour, mois, heure) pour les lignes de suivi.
     private func dateCourte(_ date: Date) -> String {
@@ -440,39 +484,36 @@ struct FollowingView: View {
         let timestamp = folder.lastModifiedAt ?? folder.updatedAt ?? 0
         guard timestamp > 0 else { return L("Dans kDrive", "On kDrive") }
         let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return L("Importé \(formatter.localizedString(for: date, relativeTo: Date()))",
-                 "Imported \(formatter.localizedString(for: date, relativeTo: Date()))")
+        return L("Importé \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))",
+                 "Imported \(Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date()))")
     }
 
+    private func kDriveFolder(pour target: String) -> KDriveFolderItem? {
+        guard let kDriveIndex else { return nil }
+        let key = FilenamePolicy.kDriveNormalizedName(FilenamePolicy.kDriveFolderName(target))
+        return kDriveIndex[key]
+    }
+
+    @MainActor
     private func checkKDrive() async {
-        let targets: [String]
-        switch plateforme {
-        case .reddit:
-            guard let friends, !friends.isEmpty else { return }
-            targets = friends
-        case .x:
-            guard !xFriends.isEmpty else { return }
-            targets = xFriends.map { "tw/\($0)" }
-        }
+        guard kDriveConfigured, !kDriveLoading else { return }
         kDriveLoading = true
-        kDriveError = nil
         defer { kDriveLoading = false }
         do {
-            let folders = try await KDriveService.shared.folderStatus(
+            let existing = try await KDriveService.shared.fetchSubdirectories(
                 token: kDriveToken,
                 driveId: kDriveId,
-                parentDirectoryId: kDriveDirectoryId,
-                names: targets
+                directoryId: kDriveDirectoryId
             )
-            var merged = kDriveFolders ?? [:]
-            for target in targets {
-                merged[target] = folders[target]
+            try Task.checkCancellation()
+            var index: [String: KDriveFolderItem] = [:]
+            for item in existing {
+                let key = FilenamePolicy.kDriveNormalizedName(item.name)
+                if index[key] == nil { index[key] = item }
             }
-            kDriveFolders = merged
+            kDriveIndex = index
         } catch {
-            kDriveError = error.localizedDescription
+            // Vérification silencieuse : les erreurs kDrive sont déjà journalisées par KDriveService.
         }
     }
 }

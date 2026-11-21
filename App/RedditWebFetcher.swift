@@ -65,13 +65,20 @@ import MediaCore
             view.frame.origin.x = -view.frame.width
             window.addSubview(view)
         }
-        let loaded = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            loadContinuation = continuation
-            loadWatchdog = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(15))
-                await self?.finishLoad(false)
+        let loaded = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                loadContinuation = continuation
+                loadWatchdog = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(15))
+                    await self?.finishLoad(false)
+                }
+                view.load(URLRequest(url: URL(string: "https://www.reddit.com/r/\(subreddit)/")!))
             }
-            view.load(URLRequest(url: URL(string: "https://www.reddit.com/r/\(subreddit)/")!))
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.webView?.stopLoading()
+                self?.finishLoad(false)
+            }
         }
         guard loaded else { close(); return false }
         return true
@@ -85,14 +92,20 @@ import MediaCore
         let literal = url.absoluteString
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "'", with: "\\'")
-        return await withCheckedContinuation { (continuation: CheckedContinuation<(Int, String)?, Never>) in
-            pending[id] = continuation
-            fetchWatchdogs[id] = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(20))
-                await self?.finishFetch(id, response: nil)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<(Int, String)?, Never>) in
+                pending[id] = continuation
+                fetchWatchdogs[id] = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(20))
+                    await self?.finishFetch(id, response: nil)
+                }
+                webView.evaluateJavaScript("window.__redditFetch && window.__redditFetch('\(literal)', '\(id)')",
+                                           completionHandler: nil)
             }
-            webView.evaluateJavaScript("window.__redditFetch && window.__redditFetch('\(literal)', '\(id)')",
-                                       completionHandler: nil)
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finishFetch(id, response: nil)
+            }
         }
     }
 

@@ -106,6 +106,7 @@ struct DSPrimaryButtonStyle: ButtonStyle {
             .padding(.horizontal, DS.space(4))
             .frame(minHeight: 48)
             .background(isEnabled ? DS.accent : DS.surface, in: RoundedRectangle(cornerRadius: cornerRadius))
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
             .scaleEffect(isEnabled && configuration.isPressed && !reduceMotion ? DS.pressScale : 1)
             .animation(reduceMotion ? nil : DS.micro, value: configuration.isPressed)
     }

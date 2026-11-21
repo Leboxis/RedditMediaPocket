@@ -169,6 +169,7 @@ extension Notification.Name {
     @Published var collections: [UserCollection] = []
     @Published var activeUser: String?
     @Published var running = false
+    @Published private(set) var stopping = false
     @Published var status = ""
     @Published var errorMessage: String?
     /// Vrai quand le dernier parcours s'est arrêté avant la fin du contenu
@@ -1092,7 +1093,12 @@ extension Notification.Name {
     }
 
     func stop() {
-        LogCenter.info(L("Arrêt demandé.", "Stop requested."))
+        guard running else { return }
+        if !stopping {
+            stopping = true
+            status = L("Arrêt en cours…", "Stopping…")
+            LogCenter.info(L("Arrêt demandé.", "Stop requested."))
+        }
         task?.cancel()
         tokenTask?.cancel()
         tokenTask = nil
@@ -1106,8 +1112,8 @@ extension Notification.Name {
             : sourceKind == "ts" ? "ts/\(tikTokSavedAccount ?? "")"
             : "\(sourceKind)/\(username)"
         let started = Date()
-        // Compte suivi visé (Reddit ou X) : figé au démarrage, l'utilisateur peut
-        // changer de source pendant le parcours sans fausser la date enregistrée.
+        // Compte suivi visé (Reddit, X ou TikTok) : figé au démarrage, l'utilisateur
+        // peut changer de source pendant le parcours sans fausser la date enregistrée.
         let compteSuivi: (plateforme: PlateformeSuivi, pseudo: String)? = {
             guard !username.isEmpty else { return nil }
             if sourceKind == "u" {
@@ -1117,13 +1123,20 @@ extension Notification.Name {
                 let propre = (try? XTwitterAPI.username(username)) ?? username
                 return (.x, propre.lowercased())
             }
+            if sourceKind == "tt" {
+                let text = username.contains("/") || username.lowercased().contains("tiktok.com")
+                    ? username : "tt/\(username)"
+                if case .tiktokUser(let name) = try? FeedSource.parse(text) {
+                    return (.tiktok, name.lowercased())
+                }
+            }
             return nil
         }()
         LogCenter.info(L("Démarrage : \(target), \(sessionLimit) transferts simultanés.", "Starting: \(target), \(sessionLimit) simultaneous transfers."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
         network.resetRateLimits()
-        running = true; discovered = 0; count = 0; status = ""; failed = 0
+        running = true; stopping = false; discovered = 0; count = 0; status = ""; failed = 0
         scanIncomplete = false
         transferUnit = nil
         task = Task {
@@ -1131,7 +1144,7 @@ extension Notification.Name {
                 orderingCoalesceTask?.cancel()
                 orderingCoalesceTask = nil
                 applyGalleryOrdering()
-                running = false; active = 0; task = nil
+                running = false; stopping = false; active = 0; task = nil
             }
             do {
                 try await run()
@@ -3908,9 +3921,10 @@ extension Notification.Name {
         }
         guard !retryable.isEmpty else { return }
         running = true
+        stopping = false
         status = L("Nouvel essai : \(retryable.count) médias…", "Retrying: \(retryable.count) media…")
         task = Task {
-            defer { running = false; task = nil }
+            defer { running = false; stopping = false; task = nil }
             var resolved: [UUID] = []
             var fresh = 0
             for entry in retryable {
