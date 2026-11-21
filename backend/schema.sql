@@ -4,6 +4,7 @@
 --   reglage        -> un réglage de l'app (nom = clé, data = valeur)
 --   log            -> une ligne du journal de bord (date ISO, niveau, message)
 --   compte_suivi   -> un pseudo suivi / sauvegardé (data = pseudo)
+--   snapshot       -> copie complète et non secrète de l'app, envoyée à chaque changement
 -- Les champs précis de chaque catégorie sont décrits côté iOS dans App/Models/Item.swift.
 
 CREATE TABLE IF NOT EXISTS items (

@@ -13,6 +13,9 @@ struct SettingsTabView: View {
 
 private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
+    /// État de la synchronisation Cloudflare, partagé avec toute l'app.
+    @StateObject private var synchronisation = SyncService.shared
+    @State private var clePresentee = false
     /// Vrai quand la vue est embarquée dans un onglet (pas de bouton « OK »).
     let embedded: Bool
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
@@ -167,6 +170,32 @@ private struct DownloadSettings: View {
                 } footer: {
                     Text(L("Efface les médias et les archives de tous les utilisateurs. Irréversible.", "Deletes media and archives for all users. Cannot be undone."))
                 }
+
+                Section {
+                    HStack {
+                        Text(L("État", "Status"))
+                        Spacer()
+                        Text(synchronisation.etat)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    if let date = synchronisation.derniereSynchronisation {
+                        Text("\(L("Dernière synchronisation", "Last sync")) : \(date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button(L("Synchroniser maintenant", "Sync now")) {
+                        Task { await synchronisation.synchroniser() }
+                    }
+                    Button(L("Clé API", "API key")) { clePresentee = true }
+                } header: {
+                    Text(L("Sauvegarde Cloudflare", "Cloudflare backup"))
+                } footer: {
+                    Text(L("Les collections, réglages, comptes suivis et journaux sont envoyés à chaque changement et restaurés après réinstallation. Les sessions et jetons ne sont jamais envoyés.", "Collections, settings, followed accounts and logs are sent on every change and restored after reinstall. Sessions and tokens are never sent."))
+                }
+            }
+            .sheet(isPresented: $clePresentee) {
+                APIKeySettingsView()
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
