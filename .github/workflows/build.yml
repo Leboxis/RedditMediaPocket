@@ -13,17 +13,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  test-core:
+    name: Tests MediaCore et scripts
     runs-on: macos-26
-    timeout-minutes: 30
-    permissions:
-      contents: write
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      - name: Cache SwiftPM (.build)
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift', 'Sources/MediaCore/**/*.swift', 'Tests/MediaCoreTests/**/*.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
       - name: Test core parsers
         run: swift test
       - name: Test source generator
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+  test-ios:
+    name: Tests unitaires iOS sur simulateur
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache Homebrew (xcodegen)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-xcodegen-${{ runner.os }}-${{ runner.arch }}
       - name: Prepare Xcode project
         run: |
           brew install xcodegen
@@ -37,6 +58,26 @@ jobs:
             -destination "platform=iOS Simulator,name=$DEST" \
             -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
             -only-testing:RedditMediaPocketTests
+
+  build-ipa:
+    name: Build unsigned iPhone app
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache Homebrew (xcodegen)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew
+          key: brew-xcodegen-${{ runner.os }}-${{ runner.arch }}
+      - name: Prepare Xcode project
+        run: |
+          brew install xcodegen
+          python3 scripts/make_icon.py
+          xcodegen generate
       - name: Build unsigned iPhone app
         env:
           BUILD_NUMBER: ${{ github.run_number }}
@@ -64,20 +105,6 @@ jobs:
             dist/RedditMediaPocket.ipa
             dist/apps.json
             dist/icon.png
-      - name: Publish release
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_NUMBER: ${{ github.run_number }}
-        run: |
-          TAG="v0.2.${BUILD_NUMBER}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
-          else
-            gh release create "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png \
-              --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
-              --notes-file RELEASE_NOTES.md --latest
-          fi
 
   backend:
     name: Vérifier le backend Cloudflare
@@ -97,3 +124,31 @@ jobs:
         run: npm ci
       - name: Vérifier le typage du Worker
         run: npm run typecheck
+
+  publish-release:
+    name: Publier la release
+    needs: [test-core, test-ios, build-ipa, backend]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: RedditMediaPocket
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          TAG="v0.2.${BUILD_NUMBER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
+          else
+            gh release create "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png \
+              --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
+              --notes-file RELEASE_NOTES.md --latest
+          fi
