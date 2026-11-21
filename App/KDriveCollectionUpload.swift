@@ -525,8 +525,8 @@ final class KDriveContinuousUploadController: ObservableObject {
                 if failed > 0 { LogCenter.err(L("Envoi kDrive : \(success) réussis, \(failed) échoués.", "kDrive upload: \(success) ok, \(failed) failed.")) }
                 else {
                     LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files."))
-                    if success > 0, let pseudo = SuiviStore.pseudoReddit(libelleCollection) {
-                        SuiviStore.noterUpload(pseudo: pseudo)
+                    if success > 0, let identifiant = SuiviStore.identifiantCollection(libelleCollection) {
+                        SuiviStore.noterUpload(pseudo: identifiant.pseudo, plateforme: identifiant.plateforme)
                     }
                 }
                 progress = files.isEmpty ? 0 : 1

@@ -10,16 +10,23 @@ struct FollowingView: View {
 
     @ObservedObject private var session = RedditSession.shared
     @Environment(\.dismiss) private var dismiss
+    @State private var plateforme: PlateformeSuivi = .reddit
     @State private var friends: [String]?
+    @State private var xFriends: [String] = []
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var retryCount = 0
     @State private var kDriveFolders: [String: KDriveFolderItem]?
     @State private var kDriveLoading = false
     @State private var kDriveError: String?
+    @State private var ajoutXPresente = false
+    @State private var nouveauPseudoX = ""
+    @State private var erreurAjoutX: String?
     @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
+    @AppStorage("following.x.downloadedUsernames") private var xDownloadedUsernamesData = Data()
     /// Dates de téléchargement et d'upload, synchronisées avec le serveur.
     @State private var etats: [String: CompteSuiviEtat] = [:]
+    @State private var xEtats: [String: CompteSuiviEtat] = [:]
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
@@ -29,22 +36,28 @@ struct FollowingView: View {
             && !kDriveId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var downloadedUsernames: Set<String> {
-        Set((try? JSONDecoder().decode([String].self, from: downloadedUsernamesData)) ?? [])
+    private func downloadedUsernames(pour plateforme: PlateformeSuivi) -> Set<String> {
+        let data = plateforme == .reddit ? downloadedUsernamesData : xDownloadedUsernamesData
+        return Set((try? JSONDecoder().decode([String].self, from: data)) ?? [])
     }
 
-    private func toggleDownloaded(_ username: String) {
+    private func toggleDownloaded(_ username: String, plateforme: PlateformeSuivi) {
         let key = username.lowercased()
-        var names = downloadedUsernames
+        var names = downloadedUsernames(pour: plateforme)
         if names.contains(key) {
             names.remove(key)
         } else {
             names.insert(key)
         }
         guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
-        downloadedUsernamesData = data
-        // La coche fait partie de l'état synchronisé : on relit et on pousse.
-        etats = SuiviStore.charger()
+        if plateforme == .reddit {
+            downloadedUsernamesData = data
+            etats = SuiviStore.charger(plateforme: .reddit)
+        } else {
+            xDownloadedUsernamesData = data
+            xEtats = SuiviStore.charger(plateforme: .x)
+        }
+        // La coche fait partie de l'état synchronisé : on pousse vers Cloudflare.
         NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
@@ -52,173 +65,85 @@ struct FollowingView: View {
         KeychainStore.get() != nil
     }
 
+    private var activeListIsEmpty: Bool {
+        switch plateforme {
+        case .reddit: return (friends ?? []).isEmpty
+        case .x: return xFriends.isEmpty
+        }
+    }
+
     var body: some View {
-        let markedNames = downloadedUsernames
         NavigationStack {
             VStack(spacing: 0) {
-                if let friends, !friends.isEmpty {
-                    List {
-                        if !session.hasSession {
-                            Section {
-                                Label(
-                                    L("Non connecté à Reddit — liste synchronisée affichée.",
-                                      "Not signed in to Reddit — showing synced list."),
-                                    systemImage: "icloud"
-                                )
-                                .font(.footnote)
-                                .foregroundStyle(DS.onSurfaceMuted)
-                            }
-                        }
-                        Section {
-                            ForEach(friends, id: \.self) { name in
-                                let isDownloaded = markedNames.contains(name.lowercased())
-                                HStack(spacing: 10) {
-                                    NavigationLink {
-                                        FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
-                                    } label: {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "person.crop.circle.fill")
-                                                .font(.title3).foregroundStyle(DS.accentEmphasis)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(name).fontWeight(.medium).lineLimit(1)
-                                                if let etat = etats[name.lowercased()] {
-                                                    if let date = etat.dernierTelechargement {
-                                                        Text(L("Téléchargé le \(dateCourte(date))", "Downloaded \(dateCourte(date))"))
-                                                            .font(.caption2)
-                                                            .foregroundStyle(DS.onSurfaceMuted)
-                                                            .lineLimit(1)
-                                                    }
-                                                    if let date = etat.dernierUpload {
-                                                        Text(L("Uploadé le \(dateCourte(date))", "Uploaded \(dateCourte(date))"))
-                                                            .font(.caption2)
-                                                            .foregroundStyle(DS.onSurfaceMuted)
-                                                            .lineLimit(1)
-                                                    }
-                                                }
-                                                if let folder = kDriveFolders?[name] {
-                                                    Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
-                                                        .font(.caption2)
-                                                        .foregroundStyle(DS.accentEmphasis)
-                                                        .lineLimit(1)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Button {
-                                        toggleDownloaded(name)
-                                    } label: {
-                                        Image(systemName: isDownloaded ? "checkmark.circle.fill" : "circle")
-                                            .font(.title3)
-                                            .foregroundStyle(isDownloaded ? DS.accentEmphasis : DS.onSurfaceMuted)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .accessibilityLabel(L("État de téléchargement de \(name)", "Download status for \(name)"))
-                                    .accessibilityValue(isDownloaded
-                                        ? L("Déjà téléchargé", "Already downloaded")
-                                        : L("Non marqué", "Not marked"))
-                                    .accessibilityHint(isDownloaded
-                                        ? L("Retirer la marque", "Remove the mark")
-                                        : L("Marquer comme déjà téléchargé", "Mark as already downloaded"))
-                                    Button {
-                                        onDownloadAll(name)
-                                    } label: {
-                                        Image(systemName: "arrow.down.circle")
-                                            .font(.title3)
-                                            .frame(minWidth: 44, minHeight: 44)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .disabled(model.running)
-                                    .accessibilityLabel(L("Tout télécharger de \(name)", "Download all from \(name)"))
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                    .refreshable { await rafraichir() }
-                } else if loading || (session.hasSession && friends == nil && errorMessage == nil) {
-                    VStack(spacing: 10) {
-                        ProgressView()
-                        Text(L("Chargement des suivis…", "Loading followed accounts…"))
-                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let errorMessage {
-                    VStack(spacing: DS.space(3)) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(DS.error)
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .multilineTextAlignment(.center)
-                        Button(L("Réessayer", "Retry")) { retryCount += 1 }
-                            .buttonStyle(DSPrimaryButtonStyle())
-                    }
-                    .padding(DS.space(6))
-                } else if !session.hasSession {
-                    VStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle.badge.questionmark")
-                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
-                        Text(L("Connecte-toi à Reddit dans les Réglages ou restaure tes suivis via la synchronisation Cloudflare.",
-                               "Sign in to Reddit in Settings or restore your followed accounts via Cloudflare sync."))
-                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                            .multilineTextAlignment(.center)
-                        if hasSyncKey {
-                            Button(L("Synchroniser depuis le serveur", "Sync from server")) {
-                                retryCount += 1
-                            }
-                            .buttonStyle(DSPrimaryButtonStyle())
-                        }
-                    }
-                    .padding(DS.space(6))
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "person.2")
-                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
-                        Text(L("Aucun compte suivi (ou liste privée indisponible).",
-                               "No followed accounts (or the list is unavailable)."))
-                            .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(DS.space(6))
+                Picker(L("Plateforme", "Platform"), selection: $plateforme) {
+                    Text("Reddit").tag(PlateformeSuivi.reddit)
+                    Text("X").tag(PlateformeSuivi.x)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, DS.space(4))
+                .padding(.vertical, DS.space(2))
+
+                switch plateforme {
+                case .reddit:
+                    redditContent
+                case .x:
+                    xContent
                 }
             }
             .navigationTitle(L("Suivis", "Following"))
             .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            Task { await checkKDrive() }
-                        } label: {
-                            if kDriveLoading {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "externaldrive")
-                            }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task { await checkKDrive() }
+                    } label: {
+                        if kDriveLoading {
+                            ProgressView()
+                        } else {
+                            Image(systemName: "externaldrive")
                         }
-                        .disabled(!kDriveConfigured || kDriveLoading || model.running || (friends ?? []).isEmpty)
-                        .accessibilityLabel(L("Vérifier sur kDrive", "Check on kDrive"))
                     }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(L("Fermer", "Close")) { dismiss() }
+                    .disabled(!kDriveConfigured || kDriveLoading || model.running || activeListIsEmpty)
+                    .accessibilityLabel(L("Vérifier sur kDrive", "Check on kDrive"))
+                }
+                if plateforme == .x {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            nouveauPseudoX = ""
+                            ajoutXPresente = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel(L("Ajouter un compte X", "Add X account"))
                     }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L("Fermer", "Close")) { dismiss() }
+                }
+            }
+            .alert(L("Ajouter un suivi X", "Add X follow"), isPresented: $ajoutXPresente) {
+                TextField(L("@pseudo ou lien x.com/…", "@username or x.com/… link"), text: $nouveauPseudoX)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button(L("Ajouter", "Add")) { ajouterSuiviX() }
+                Button(L("Annuler", "Cancel"), role: .cancel) { nouveauPseudoX = "" }
+            } message: {
+                Text(L("Ajoute un compte X manuellement pour suivre son statut et le synchroniser.",
+                       "Add an X account manually to track its status and sync it."))
+            }
         }
         .tint(DS.accentEmphasis)
-        .errorAlert(kDriveError ?? errorMessage)
+        .errorAlert(erreurAjoutX ?? kDriveError ?? errorMessage) {
+            erreurAjoutX = nil
+        }
         .task(id: "\(session.hasSession)-\(retryCount)") {
-            etats = SuiviStore.charger()
-            let connus = SuiviStore.pseudosConnus()
-            if !connus.isEmpty {
-                friends = connus
-            }
+            rechargerStockageLocal()
+            let connus = SuiviStore.pseudosConnus(plateforme: .reddit)
             if session.hasSession {
                 await load()
             } else {
                 errorMessage = nil
-                if (connus.isEmpty || retryCount > 0), hasSyncKey {
+                if (connus.isEmpty && xFriends.isEmpty || retryCount > 0), hasSyncKey {
                     await restaurerDepuisServeur()
                 } else {
                     friends = connus
@@ -227,11 +152,249 @@ struct FollowingView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .pocketDonneesRestaurees)) { _ in
             // Une restauration vient d'écrire les suivis et leurs états : on relit tout.
-            etats = SuiviStore.charger()
+            etats = SuiviStore.charger(plateforme: .reddit)
+            xEtats = SuiviStore.charger(plateforme: .x)
+            xFriends = SuiviStore.pseudosConnus(plateforme: .x)
             if !session.hasSession || (friends ?? []).isEmpty {
-                friends = SuiviStore.pseudosConnus()
+                friends = SuiviStore.pseudosConnus(plateforme: .reddit)
             }
         }
+    }
+
+    @ViewBuilder
+    private var redditContent: some View {
+        let markedNames = downloadedUsernames(pour: .reddit)
+        if let friends, !friends.isEmpty {
+            List {
+                if !session.hasSession {
+                    Section {
+                        Label(
+                            L("Non connecté à Reddit — liste synchronisée affichée.",
+                              "Not signed in to Reddit — showing synced list."),
+                            systemImage: "icloud"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                    }
+                }
+                Section {
+                    ForEach(friends, id: \.self) { name in
+                        let isDownloaded = markedNames.contains(name.lowercased())
+                        HStack(spacing: 10) {
+                            NavigationLink {
+                                FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "person.crop.circle.fill")
+                                        .font(.title3).foregroundStyle(DS.accentEmphasis)
+                                    statusDetails(
+                                        displayName: name,
+                                        etat: etats[name.lowercased()],
+                                        kDriveFolder: kDriveFolders?[name]
+                                    )
+                                }
+                            }
+                            rowActions(
+                                username: name,
+                                isDownloaded: isDownloaded,
+                                plateforme: .reddit,
+                                downloadTarget: name
+                            )
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .refreshable { await rafraichir() }
+        } else if loading || (session.hasSession && friends == nil && errorMessage == nil) {
+            VStack(spacing: 10) {
+                ProgressView()
+                Text(L("Chargement des suivis…", "Loading followed accounts…"))
+                    .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let errorMessage {
+            VStack(spacing: DS.space(3)) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 36)).foregroundStyle(DS.error)
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+                Button(L("Réessayer", "Retry")) { retryCount += 1 }
+                    .buttonStyle(DSPrimaryButtonStyle())
+            }
+            .padding(DS.space(6))
+        } else if !session.hasSession {
+            VStack(spacing: 12) {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+                    .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                Text(L("Connecte-toi à Reddit dans les Réglages ou restaure tes suivis via la synchronisation Cloudflare.",
+                       "Sign in to Reddit in Settings or restore your followed accounts via Cloudflare sync."))
+                    .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+                if hasSyncKey {
+                    Button(L("Synchroniser depuis le serveur", "Sync from server")) {
+                        retryCount += 1
+                    }
+                    .buttonStyle(DSPrimaryButtonStyle())
+                }
+            }
+            .padding(DS.space(6))
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "person.2")
+                    .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                Text(L("Aucun compte suivi (ou liste privée indisponible).",
+                       "No followed accounts (or the list is unavailable)."))
+                    .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(DS.space(6))
+        }
+    }
+
+    @ViewBuilder
+    private var xContent: some View {
+        let markedNames = downloadedUsernames(pour: .x)
+        if xFriends.isEmpty {
+            VStack(spacing: 12) {
+                SourceMarkView(mark: .x, tint: DS.onSurfaceMuted, size: 36)
+                Text(L("Aucun compte X suivi. Ajoute un nom d'utilisateur manuellement pour suivre son statut et le synchroniser.",
+                       "No followed X accounts. Add a username manually to track its status and sync it."))
+                    .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
+                    .multilineTextAlignment(.center)
+                Button(L("Ajouter un compte X", "Add X account")) {
+                    nouveauPseudoX = ""
+                    ajoutXPresente = true
+                }
+                .buttonStyle(DSPrimaryButtonStyle())
+                if hasSyncKey {
+                    Button(L("Synchroniser depuis le serveur", "Sync from server")) {
+                        Task { await restaurerDepuisServeur() }
+                    }
+                    .font(.footnote)
+                }
+            }
+            .padding(DS.space(6))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List {
+                Section {
+                    ForEach(xFriends, id: \.self) { name in
+                        let isDownloaded = markedNames.contains(name.lowercased())
+                        let target = "tw/\(name)"
+                        HStack(spacing: 10) {
+                            SourceMarkView(mark: .x, tint: DS.accentEmphasis, size: 18)
+                                .frame(width: 24, height: 24)
+                            statusDetails(
+                                displayName: "@\(name)",
+                                etat: xEtats[name.lowercased()],
+                                kDriveFolder: kDriveFolders?[target]
+                            )
+                            Spacer(minLength: 8)
+                            rowActions(
+                                username: name,
+                                isDownloaded: isDownloaded,
+                                plateforme: .x,
+                                downloadTarget: target
+                            )
+                        }
+                    }
+                    .onDelete(perform: supprimerSuivisX)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .refreshable { await restaurerDepuisServeur() }
+        }
+    }
+
+    @ViewBuilder
+    private func statusDetails(displayName: String, etat: CompteSuiviEtat?, kDriveFolder: KDriveFolderItem?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(displayName).fontWeight(.medium).lineLimit(1)
+            if let etat {
+                if let date = etat.dernierTelechargement {
+                    Text(L("Téléchargé le \(dateCourte(date))", "Downloaded \(dateCourte(date))"))
+                        .font(.caption2)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+                if let date = etat.dernierUpload {
+                    Text(L("Uploadé le \(dateCourte(date))", "Uploaded \(dateCourte(date))"))
+                        .font(.caption2)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                        .lineLimit(1)
+                }
+            }
+            if let folder = kDriveFolder {
+                Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(DS.accentEmphasis)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func rowActions(username: String, isDownloaded: Bool, plateforme: PlateformeSuivi, downloadTarget: String) -> some View {
+        Button {
+            toggleDownloaded(username, plateforme: plateforme)
+        } label: {
+            Image(systemName: isDownloaded ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(isDownloaded ? DS.accentEmphasis : DS.onSurfaceMuted)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel(L("État de téléchargement de \(username)", "Download status for \(username)"))
+        .accessibilityValue(isDownloaded
+            ? L("Déjà téléchargé", "Already downloaded")
+            : L("Non marqué", "Not marked"))
+        .accessibilityHint(isDownloaded
+            ? L("Retirer la marque", "Remove the mark")
+            : L("Marquer comme déjà téléchargé", "Mark as already downloaded"))
+        Button {
+            onDownloadAll(downloadTarget)
+        } label: {
+            Image(systemName: "arrow.down.circle")
+                .font(.title3)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .disabled(model.running)
+        .accessibilityLabel(L("Tout télécharger de \(username)", "Download all from \(username)"))
+    }
+
+    private func rechargerStockageLocal() {
+        etats = SuiviStore.charger(plateforme: .reddit)
+        xEtats = SuiviStore.charger(plateforme: .x)
+        xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+        let connusReddit = SuiviStore.pseudosConnus(plateforme: .reddit)
+        if !connusReddit.isEmpty {
+            friends = connusReddit
+        }
+    }
+
+    private func ajouterSuiviX() {
+        erreurAjoutX = nil
+        do {
+            _ = try SuiviStore.ajouterSuiviX(nouveauPseudoX)
+            xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+            nouveauPseudoX = ""
+        } catch {
+            erreurAjoutX = error.localizedDescription
+        }
+    }
+
+    private func supprimerSuivisX(_ offsets: IndexSet) {
+        let aSupprimer = offsets.map { xFriends[$0] }
+        for pseudo in aSupprimer {
+            SuiviStore.supprimerSuiviX(pseudo)
+        }
+        xFriends = SuiviStore.pseudosConnus(plateforme: .x)
     }
 
     @MainActor private func load() async {
@@ -242,7 +405,7 @@ struct FollowingView: View {
             let result = try await model.followedUsers()
             try Task.checkCancellation()
             friends = result
-            SuiviStore.enregistrerListe(result)
+            SuiviStore.enregistrerListe(result, plateforme: .reddit)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
@@ -254,12 +417,14 @@ struct FollowingView: View {
         defer { loading = false }
         errorMessage = nil
         await SyncService.shared.restaurer()
-        etats = SuiviStore.charger()
-        friends = SuiviStore.pseudosConnus()
+        etats = SuiviStore.charger(plateforme: .reddit)
+        xEtats = SuiviStore.charger(plateforme: .x)
+        friends = SuiviStore.pseudosConnus(plateforme: .reddit)
+        xFriends = SuiviStore.pseudosConnus(plateforme: .x)
     }
 
     @MainActor private func rafraichir() async {
-        if session.hasSession {
+        if plateforme == .reddit, session.hasSession {
             await load()
         } else {
             await restaurerDepuisServeur()
@@ -282,7 +447,15 @@ struct FollowingView: View {
     }
 
     private func checkKDrive() async {
-        guard let friends, !friends.isEmpty else { return }
+        let targets: [String]
+        switch plateforme {
+        case .reddit:
+            guard let friends, !friends.isEmpty else { return }
+            targets = friends
+        case .x:
+            guard !xFriends.isEmpty else { return }
+            targets = xFriends.map { "tw/\($0)" }
+        }
         kDriveLoading = true
         kDriveError = nil
         defer { kDriveLoading = false }
@@ -291,11 +464,14 @@ struct FollowingView: View {
                 token: kDriveToken,
                 driveId: kDriveId,
                 parentDirectoryId: kDriveDirectoryId,
-                names: friends
+                names: targets
             )
-            kDriveFolders = folders
+            var merged = kDriveFolders ?? [:]
+            for target in targets {
+                merged[target] = folders[target]
+            }
+            kDriveFolders = merged
         } catch {
-            kDriveFolders = nil
             kDriveError = error.localizedDescription
         }
     }

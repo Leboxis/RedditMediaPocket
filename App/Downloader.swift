@@ -1106,9 +1106,19 @@ extension Notification.Name {
             : sourceKind == "ts" ? "ts/\(tikTokSavedAccount ?? "")"
             : "\(sourceKind)/\(username)"
         let started = Date()
-        // Compte suivi visé : figé au démarrage, l'utilisateur peut changer de
-        // source pendant le parcours sans fausser la date enregistrée.
-        let compteSuivi = (sourceKind == "u" && !username.isEmpty) ? username.lowercased() : nil
+        // Compte suivi visé (Reddit ou X) : figé au démarrage, l'utilisateur peut
+        // changer de source pendant le parcours sans fausser la date enregistrée.
+        let compteSuivi: (plateforme: PlateformeSuivi, pseudo: String)? = {
+            guard !username.isEmpty else { return nil }
+            if sourceKind == "u" {
+                return (.reddit, username.lowercased())
+            }
+            if sourceKind == "tw" {
+                let propre = (try? XTwitterAPI.username(username)) ?? username
+                return (.x, propre.lowercased())
+            }
+            return nil
+        }()
         LogCenter.info(L("Démarrage : \(target), \(sessionLimit) transferts simultanés.", "Starting: \(target), \(sessionLimit) simultaneous transfers."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
@@ -1126,7 +1136,7 @@ extension Notification.Name {
             do {
                 try await run()
                 if let compteSuivi {
-                    SuiviStore.noterTelechargement(pseudo: compteSuivi)
+                    SuiviStore.noterTelechargement(pseudo: compteSuivi.pseudo, plateforme: compteSuivi.plateforme)
                 }
                 LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped in \(Int(Date().timeIntervalSince(started))) s."))
             }

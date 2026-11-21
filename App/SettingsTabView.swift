@@ -199,7 +199,7 @@ private struct DownloadSettings: View {
                 } header: {
                     Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
                 } footer: {
-                    Text(L("La liste des comptes Reddit suivis et leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion à Reddit et reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "The list of followed Reddit accounts and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when not signed in to Reddit and come back after a reinstall. No session, token or media leaves the iPhone."))
+                    Text(L("La liste des comptes suivis (Reddit et X) ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion et reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "The list of followed accounts (Reddit and X) and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when signed out and come back after a reinstall. No session, token or media leaves the iPhone."))
                 }
             }
             .sheet(isPresented: $clePresentee) {

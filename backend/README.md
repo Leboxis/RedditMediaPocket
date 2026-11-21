@@ -1,6 +1,6 @@
 # Backend de RedditMediaPocket
 
-Backend gratuit **Cloudflare Workers + D1** (SQLite dans le cloud). Il sert uniquement à synchroniser l'écran **Suivis** de l'app : la liste complète des comptes Reddit suivis ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et celle du dernier upload), afin de pouvoir les afficher même sans connexion à Reddit. HTTPS, sans carte bancaire, sans endormissement. **Limite du plan gratuit : 100 000 requêtes par jour.**
+Backend gratuit **Cloudflare Workers + D1** (SQLite dans le cloud). Il sert uniquement à synchroniser l'écran **Suivis** de l'app : la liste des comptes suivis (Reddit et X) ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et celle du dernier upload), afin de pouvoir les afficher même sans connexion. HTTPS, sans carte bancaire, sans endormissement. **Limite du plan gratuit : 100 000 requêtes par jour.**
 
 Aucune session, aucun jeton et aucun média ne sont envoyés. La clé API est vérifiée côté serveur et stockée dans le Keychain de l'iPhone.
 
@@ -44,7 +44,7 @@ Puis un cycle complet (remplace `VOTRE_CLE` par la clé choisie) :
 curl -X POST http://127.0.0.1:8787/api/items \
   -H "Content-Type: application/json" \
   -H "X-API-Key: VOTRE_CLE" \
-  -d '{"name":"suivis","type":"suivi","data":{"suivis":["Alice","Bob"],"comptes":{"alice":{"marque":true,"dernierTelechargement":"2026-11-21T08:00:00Z","dernierUpload":null}}}}'
+  -d '{"name":"suivis","type":"suivi","data":{"suivis":["Alice","Bob"],"comptes":{"alice":{"marque":true,"dernierTelechargement":"2026-11-21T08:00:00Z","dernierUpload":null}},"suivisX":["Carol"],"comptesX":{"carol":{"marque":false,"dernierTelechargement":null,"dernierUpload":null}}}}'
 
 # Lire la liste
 curl http://127.0.0.1:8787/api/items \
