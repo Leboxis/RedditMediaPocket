@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developers.cloudflare.com/workers/configuration/wrangler/wrangler.schema.json",
+  "name": "mon-api",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-11-20",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ma-base",
+      // Colle ici le database_id renvoyé par la commande :
+      //   npx wrangler d1 create ma-base
+      "database_id": "f1fba970-fc45-4b50-b14d-87265774fea2"
+    }
+  ]
+}

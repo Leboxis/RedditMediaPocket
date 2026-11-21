@@ -9,9 +9,9 @@ import MediaCore
 }
 
 /// Coquille de navigation de la refonte « Console d'archive » (direction A) :
-/// un `TabView` de 4 onglets — **Nouveau** (la commande + console de transfert,
+/// un `TabView` de 5 onglets — **Nouveau** (la commande + console de transfert,
 /// écran-matrice), **Bibliothèque** (galerie), **Activité** (journaux),
-/// **Réglages** — avec la bannière d'upload kDrive et l'alerte d'erreur
+/// **Réglages** et **Données** (lecture des informations du Worker Cloudflare) — avec la bannière d'upload kDrive et l'alerte d'erreur
 /// globales. Toute la logique métier reste dans `Downloader`, inchangée.
 struct ContentView: View {
     @StateObject private var model = Downloader()
@@ -32,6 +32,9 @@ struct ContentView: View {
             SettingsTabView(model: model)
                 .tabItem { Label(L("Réglages", "Settings"), systemImage: "gearshape") }
                 .tag(3)
+            ItemsListView()
+                .tabItem { Label(L("Données", "Data"), systemImage: "externaldrive") }
+                .tag(4)
         }
         .tint(DS.accentEmphasis)
         .safeAreaInset(edge: .top, spacing: 0) {
