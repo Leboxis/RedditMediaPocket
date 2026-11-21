@@ -63,14 +63,14 @@ final class SyncService: ObservableObject {
             return
         }
         let brouillon = ItemDraft(
-            name: "pocket",
-            type: "snapshot",
-            description: L("Copie de synchronisation", "Sync snapshot"),
+            name: "suivis",
+            type: TypeItem.suivi.rawValue,
+            description: L("Comptes Reddit suivis et dates", "Followed Reddit accounts and dates"),
             data: donnees
         )
         do {
-            let page = try await client.list(type: "snapshot", search: "pocket", page: 1, limit: 20)
-            if let existant = page.items.first(where: { $0.name == "pocket" }) {
+            let page = try await client.list(type: TypeItem.suivi.rawValue, search: "suivis", page: 1, limit: 20)
+            if let existant = page.items.first(where: { $0.name == "suivis" }) {
                 _ = try await client.update(id: existant.id, brouillon)
             } else {
                 _ = try await client.create(brouillon)
@@ -92,8 +92,8 @@ final class SyncService: ObservableObject {
             }
         }
         do {
-            let page = try await client.list(type: "snapshot", search: "pocket", page: 1, limit: 20)
-            guard let element = page.items.first(where: { $0.name == "pocket" }),
+            let page = try await client.list(type: TypeItem.suivi.rawValue, search: "suivis", page: 1, limit: 20)
+            guard let element = page.items.first(where: { $0.name == "suivis" }),
                   let octets = element.data?.donneesJSON(),
                   let copie = try? JSONDecoder().decode(PocketSnapshot.self, from: octets) else {
                 etat = L("Aucune sauvegarde distante", "No remote backup")

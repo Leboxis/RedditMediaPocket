@@ -255,6 +255,7 @@ private struct KDriveCollectionUploadFlow: View {
                     files: filtered,
                     directoryId: uploadDirectoryId ?? String(folder.id),
                     directoryName: uploadDirectoryName.isEmpty ? folder.name : uploadDirectoryName,
+                    collectionLabel: collectionLabel,
                     skippedCount: skippedCount,
                     alreadyOnDriveURLs: matchedDuplicates
                 )
@@ -344,6 +345,8 @@ struct KDriveUploadLot {
     let files: [URL]
     let directoryId: String
     let directoryName: String
+    /// Collection d'origine (`u/pseudo` pour un compte Reddit suivi).
+    let collectionLabel: String
     let skippedCount: Int
     let alreadyOnDriveURLs: [URL]
 }
@@ -382,6 +385,7 @@ final class KDriveContinuousUploadController: ObservableObject {
     ) {
         let files = lot.files
         let directoryId = lot.directoryId
+        let libelleCollection = lot.collectionLabel
         cancel()
         let generation = UUID()
         uploadGeneration = generation
@@ -519,7 +523,12 @@ final class KDriveContinuousUploadController: ObservableObject {
                 LogCenter.kdrive(L("Envoi kDrive annulé.", "kDrive upload cancelled."))
             } else {
                 if failed > 0 { LogCenter.err(L("Envoi kDrive : \(success) réussis, \(failed) échoués.", "kDrive upload: \(success) ok, \(failed) failed.")) }
-                else { LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files.")) }
+                else {
+                    LogCenter.kdrive(L("Envoi kDrive terminé : \(success) fichiers.", "kDrive upload done: \(success) files."))
+                    if success > 0, let pseudo = SuiviStore.pseudoReddit(libelleCollection) {
+                        SuiviStore.noterUpload(pseudo: pseudo)
+                    }
+                }
                 progress = files.isEmpty ? 0 : 1
             }
             finished = true

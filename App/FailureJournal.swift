@@ -72,20 +72,17 @@ struct FailureEntry: Codable, Identifiable, Equatable {
         }
         entries = list
         scheduleSave()
-        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
     func remove(ids: [UUID]) {
         let set = Set(ids)
         entries.removeAll { set.contains($0.id) }
         scheduleSave()
-        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
     func clear() {
         entries = []
         saveNow()
-        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
     private func scheduleSave() {

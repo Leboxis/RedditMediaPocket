@@ -1,8 +1,8 @@
 # Backend de RedditMediaPocket
 
-Backend gratuit **Cloudflare Workers + D1** (SQLite dans le cloud) pour stocker de façon permanente les collections, réglages, comptes suivis et journaux de bord de l'app. HTTPS, sans carte bancaire, sans endormissement. **Limite du plan gratuit : 100 000 requêtes par jour.**
+Backend gratuit **Cloudflare Workers + D1** (SQLite dans le cloud). Il sert uniquement à synchroniser l'écran **Suivis** de l'app : pour chaque compte Reddit suivi, la coche « déjà téléchargé », la date du dernier téléchargement complet et celle du dernier upload. HTTPS, sans carte bancaire, sans endormissement. **Limite du plan gratuit : 100 000 requêtes par jour.**
 
-Aucun secret n'est écrit dans ce dépôt. La clé API est vérifiée côté serveur et stockée dans le Keychain de l'iPhone.
+Aucune session, aucun jeton et aucun média ne sont envoyés. La clé API est vérifiée côté serveur et stockée dans le Keychain de l'iPhone.
 
 ## 1. Installation et préparation
 
@@ -40,11 +40,11 @@ curl http://127.0.0.1:8787/api/health
 Puis un cycle complet (remplace `VOTRE_CLE` par la clé choisie) :
 
 ```bash
-# Créer
+# Créer (l'app envoie un seul élément « suivis » de type « suivi »)
 curl -X POST http://127.0.0.1:8787/api/items \
   -H "Content-Type: application/json" \
   -H "X-API-Key: VOTRE_CLE" \
-  -d '{"name":"collection-test","type":"collection","data":{"archived":false}}'
+  -d '{"name":"suivis","type":"suivi","data":{"comptes":{"alice":{"marque":true,"dernierTelechargement":"2026-11-21T08:00:00Z","dernierUpload":null}}}}'
 
 # Lire la liste
 curl http://127.0.0.1:8787/api/items \

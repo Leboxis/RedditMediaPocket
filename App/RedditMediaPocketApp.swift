@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaCore
+import Combine
 
 @main @MainActor struct RedditMediaPocketApp: App {
     @UIApplicationDelegateAdaptor(PocketAppDelegate.self) private var appDelegate

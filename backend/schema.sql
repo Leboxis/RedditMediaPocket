@@ -1,11 +1,9 @@
 -- Schéma initial de la base D1 « ma-base ».
--- Les éléments sont différenciés par la colonne `type` :
---   collection     -> une collection RedditMediaPocket (drapeaux de source, archived, lastRun)
---   reglage        -> un réglage de l'app (nom = clé, data = valeur)
---   log            -> une ligne du journal de bord (date ISO, niveau, message)
---   compte_suivi   -> un pseudo suivi / sauvegardé (data = pseudo)
---   snapshot       -> copie complète et non secrète de l'app, envoyée à chaque changement
--- Les champs précis de chaque catégorie sont décrits côté iOS dans App/Models/Item.swift.
+-- Une seule catégorie est stockée : `suivi`.
+--   suivi -> état des comptes Reddit suivis (nom = "suivis") :
+--            coche « déjà téléchargé », date du dernier téléchargement complet,
+--            date du dernier upload. Aucune session, aucun jeton, aucun média.
+-- Le format exact du champ `data` est décrit côté iOS dans App/Models/PocketSnapshot.swift.
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

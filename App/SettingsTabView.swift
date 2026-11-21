@@ -189,9 +189,9 @@ private struct DownloadSettings: View {
                     }
                     Button(L("Clé API", "API key")) { clePresentee = true }
                 } header: {
-                    Text(L("Sauvegarde Cloudflare", "Cloudflare backup"))
+                    Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
                 } footer: {
-                    Text(L("Les collections, réglages, comptes suivis et journaux sont envoyés à chaque changement et restaurés après réinstallation. Les sessions et jetons ne sont jamais envoyés.", "Collections, settings, followed accounts and logs are sent on every change and restored after reinstall. Sessions and tokens are never sent."))
+                    Text(L("Seul l'état des comptes Reddit suivis est envoyé : la coche « déjà téléchargé », la date du dernier téléchargement complet et celle du dernier upload. Ces informations reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "Only the state of followed Reddit accounts is sent: the “already downloaded” checkmark, the last full download date and the last upload date. This data comes back after a reinstall. No session, token or media leaves the iPhone."))
                 }
             }
             .sheet(isPresented: $clePresentee) {

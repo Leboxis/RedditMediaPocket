@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaCore
+import Combine
 import UIKit
 import ImageIO
 
@@ -17,6 +18,8 @@ struct FollowingView: View {
     @State private var kDriveLoading = false
     @State private var kDriveError: String?
     @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
+    /// Dates de téléchargement et d'upload, synchronisées avec le serveur.
+    @State private var etats: [String: CompteSuiviEtat] = [:]
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
@@ -40,6 +43,9 @@ struct FollowingView: View {
         }
         guard let data = try? JSONEncoder().encode(names.sorted()) else { return }
         downloadedUsernamesData = data
+        // La coche fait partie de l'état synchronisé : on relit et on pousse.
+        etats = SuiviStore.charger()
+        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
     var body: some View {
@@ -99,6 +105,20 @@ struct FollowingView: View {
                                                 .font(.title3).foregroundStyle(DS.accentEmphasis)
                                             VStack(alignment: .leading, spacing: 2) {
                                                 Text(name).fontWeight(.medium).lineLimit(1)
+                                                if let etat = etats[name.lowercased()] {
+                                                    if let date = etat.dernierTelechargement {
+                                                        Text(L("Téléchargé le \(dateCourte(date))", "Downloaded \(dateCourte(date))"))
+                                                            .font(.caption2)
+                                                            .foregroundStyle(DS.onSurfaceMuted)
+                                                            .lineLimit(1)
+                                                    }
+                                                    if let date = etat.dernierUpload {
+                                                        Text(L("Uploadé le \(dateCourte(date))", "Uploaded \(dateCourte(date))"))
+                                                            .font(.caption2)
+                                                            .foregroundStyle(DS.onSurfaceMuted)
+                                                            .lineLimit(1)
+                                                    }
+                                                }
                                                 if let folder = kDriveFolders?[name] {
                                                     Label(kDriveBadgeText(folder), systemImage: "checkmark.circle.fill")
                                                         .font(.caption2)
@@ -167,7 +187,12 @@ struct FollowingView: View {
         .tint(DS.accentEmphasis)
         .errorAlert(kDriveError ?? errorMessage)
         .task(id: "\(session.hasSession)-\(retryCount)") {
+            etats = SuiviStore.charger()
             if session.hasSession, friends == nil { await load() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pocketDonneesRestaurees)) { _ in
+            // Une restauration vient d'écrire les états : on relit les dates.
+            etats = SuiviStore.charger()
         }
     }
 
@@ -183,6 +208,11 @@ struct FollowingView: View {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Date compacte et lisible (jour, mois, heure) pour les lignes de suivi.
+    private func dateCourte(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .shortened)
     }
 
     private func kDriveBadgeText(_ folder: KDriveFolderItem) -> String {

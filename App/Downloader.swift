@@ -1106,6 +1106,9 @@ extension Notification.Name {
             : sourceKind == "ts" ? "ts/\(tikTokSavedAccount ?? "")"
             : "\(sourceKind)/\(username)"
         let started = Date()
+        // Compte suivi visé : figé au démarrage, l'utilisateur peut changer de
+        // source pendant le parcours sans fausser la date enregistrée.
+        let compteSuivi = (sourceKind == "u" && !username.isEmpty) ? username.lowercased() : nil
         LogCenter.info(L("Démarrage : \(target), \(sessionLimit) transferts simultanés.", "Starting: \(target), \(sessionLimit) simultaneous transfers."))
         // Relance manuelle : on oublie les pauses enregistrées et on retente
         // vraiment le serveur au lieu de bloquer en local.
@@ -1122,6 +1125,9 @@ extension Notification.Name {
             }
             do {
                 try await run()
+                if let compteSuivi {
+                    SuiviStore.noterTelechargement(pseudo: compteSuivi)
+                }
                 LogCenter.info(L("Parcours terminé : \(count) téléchargés, \(failed) ignorés en \(Int(Date().timeIntervalSince(started))) s.", "Run finished: \(count) downloaded, \(failed) skipped in \(Int(Date().timeIntervalSince(started))) s."))
             }
             catch {
