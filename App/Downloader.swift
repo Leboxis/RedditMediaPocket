@@ -3311,15 +3311,32 @@ extension Notification.Name {
             if url.path.hasSuffix(".json") { return try RedditListing.parse(body) }
             return try FeedParser.parse(body)
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
+            // Le `.json` des subreddits est coupé chez Reddit (403 même depuis
+            // Safari connecté, alors que la page HTML charge). Lire le listing
+            // HTML avant de conclure à une panne de session.
+            if code == 403, case .subreddit(let name) = source {
+                do {
+                    let htmlURL = RedditHTMLListing.url(subreddit: name, sort: subSort, after: after)
+                    LogCenter.info(L("Listing JSON refusé : lecture du listing HTML \(LogDiagnostics.requestSummary(htmlURL))…",
+                                     "JSON listing refused: reading the HTML listing \(LogDiagnostics.requestSummary(htmlURL))…"))
+                    let body = try await network.data(htmlURL)
+                    let posts = try RedditHTMLListing.parse(body)
+                    LogCenter.net(L("Listing HTML : \(posts.count) posts.",
+                                    "HTML listing: \(posts.count) posts."))
+                    return posts
+                } catch {
+                    LogCenter.err(L("Listing HTML indisponible : \(error.localizedDescription)",
+                                    "HTML listing unavailable: \(error.localizedDescription)"))
+                }
+            }
             // Un 401, ou un 403 sans session, signifie « connecte-toi ». Un 403
-            // avec session est un refus du listing par Reddit (le repli
-            // `old.reddit.com` vient d'échouer) : dire « connecte-toi » serait
+            // avec session est un refus de Reddit : dire « connecte-toi » serait
             // faux puisque u/ et ♥ passent avec la même session.
             if code == 401 || !RedditSession.shared.hasSession {
                 throw FeedError.loginRequired
             }
-            throw NetworkError.invalid(L("Reddit refuse ce listing (HTTP \(code)) : la session est détectée mais le repli a échoué. Réessaie plus tard ou vérifie la connexion dans les Réglages.",
-                                         "Reddit refused this listing (HTTP \(code)): the session is detected but the fallback failed. Try again later or check the connection in Settings."))
+            throw NetworkError.invalid(L("Reddit refuse ce listing (HTTP \(code)) : la session est détectée mais ni le JSON ni le HTML n'ont été servis. Réessaie plus tard ou vérifie la connexion dans les Réglages.",
+                                         "Reddit refused this listing (HTTP \(code)): the session is detected but neither JSON nor HTML was served. Try again later or check the connection in Settings."))
         }
     }
 
