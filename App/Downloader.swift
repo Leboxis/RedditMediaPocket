@@ -739,6 +739,12 @@ extension Notification.Name {
         }
     }
 
+    /// Recharge les collections après une restauration depuis le serveur.
+    func appliquerDonneesDuServeur() {
+        loadCachedCollections()
+        reloadIfFolderChanged()
+    }
+
     private func saveCollections() {
         if let data = try? JSONEncoder().encode(collections) {
             UserDefaults.standard.set(data, forKey: "collections")

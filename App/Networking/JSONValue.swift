@@ -54,4 +54,50 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .null: try conteneur.encodeNil()
         }
     }
+
+    /// Convertit une valeur issue de `JSONSerialization`/UserDefaults en `JSONValue`.
+    public static func depuis(_ valeur: Any) -> JSONValue? {
+        if valeur is NSNull { return .null }
+        if let nombre = valeur as? NSNumber {
+            if CFGetTypeID(nombre as CFTypeRef) == CFBooleanGetTypeID() { return .bool(nombre.boolValue) }
+            return .number(nombre.doubleValue)
+        }
+        if let texte = valeur as? String { return .string(texte) }
+        if let tableau = valeur as? [Any] {
+            return .array(tableau.compactMap { depuis($0) })
+        }
+        if let dictionnaire = valeur as? [String: Any] {
+            var resultat: [String: JSONValue] = [:]
+            for (cle, valeur) in dictionnaire {
+                if let convertie = depuis(valeur) { resultat[cle] = convertie }
+            }
+            return .object(resultat)
+        }
+        return nil
+    }
+
+    /// Convertit vers des types fondamentaux utilisables dans UserDefaults.
+    public var valeurFondamentale: Any? {
+        switch self {
+        case .object(let dictionnaire):
+            var resultat: [String: Any] = [:]
+            for (cle, valeur) in dictionnaire {
+                resultat[cle] = valeur.valeurFondamentale ?? NSNull()
+            }
+            return resultat
+        case .array(let tableau):
+            return tableau.compactMap { $0.valeurFondamentale }
+        case .string(let texte): return texte
+        case .number(let nombre): return NSNumber(value: nombre)
+        case .bool(let booleen): return NSNumber(value: booleen)
+        case .null: return NSNull()
+        }
+    }
+
+    /// Sérialise en `Data` pour décoder un modèle typé.
+    public func donneesJSON() -> Data? {
+        guard let objet = valeurFondamentale,
+              JSONSerialization.isValidJSONObject(objet) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: objet)
+    }
 }

@@ -112,6 +112,7 @@ struct LogEntry: Identifiable, Equatable {
                 self?.flushDiskLines()
             }
         }
+        NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
     }
 
     private func appendEntry(_ entry: LogEntry) {
@@ -178,6 +179,18 @@ struct LogEntry: Identifiable, Equatable {
             try? FileManager.default.removeItem(at: url1)
         }
         addSync(level: .info, message: L("Journal effacé.", "Log cleared."))
+    }
+
+    /// Remplace le journal local par la copie restaurée depuis le serveur.
+    func restaurer(lignes: [LigneJournal]) {
+        let formateur = ISO8601DateFormatter()
+        let entrees = lignes.compactMap { ligne -> LogEntry? in
+            guard let niveau = LogLevel(rawValue: ligne.niveau),
+                  let date = formateur.date(from: ligne.date) else { return nil }
+            return LogEntry(date: date, level: niveau, message: ligne.message)
+        }
+        entries = Array(entrees.suffix(Self.maxMemory))
+        errorCount = entries.reduce(0) { $0 + ($1.level == .erreur ? 1 : 0) }
     }
 
     func filtered(level: LogLevel?, search: String) -> [LogEntry] {
