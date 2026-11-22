@@ -4363,10 +4363,15 @@ extension Notification.Name {
     /// Noms des fichiers actuellement stockés sur l'appareil pour le dossier
     /// local d'une collection (`CollectionFiles.scan` hors fil principal).
     func localFileNames(forFolderName folderName: String) async -> [String] {
+        let urls = await localFileURLs(forFolderName: folderName)
+        return urls.map(\.lastPathComponent)
+    }
+
+    /// URLs des fichiers médias actuellement stockés localement pour une collection.
+    func localFileURLs(forFolderName folderName: String) async -> [URL] {
         let folder = root.appendingPathComponent(folderName, isDirectory: true)
         return await Task.detached(priority: .utility) {
-            let urls = (try? CollectionFiles.scan(folder).files) ?? []
-            return urls.map(\.lastPathComponent)
+            (try? CollectionFiles.scan(folder).files) ?? []
         }.value
     }
 

@@ -572,12 +572,15 @@ struct KDriveCollectionsStatusView: View {
     var onDownloadCollection: ((UserCollection) -> Void)? = nil
 
     @ObservedObject private var center = KDriveFreshnessCenter.shared
+    @ObservedObject private var batch = KDriveBatchController.shared
+    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
     @AppStorage("kDriveDirectoryId") private var directoryId = "1"
     @AppStorage("kDriveDirectoryName") private var directoryName = ""
     @State private var filter: KDriveFreshnessFilter = .all
+    @State private var confirmUploadAndDelete = false
 
     private var kDriveConfigured: Bool {
         !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -586,6 +589,23 @@ struct KDriveCollectionsStatusView: View {
 
     private var allCollections: [UserCollection] {
         center.allCheckableCollections(model: model)
+    }
+
+    /// Collections à télécharger en lot : celles de la liste filtrée qui ne sont
+    /// ni déjà à jour, ni uniquement en attente d'envoi local.
+    private var downloadableCollections: [UserCollection] {
+        filteredCollections.filter { collection in
+            switch center.status(for: collection.id) {
+            case .upToDate, .pendingUpload:
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
+    private var localCollections: [UserCollection] {
+        model.collections
     }
 
     private var filteredCollections: [UserCollection] {
@@ -709,6 +729,25 @@ struct KDriveCollectionsStatusView: View {
             }
         }
         .tint(DS.accentEmphasis)
+        .confirmationDialog(
+            L("Tout envoyer sur kDrive et supprimer ?", "Upload all to kDrive and delete?"),
+            isPresented: $confirmUploadAndDelete,
+            titleVisibility: .visible
+        ) {
+            Button(L("Envoyer et supprimer", "Upload & delete"), role: .destructive) {
+                batch.startUploadAllAndDelete(
+                    collections: localCollections,
+                    model: model,
+                    token: token,
+                    driveId: driveId,
+                    parentDirectoryId: directoryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "1" : directoryId
+                )
+            }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Toutes les collections locales seront envoyées vers leur dossier kDrive, puis les fichiers envoyés avec succès (et doublons déjà présents) seront supprimés automatiquement du téléphone.",
+                   "All local collections will be uploaded to their kDrive folder, then successfully uploaded files (and duplicates already on Drive) will be automatically deleted from the device."))
+        }
     }
 
     private func consoleMetric(
@@ -825,10 +864,109 @@ struct KDriveCollectionsStatusView: View {
                     .font(.caption)
                     .foregroundStyle(DS.calmRose)
             }
+
+            batchActionBar
+
+            if batch.isRunning {
+                VStack(alignment: .leading, spacing: DS.space(1)) {
+                    HStack(spacing: DS.space(2)) {
+                        ProgressView().controlSize(.mini)
+                        Text(batch.progressLabel)
+                            .font(DS.monoCaption)
+                            .foregroundStyle(DS.onSurface)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(batch.completedCount)/\(max(1, batch.totalCount))")
+                            .font(DS.monoCaption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                    }
+                    ProgressView(value: Double(batch.completedCount), total: Double(max(1, batch.totalCount)))
+                        .progressViewStyle(.linear)
+                        .tint(batch.mode == .uploadAndDelete ? DS.calmAmber : DS.accent)
+                }
+            } else if let summary = batch.lastSummary {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(batch.lastHadError ? DS.calmRose : DS.onSurfaceMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(DS.space(3))
         .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusM))
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
+    }
+
+    private var batchActionBar: some View {
+        let downloadRunning = batch.mode == .downloadAll && batch.isRunning
+        let uploadRunning = batch.mode == .uploadAndDelete && batch.isRunning
+        let canStartDownload = !downloadableCollections.isEmpty && !model.running && !batch.isRunning
+        let canStartUpload = !localCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
+
+        return HStack(spacing: DS.space(2)) {
+            Button {
+                if downloadRunning {
+                    batch.stop(model: model)
+                } else {
+                    batch.startDownloadAll(collections: downloadableCollections, model: model)
+                }
+            } label: {
+                HStack(spacing: DS.space(1)) {
+                    Image(systemName: downloadRunning ? "stop.fill" : "arrow.down.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Text(downloadRunning ? L("Arrêter", "Stop") : L("Tout télécharger", "Download all"))
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .foregroundStyle(downloadRunning ? DS.error : (canStartDownload ? DS.onAccent : DS.onSurfaceMuted))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, DS.space(2))
+                .background(
+                    downloadRunning ? DS.error.opacity(0.12) : (canStartDownload ? DS.accent : DS.surface),
+                    in: RoundedRectangle(cornerRadius: DS.radiusS)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: DS.radiusS))
+            }
+            .buttonStyle(DSPressableButtonStyle())
+            .disabled(!downloadRunning && !canStartDownload)
+            .accessibilityLabel(downloadRunning
+                ? L("Arrêter le téléchargement groupé", "Stop batch download")
+                : L("Tout télécharger (\(downloadableCollections.count) collections)", "Download all (\(downloadableCollections.count) collections)"))
+
+            Button {
+                if uploadRunning {
+                    batch.stop(model: model)
+                } else {
+                    confirmUploadAndDelete = true
+                }
+            } label: {
+                HStack(spacing: DS.space(1)) {
+                    Image(systemName: uploadRunning ? "stop.fill" : "icloud.and.arrow.up.fill")
+                        .font(.subheadline.weight(.semibold))
+                    Text(uploadRunning ? L("Arrêter", "Stop") : L("Uploader & suppr.", "Upload & delete"))
+                        .font(.footnote.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .foregroundStyle(uploadRunning ? DS.error : (canStartUpload ? DS.accentEmphasis : DS.onSurfaceMuted))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, DS.space(2))
+                .background(
+                    uploadRunning ? DS.error.opacity(0.12) : DS.surface,
+                    in: RoundedRectangle(cornerRadius: DS.radiusS)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DS.radiusS)
+                        .strokeBorder(uploadRunning ? DS.error.opacity(0.4) : (canStartUpload ? DS.accentEmphasis.opacity(0.35) : Color.clear))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: DS.radiusS))
+            }
+            .buttonStyle(DSPressableButtonStyle())
+            .disabled(!uploadRunning && !canStartUpload)
+            .accessibilityLabel(uploadRunning
+                ? L("Arrêter l'envoi kDrive groupé", "Stop batch kDrive upload")
+                : L("Tout envoyer sur kDrive puis supprimer localement", "Upload all to kDrive then delete locally"))
+        }
     }
 
     @ViewBuilder
@@ -1041,5 +1179,306 @@ private struct KDriveCloudCheckShape: Shape {
         path.addLine(to: pt(11.2, 15.5))
         path.addLine(to: pt(15.4, 11.1))
         return path
+    }
+}
+
+/// Orchestrateur d'actions groupées réservé à la feuille « État kDrive » :
+/// - « Tout télécharger » : enchaîne les collections une à une via `Downloader`.
+/// - « Uploader & supprimer » : envoie chaque collection locale dans son dossier
+///   kDrive, déduplique, puis supprime automatiquement les fichiers confirmés
+///   sur le Drive (jamais les échecs).
+@MainActor
+final class KDriveBatchController: ObservableObject {
+    enum Mode {
+        case idle
+        case downloadAll
+        case uploadAndDelete
+    }
+
+    static let shared = KDriveBatchController()
+
+    @Published private(set) var mode: Mode = .idle
+    @Published private(set) var isRunning = false
+    @Published private(set) var completedCount = 0
+    @Published private(set) var totalCount = 0
+    @Published private(set) var progressLabel = ""
+    @Published private(set) var lastSummary: String?
+    @Published private(set) var lastHadError = false
+
+    private var batchTask: Task<Void, Never>?
+
+    private init() {}
+
+    func stop(model: Downloader) {
+        batchTask?.cancel()
+        batchTask = nil
+        if mode == .downloadAll, model.running {
+            model.stop()
+        } else if mode == .uploadAndDelete, KDriveContinuousUploadController.shared.isUploading {
+            KDriveContinuousUploadController.shared.cancel()
+        }
+        isRunning = false
+        mode = .idle
+        progressLabel = ""
+        lastSummary = L("Opération groupée interrompue.", "Batch operation stopped.")
+        lastHadError = false
+    }
+
+    func startDownloadAll(collections: [UserCollection], model: Downloader) {
+        guard !isRunning, !collections.isEmpty else { return }
+        mode = .downloadAll
+        isRunning = true
+        completedCount = 0
+        totalCount = collections.count
+        progressLabel = L("Préparation du téléchargement…", "Preparing download…")
+        lastSummary = nil
+        lastHadError = false
+
+        batchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var downloadedCollections = 0
+            var stoppedForStorage = false
+
+            for collection in collections {
+                if Task.isCancelled { break }
+                self.progressLabel = L("Téléchargement : \(collection.displayName)",
+                                       "Downloading: \(collection.displayName)")
+                model.download(user: collection.id)
+
+                while model.running {
+                    if Task.isCancelled {
+                        model.stop()
+                        while model.running {
+                            try? await Task.sleep(for: .milliseconds(200))
+                        }
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+
+                if Task.isCancelled { break }
+                downloadedCollections += 1
+                self.completedCount = downloadedCollections
+
+                if model.storageLimitReached {
+                    stoppedForStorage = true
+                    break
+                }
+            }
+
+            let cancelled = Task.isCancelled
+            self.isRunning = false
+            self.mode = .idle
+            self.batchTask = nil
+            self.progressLabel = ""
+
+            if cancelled {
+                self.lastSummary = L("Téléchargement groupé arrêté (\(downloadedCollections)/\(collections.count)).",
+                                     "Batch download stopped (\(downloadedCollections)/\(collections.count)).")
+                self.lastHadError = false
+            } else if stoppedForStorage {
+                self.lastSummary = L("Plafond d'espace disque atteint après \(downloadedCollections)/\(collections.count) collection(s).",
+                                     "Disk space limit reached after \(downloadedCollections)/\(collections.count) collection(s).")
+                self.lastHadError = true
+            } else {
+                self.lastSummary = L("\(downloadedCollections) collection(s) traitée(s).",
+                                     "\(downloadedCollections) collection(s) processed.")
+                self.lastHadError = false
+            }
+        }
+    }
+
+    func startUploadAllAndDelete(
+        collections: [UserCollection],
+        model: Downloader,
+        token: String,
+        driveId: String,
+        parentDirectoryId: String
+    ) {
+        guard !isRunning, !collections.isEmpty else { return }
+        mode = .uploadAndDelete
+        isRunning = true
+        completedCount = 0
+        totalCount = collections.count
+        progressLabel = L("Analyse des collections locales…", "Scanning local collections…")
+        lastSummary = nil
+        lastHadError = false
+
+        batchTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let service = KDriveService.shared
+            let uploader = KDriveContinuousUploadController.shared
+
+            var totalUploaded = 0
+            var totalDeleted = 0
+            var totalFailed = 0
+            var existingSubdirectories: [KDriveFolderItem] = []
+
+            do {
+                existingSubdirectories = try await service.fetchSubdirectories(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: parentDirectoryId
+                )
+            } catch {
+                self.isRunning = false
+                self.mode = .idle
+                self.batchTask = nil
+                self.progressLabel = ""
+                self.lastSummary = L("Impossible de lire kDrive : \(error.localizedDescription)",
+                                     "Could not read kDrive: \(error.localizedDescription)")
+                self.lastHadError = true
+                return
+            }
+
+            for collection in collections {
+                if Task.isCancelled { break }
+                self.progressLabel = L("Préparation : \(collection.displayName)",
+                                       "Preparing: \(collection.displayName)")
+
+                let localURLs = await model.localFileURLs(forFolderName: collection.folderName)
+                if localURLs.isEmpty {
+                    self.completedCount += 1
+                    continue
+                }
+
+                do {
+                    let targetFolderName = FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
+                    let folder: KDriveFolderItem
+                    if let match = existingSubdirectories.first(where: {
+                        $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    }) {
+                        folder = match
+                    } else {
+                        let created = try await service.createDirectory(
+                            token: token,
+                            driveId: driveId,
+                            parentDirectoryId: parentDirectoryId,
+                            folderName: targetFolderName
+                        )
+                        existingSubdirectories.append(created)
+                        folder = created
+                    }
+
+                    if Task.isCancelled { break }
+                    let remoteNames = try await service.fetchFileNames(
+                        token: token,
+                        driveId: driveId,
+                        directoryId: String(folder.id)
+                    )
+                    if Task.isCancelled { break }
+
+                    let (toUpload, duplicates) = await Task.detached(priority: .utility) {
+                        let normalizedRemote = Set(remoteNames.map { FilenamePolicy.kDriveNormalizedName($0) })
+                        var pending: [URL] = []
+                        var dupes: [URL] = []
+                        for url in localURLs {
+                            if Task.isCancelled { break }
+                            let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: url.lastPathComponent)
+                            let alreadyThere = candidates.contains {
+                                normalizedRemote.contains(FilenamePolicy.kDriveNormalizedName($0))
+                            }
+                            if alreadyThere {
+                                dupes.append(url)
+                            } else {
+                                pending.append(url)
+                            }
+                        }
+                        return (pending, dupes)
+                    }.value
+
+                    if Task.isCancelled { break }
+
+                    var confirmedOnDrive = duplicates
+                    if !toUpload.isEmpty {
+                        self.progressLabel = L("Envoi : \(collection.displayName) (\(toUpload.count))",
+                                               "Uploading: \(collection.displayName) (\(toUpload.count))")
+                        let lot = KDriveUploadLot(
+                            files: toUpload,
+                            directoryId: String(folder.id),
+                            directoryName: folder.name,
+                            collectionLabel: collection.kDriveLabel,
+                            skippedCount: duplicates.count,
+                            alreadyOnDriveURLs: duplicates
+                        )
+                        uploader.start(lot: lot, token: token, driveId: driveId)
+
+                        while uploader.isUploading || !uploader.finished {
+                            if Task.isCancelled {
+                                uploader.cancel()
+                                while uploader.isUploading {
+                                    try? await Task.sleep(for: .milliseconds(200))
+                                }
+                                break
+                            }
+                            try? await Task.sleep(for: .milliseconds(250))
+                        }
+
+                        if Task.isCancelled || uploader.wasCancelled { break }
+                        totalUploaded += uploader.successCount
+                        totalFailed += uploader.failedCount
+                        confirmedOnDrive.append(contentsOf: uploader.uploadedFileURLs)
+                    } else if !duplicates.isEmpty {
+                        KDriveFreshnessCenter.shared.markUploaded(
+                            collectionLabel: collection.id,
+                            remoteFileCount: remoteNames.count
+                        )
+                    }
+
+                    if !confirmedOnDrive.isEmpty {
+                        self.progressLabel = L("Nettoyage : \(collection.displayName)",
+                                               "Cleaning up: \(collection.displayName)")
+                        let urlsToDelete = confirmedOnDrive
+                        let deleted = await Task.detached(priority: .userInitiated) {
+                            let fm = FileManager.default
+                            var count = 0
+                            for url in urlsToDelete where fm.fileExists(atPath: url.path) {
+                                do {
+                                    try fm.removeItem(at: url)
+                                    MediaMetadata.remove(for: url)
+                                    count += 1
+                                } catch {
+                                    LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)",
+                                                    "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+                                }
+                            }
+                            return count
+                        }.value
+                        totalDeleted += deleted
+                        if deleted > 0 {
+                            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+                        }
+                    }
+                } catch is CancellationError {
+                    break
+                } catch {
+                    totalFailed += 1
+                    LogCenter.err(L("kDrive (lot) : erreur sur \(collection.displayName) : \(error.localizedDescription)",
+                                    "kDrive (batch): error on \(collection.displayName): \(error.localizedDescription)"))
+                }
+
+                self.completedCount += 1
+            }
+
+            let cancelled = Task.isCancelled
+            self.isRunning = false
+            self.mode = .idle
+            self.batchTask = nil
+            self.progressLabel = ""
+
+            if cancelled {
+                self.lastSummary = L("Envoi groupé arrêté (\(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s)).",
+                                     "Batch upload stopped (\(totalUploaded) uploaded, \(totalDeleted) deleted).")
+                self.lastHadError = false
+            } else if totalFailed > 0 {
+                self.lastSummary = L("\(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s) · \(totalFailed) échec(s) conservé(s).",
+                                     "\(totalUploaded) uploaded, \(totalDeleted) deleted · \(totalFailed) failure(s) kept.")
+                self.lastHadError = true
+            } else {
+                self.lastSummary = L("Terminé : \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s) du téléphone.",
+                                     "Done: \(totalUploaded) uploaded, \(totalDeleted) deleted from device.")
+                self.lastHadError = false
+            }
+        }
     }
 }
