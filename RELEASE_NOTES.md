@@ -1,3 +1,8 @@
+Vérification de fraîcheur des collections kDrive par rapport aux sites sources.
+
+- **Comparaison kDrive / site source.** Pour chaque collection (Reddit `u/`, `r/`, `♥`, RedGifs `rg/` et `#tag`, X-Fetish `x/`, X `tw/`, TikTok `tt/` et `ts/`, Instagram `ig/`), l'app interroge le dossier correspondant sur kDrive et la première page du site source (sans rien télécharger) pour déterminer si le Drive est à jour (`À jour`, `+N nouveaux sur la source`, `N à envoyer vers kDrive`, `Hors kDrive`).
+- **Indicateurs et tableau de bord « État kDrive ».** Pastille d'état directe sur chaque collection de la Bibliothèque et sur chaque compte de l'écran Suivis, bandeau de statut sous les pastilles de la Bibliothèque, et feuille complète « État kDrive » (accessible depuis la Bibliothèque et l'onglet Activité) avec compteurs, filtres, vérification globale ou unitaire et lancement du téléchargement en un geste.
+
 Sessions retrouvées après réinstallation, via Cloudflare.
 
 - **Cookies de session synchronisés.** Reddit, X, TikTok et Instagram : les cookies sont envoyés au Worker Cloudflare après chaque connexion, puis réinjectés dans les magasins WebKit au lancement. Sur une installation neuve, enregistrer la clé API suffit à retrouver les quatre connexions en plus des comptes suivis.

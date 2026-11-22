@@ -528,6 +528,10 @@ final class KDriveContinuousUploadController: ObservableObject {
                     if success > 0, let identifiant = SuiviStore.identifiantCollection(libelleCollection) {
                         SuiviStore.noterUpload(pseudo: identifiant.pseudo, plateforme: identifiant.plateforme)
                     }
+                    KDriveFreshnessCenter.shared.markUploaded(
+                        collectionLabel: libelleCollection,
+                        remoteFileCount: lot.skippedCount + success
+                    )
                 }
                 progress = files.isEmpty ? 0 : 1
             }

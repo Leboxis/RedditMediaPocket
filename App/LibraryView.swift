@@ -15,11 +15,16 @@ struct LibraryView: View {
     /// Bascule vers l'onglet Nouveau pour lancer un téléchargement depuis
     /// les sauvegardés ou les comptes suivis.
     let goToDownload: () -> Void
+    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @AppStorage("kDriveApiToken") private var kDriveToken = ""
+    @AppStorage("kDriveId") private var kDriveId = ""
+    @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
     @State private var selection: Selection?
     @State private var export: ExportSelection?
     @State private var info: MediaInfoSelection?
     @State private var savedPostsPresented = false
     @State private var followingPresented = false
+    @State private var kDriveStatusPresented = false
     @State private var collectionPendingDeletion: UserCollection?
     @State private var mediaPendingDeletion: URL?
     @State private var selectingMedia = false
@@ -29,6 +34,11 @@ struct LibraryView: View {
     @State private var gallerySaveMessage: String?
     private let columns = Array(repeating: GridItem(.flexible(), spacing: DS.gridGap), count: 3)
 
+    private var kDriveConfigured: Bool {
+        !kDriveToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !kDriveId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var visibleSelection: [URL] {
         orderedSelection()
     }
@@ -37,6 +47,17 @@ struct LibraryView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 userChipsRow
+                if kDriveConfigured, let activeCollection = model.activeCollection {
+                    KDriveActiveCollectionStrip(
+                        collection: activeCollection,
+                        model: model,
+                        onDownloadCollection: { collection in
+                            goToDownload()
+                            model.download(user: collection.id)
+                        },
+                        onOpenDashboard: { kDriveStatusPresented = true }
+                    )
+                }
                 gallerySection
             }
             .background(DS.background)
@@ -74,6 +95,14 @@ struct LibraryView: View {
                         collectionLabel: model.activeCollection?.kDriveLabel ?? "Pocket"
                     )
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        kDriveStatusPresented = true
+                    } label: {
+                        Label(L("État kDrive des collections", "kDrive collections status"),
+                              systemImage: "icloud.badge.magnifyingglass")
+                    }
+                }
             }
             .onChange(of: model.activeUser) { _ in exitSelection() }
             .sheet(isPresented: $savedPostsPresented) {
@@ -89,6 +118,13 @@ struct LibraryView: View {
                     followingPresented = false
                     goToDownload()
                     model.download(user: username)
+                }
+            }
+            .sheet(isPresented: $kDriveStatusPresented) {
+                KDriveCollectionsStatusView(model: model) { collection in
+                    kDriveStatusPresented = false
+                    goToDownload()
+                    model.download(user: collection.id)
                 }
             }
             .fullScreenCover(item: $selection) { item in
@@ -161,10 +197,22 @@ struct LibraryView: View {
     private func userChip(_ collection: UserCollection) -> some View {
         let active = model.activeUser == collection.id
         let fresh = model.lastRunCount(for: collection.id)
+        let driveStatus = kDriveFreshness.status(for: collection.id)
         return Button { model.selectUser(collection.id) } label: {
             HStack(spacing: 5) {
                 Image(systemName: collection.icon)
                 Text(collection.displayName).lineLimit(1)
+                if let driveStatus {
+                    if driveStatus.isChecking {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .tint(active ? DS.onAccent : DS.accentEmphasis)
+                    } else {
+                        Image(systemName: driveStatus.symbolName)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(active ? DS.onAccent : driveStatus.tintColor)
+                    }
+                }
                 // Ce qui a réellement été ajouté au passage précédent : l'état
                 // existait déjà (`lastRun`) mais n'était affiché nulle part.
                 if let fresh, fresh > 0, !active {
@@ -184,6 +232,20 @@ struct LibraryView: View {
         .buttonStyle(.plain)
         .accessibilityAddTraits(active ? [.isSelected] : [])
         .contextMenu {
+            if kDriveConfigured {
+                Button {
+                    kDriveFreshness.startSingleCheck(
+                        collection: collection,
+                        model: model,
+                        token: kDriveToken,
+                        driveId: kDriveId,
+                        directoryId: kDriveDirectoryId
+                    )
+                } label: {
+                    Label(L("Vérifier kDrive vs source", "Check kDrive vs source"),
+                          systemImage: "icloud.badge.magnifyingglass")
+                }
+            }
             Button {
                 goToDownload()
                 model.download(user: collection.id)

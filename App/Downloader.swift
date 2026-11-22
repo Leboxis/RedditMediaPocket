@@ -86,6 +86,26 @@ struct UserCollection: Codable, Identifiable, Equatable {
         return isSubreddit ? "r.\(name)" : name
     }
 
+    /// Source interrogeable pour vérifier si le dossier kDrive est à jour par
+    /// rapport au site source (`nil` pour les sélections de liens isolés).
+    var feedSource: FeedSource? {
+        if isTikTokSaved { return .tiktokSaved(name) }
+        if isTikTokVideo { return nil }
+        if isTikTok { return .tiktokUser(name) }
+        if isInstagram { return .instagramUser(name) }
+        if isTwitter { return .twitterUser(name) }
+        if isRedGifsTag { return .redgifsTag(name) }
+        if isRedGifsGif { return .redgifsGif(name) }
+        if isRedGifs { return .redgifsUser(name) }
+        if isSaved { return .saved(name) }
+        if isXFetish {
+            if let parsed = try? FeedSource.parse("x/\(name)") { return parsed }
+            return .xFetish(XFetishAlbums.Target(model: name, videos: [], albums: []))
+        }
+        if isRedditPosts { return nil }
+        return isSubreddit ? .subreddit(name) : .user(name)
+    }
+
     enum CodingKeys: String, CodingKey {
         case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isTikTokVideo, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
@@ -4336,5 +4356,152 @@ extension Notification.Name {
         guard export.status == .completed else { try? fm.removeItem(at: output); throw export.error ?? NetworkError.invalid(L("Échec de l’assemblage vidéo.", "Video merging failed.")) }
         if Task.isCancelled { try? fm.removeItem(at: output); throw CancellationError() }
         return output
+    }
+
+    // MARK: - Sonde de fraîcheur kDrive vs site source
+
+    /// Noms des fichiers actuellement stockés sur l'appareil pour le dossier
+    /// local d'une collection (`CollectionFiles.scan` hors fil principal).
+    func localFileNames(forFolderName folderName: String) async -> [String] {
+        let folder = root.appendingPathComponent(folderName, isDirectory: true)
+        return await Task.detached(priority: .utility) {
+            let urls = (try? CollectionFiles.scan(folder).files) ?? []
+            return urls.map(\.lastPathComponent)
+        }.value
+    }
+
+    /// Lit uniquement la première page (tête du flux) d'une source pour
+    /// comparer ses médias récents au contenu du dossier sur kDrive, sans
+    /// télécharger aucun fichier ni modifier les points de reprise.
+    func probeSourceHeadItems(for source: FeedSource) async throws -> [KDriveSourceItem] {
+        try Task.checkCancellation()
+        switch source {
+        case .user, .subreddit:
+            let posts = try await fetchPosts(source: source, privateFeed: nil, after: nil)
+            return KDriveSourceItem.fromRedditPosts(posts)
+
+        case .saved(let username):
+            let feed = username.isEmpty
+                ? try await network.savedFeed()
+                : try await network.savedFeed(username: username)
+            let posts = try await fetchPosts(source: .saved(feed.username), privateFeed: feed, after: nil)
+            return KDriveSourceItem.fromRedditPosts(posts)
+
+        case .redditPosts(let target):
+            return target.posts.map { .redditPost(id: $0.id, title: "") }
+
+        case .redgifsUser(let username):
+            let response = try await fetchRedgifsUserPage(username: username, page: 1)
+            return KDriveSourceItem.fromRedgifsIDs(response.gifs.map(\.id))
+
+        case .redgifsTag(let tag):
+            let response = try await fetchRedgifsSearchPage(tag: tag, page: 1)
+            return KDriveSourceItem.fromRedgifsIDs(response.gifs.map(\.id))
+
+        case .redgifsGif(let id):
+            return KDriveSourceItem.fromRedgifsIDs([id])
+
+        case .twitterUser(let username):
+            guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
+            let userID = try await fetchXUserID(username: username)
+            let data = try await fetchXMediaPage(userID: userID, cursor: nil)
+            let page = try XTwitterMedia.parseMediaPage(data)
+            return KDriveSourceItem.fromXPosts(page.posts)
+
+        case .tiktokUser(let username):
+            guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
+            let profileURL = TikTokAPI.profileURL(username: username)
+            let headers = TikTokAPI.headers(referer: profileURL)
+            let profile = try TikTokWeb.parseProfile(try await network.data(profileURL, headers: headers))
+            if !profile.posts.isEmpty {
+                return KDriveSourceItem.fromTikTokPosts(profile.posts)
+            }
+            let desktopURL = TikTokAPI.desktopItemListURL(secUid: profile.secUid, cursor: 0)
+            let desktopHeaders = TikTokAPI.headers(referer: profileURL, browserAgent: TikTokAPI.desktopUserAgent)
+            if let data = try? await network.data(desktopURL, headers: desktopHeaders),
+               let page = try? TikTokWeb.parseItemList(data),
+               !page.posts.isEmpty {
+                return KDriveSourceItem.fromTikTokPosts(page.posts)
+            }
+            let paginator = TikTokWebPaginator()
+            defer { paginator.close() }
+            guard await paginator.start(username: username),
+                  let data = await paginator.nextPage() else {
+                return []
+            }
+            let page = try TikTokWeb.parseItemList(data)
+            return KDriveSourceItem.fromTikTokPosts(page.posts)
+
+        case .tiktokVideo(let ref):
+            if let postID = ref.postID {
+                return [.tikTokMedia(storageKey: "tkv-\(postID)", title: "")]
+            }
+            return []
+
+        case .tiktokSaved:
+            guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
+            return []
+
+        case .instagramUser(let username):
+            let pageURL = InstagramAPI.profilePageURL(username: username)
+            let sessionCookies = await InstagramSession.shared.cookieHeader(for: pageURL)
+            let pageHTML: (data: Data, headers: [String: String])
+            do {
+                pageHTML = try await network.dataAndHeaders(
+                    pageURL,
+                    headers: InstagramAPI.pageHeaders(referer: pageURL, sessionCookies: sessionCookies)
+                )
+            } catch NetworkError.refused(let code) where code == 404 || code == 401 {
+                throw InstagramError.unknownAccount
+            } catch NetworkError.refused(let code) where code == 403 || code == 429 {
+                throw InstagramError.loginRequired
+            }
+            guard let tokens = InstagramAPI.tokens(inHTML: pageHTML.data, cookies: pageHTML.headers["set-cookie"]) else {
+                throw InstagramError.invalidResponse
+            }
+            let relay = await instagramRelayOperation(pageHTML: pageHTML.data, referer: pageURL)
+            let page: InstagramPage
+            do {
+                page = try await instagramPostsPage(
+                    tokens: tokens,
+                    username: username,
+                    referer: pageURL,
+                    cursor: nil,
+                    sessionCookies: sessionCookies,
+                    relay: relay
+                )
+            } catch InstagramError.rateLimited, InstagramError.invalidResponse {
+                if sessionCookies != nil,
+                   let profile = try? await instagramProfileInfo(
+                       username: username,
+                       referer: pageURL,
+                       sessionCookies: sessionCookies
+                   ) {
+                    page = profile
+                } else {
+                    page = try InstagramWeb.parseCrawlerPage(
+                        try await network.data(pageURL, headers: InstagramAPI.crawlerHeaders())
+                    )
+                }
+            }
+            return KDriveSourceItem.fromInstagramPosts(page.posts)
+
+        case .xFetish(let target):
+            if !target.videos.isEmpty || !target.albums.isEmpty {
+                return KDriveSourceItem.fromXFetish(albums: target.albums, videos: target.videos)
+            }
+            guard let modelName = target.model else { return [] }
+            var albums: [XFetishAlbums.Album] = []
+            var videos: [XFetishVideos.Video] = []
+            if xFetishMediaKind.includesImages {
+                let data = try await network.data(XFetishAlbums.listingURL(model: modelName, page: 1))
+                albums = try XFetishAlbums.parseListing(data, model: modelName, page: 1).albums
+            }
+            if xFetishMediaKind.includesVideos {
+                let data = try await network.data(XFetishVideos.listingURL(model: modelName, page: 1))
+                videos = try XFetishVideos.parseListing(data, model: modelName, page: 1).videos
+            }
+            return KDriveSourceItem.fromXFetish(albums: albums, videos: videos)
+        }
     }
 }

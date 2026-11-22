@@ -8,13 +8,29 @@ struct ActivityView: View {
     @ObservedObject var model: Downloader
     @ObservedObject private var logs = LogCenter.shared
     @ObservedObject private var journal = FailureJournal.shared
+    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var logsPresented = false
     @State private var failuresPresented = false
+    @State private var kDriveStatusPresented = false
+
+    private var kDriveStatusColor: Color {
+        if kDriveFreshness.outdatedCount > 0 { return DS.warning }
+        if kDriveFreshness.pendingUploadCount > 0 { return DS.accentEmphasis }
+        if kDriveFreshness.upToDateCount > 0 { return DS.success }
+        return DS.onSurfaceMuted
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    SettingsRow(
+                        symbol: "icloud.badge.magnifyingglass", tint: DS.accentEmphasis,
+                        title: L("État kDrive des collections", "kDrive collections status"),
+                        status: kDriveFreshness.summaryLine,
+                        statusColor: kDriveStatusColor,
+                        tap: { kDriveStatusPresented = true },
+                        showsChevron: true)
                     SettingsRow(
                         symbol: "doc.text.magnifyingglass", tint: DS.accentEmphasis,
                         title: L("Journal de bord", "Logs"),
@@ -36,6 +52,7 @@ struct ActivityView: View {
                 }
             }
             .navigationTitle(L("Activité", "Activity"))
+            .sheet(isPresented: $kDriveStatusPresented) { KDriveCollectionsStatusView(model: model) }
             .sheet(isPresented: $logsPresented) { LogsView() }
             .sheet(isPresented: $failuresPresented) { FailureJournalView(model: model) }
         }

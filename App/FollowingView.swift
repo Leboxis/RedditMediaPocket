@@ -9,6 +9,7 @@ struct FollowingView: View {
     let onDownloadAll: (String) -> Void
 
     @ObservedObject private var session = RedditSession.shared
+    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var plateforme: PlateformeSuivi = .reddit
     @State private var friends: [String]?
@@ -107,6 +108,30 @@ struct FollowingView: View {
             .navigationTitle(L("Suivis", "Following"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if kDriveConfigured {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            if kDriveFreshness.isCheckingAll {
+                                kDriveFreshness.stopChecking()
+                            } else {
+                                verifierFraicheurPlateforme()
+                            }
+                        } label: {
+                            if kDriveFreshness.isCheckingAll {
+                                HStack(spacing: 4) {
+                                    ProgressView().controlSize(.small)
+                                    Text("\(kDriveFreshness.checkedCount)/\(max(1, kDriveFreshness.totalToCheck))")
+                                        .font(.caption.monospacedDigit())
+                                }
+                            } else {
+                                Image(systemName: "icloud.badge.magnifyingglass")
+                            }
+                        }
+                        .accessibilityLabel(kDriveFreshness.isCheckingAll
+                            ? L("Arrêter la vérification kDrive", "Stop kDrive check")
+                            : L("Vérifier si kDrive est à jour avec la source", "Check if kDrive is up to date with source"))
+                    }
+                }
                 if plateforme != .reddit {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
@@ -226,6 +251,7 @@ struct FollowingView: View {
                 Section {
                     ForEach(friends, id: \.self) { name in
                         let isDownloaded = markedNames.contains(name.lowercased())
+                        let redditTarget = "u/\(name)"
                         HStack(spacing: 10) {
                             NavigationLink {
                                 FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
@@ -236,7 +262,8 @@ struct FollowingView: View {
                                     statusDetails(
                                         displayName: name,
                                         etat: etats[name.lowercased()],
-                                        kDriveFolder: kDriveFolder(pour: name)
+                                        kDriveFolder: kDriveFolder(pour: name),
+                                        freshness: kDriveFreshness.status(for: redditTarget)
                                     )
                                 }
                             }
@@ -246,6 +273,17 @@ struct FollowingView: View {
                                 plateforme: .reddit,
                                 downloadTarget: name
                             )
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            if kDriveConfigured {
+                                Button {
+                                    verifierCompte(name, plateforme: .reddit)
+                                } label: {
+                                    Label(L("Vérifier kDrive", "Check kDrive"),
+                                          systemImage: "icloud.badge.magnifyingglass")
+                                }
+                                .tint(DS.accentEmphasis)
+                            }
                         }
                     }
                 }
@@ -342,7 +380,8 @@ struct FollowingView: View {
                             statusDetails(
                                 displayName: "@\(name)",
                                 etat: etatsPlateforme[name.lowercased()],
-                                kDriveFolder: kDriveFolder(pour: target)
+                                kDriveFolder: kDriveFolder(pour: target),
+                                freshness: kDriveFreshness.status(for: target)
                             )
                             Spacer(minLength: 8)
                             rowActions(
@@ -351,6 +390,17 @@ struct FollowingView: View {
                                 plateforme: plateforme,
                                 downloadTarget: target
                             )
+                        }
+                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                            if kDriveConfigured {
+                                Button {
+                                    verifierCompte(name, plateforme: plateforme)
+                                } label: {
+                                    Label(L("Vérifier kDrive", "Check kDrive"),
+                                          systemImage: "icloud.badge.magnifyingglass")
+                                }
+                                .tint(DS.accentEmphasis)
+                            }
                         }
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             Button {
@@ -377,9 +427,19 @@ struct FollowingView: View {
     }
 
     @ViewBuilder
-    private func statusDetails(displayName: String, etat: CompteSuiviEtat?, kDriveFolder: KDriveFolderItem?) -> some View {
+    private func statusDetails(
+        displayName: String,
+        etat: CompteSuiviEtat?,
+        kDriveFolder: KDriveFolderItem?,
+        freshness: KDriveFreshnessStatus? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(displayName).fontWeight(.medium).lineLimit(1)
+            HStack(spacing: 6) {
+                Text(displayName).fontWeight(.medium).lineLimit(1)
+                if let freshness {
+                    KDriveFreshnessBadge(status: freshness)
+                }
+            }
             if let etat {
                 if let date = etat.dernierTelechargement {
                     Text(L("Téléchargé le \(dateCourte(date))", "Downloaded \(dateCourte(date))"))
@@ -394,7 +454,15 @@ struct FollowingView: View {
                         .lineLimit(1)
                 }
             }
-            if let folder = kDriveFolder {
+            if let freshness {
+                HStack(spacing: 4) {
+                    Image(systemName: freshness.symbolName)
+                    Text(freshness.summaryText)
+                        .lineLimit(1)
+                }
+                .font(.caption2)
+                .foregroundStyle(freshness.tintColor)
+            } else if let folder = kDriveFolder {
                 HStack(spacing: 4) {
                     Image(systemName: "checkmark.circle.fill")
                     Text(kDriveBadgeText(folder))
@@ -553,9 +621,59 @@ struct FollowingView: View {
     }
 
     private func kDriveFolder(pour target: String) -> KDriveFolderItem? {
-        guard let kDriveIndex else { return nil }
-        let key = FilenamePolicy.kDriveNormalizedName(FilenamePolicy.kDriveFolderName(target))
-        return kDriveIndex[key]
+        guard let kDriveIndex else {
+            return kDriveFreshness.remoteFolder(for: target)
+        }
+        for candidate in KDriveFreshness.candidateFolderNames(for: target) {
+            let key = FilenamePolicy.kDriveNormalizedName(candidate)
+            if let folder = kDriveIndex[key] {
+                return folder
+            }
+        }
+        return nil
+    }
+
+    private func collectionPourSuivi(_ pseudo: String, plateforme: PlateformeSuivi) -> UserCollection {
+        switch plateforme {
+        case .reddit:
+            return UserCollection(name: pseudo)
+        case .x:
+            return UserCollection(name: pseudo, isTwitter: true)
+        case .tiktok:
+            return UserCollection(name: pseudo, isTikTok: true)
+        }
+    }
+
+    private func verifierCompte(_ pseudo: String, plateforme: PlateformeSuivi) {
+        let collection = collectionPourSuivi(pseudo, plateforme: plateforme)
+        kDriveFreshness.startSingleCheck(
+            collection: collection,
+            model: model,
+            token: kDriveToken,
+            driveId: kDriveId,
+            directoryId: kDriveDirectoryId
+        )
+    }
+
+    private func verifierFraicheurPlateforme() {
+        let noms: [String]
+        switch plateforme {
+        case .reddit:
+            noms = friends ?? SuiviStore.pseudosConnus(plateforme: .reddit)
+        case .x:
+            noms = xFriends
+        case .tiktok:
+            noms = tikTokFriends
+        }
+        let cibles = noms.map { collectionPourSuivi($0, plateforme: plateforme) }
+        guard !cibles.isEmpty else { return }
+        kDriveFreshness.checkAll(
+            collections: cibles,
+            model: model,
+            token: kDriveToken,
+            driveId: kDriveId,
+            directoryId: kDriveDirectoryId
+        )
     }
 
     @MainActor
