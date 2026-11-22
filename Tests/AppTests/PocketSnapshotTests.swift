@@ -135,6 +135,89 @@ final class PocketSnapshotTests: XCTestCase {
     }
 
     @MainActor
+    func testRenommageSuiviXManuelConserveHistoriqueEtPlace() throws {
+        try SuiviStore.ajouterSuiviX("@Alice_X", defaults: defaults, notifier: false)
+        try SuiviStore.ajouterSuiviX("BobX", defaults: defaults, notifier: false)
+        let telechargement = Date(timeIntervalSince1970: 1_760_030_000)
+        SuiviStore.enregistrer(
+            ["alice_x": CompteSuiviEtat(marque: true, dernierTelechargement: telechargement)],
+            plateforme: .x, defaults: defaults, notifier: false
+        )
+        SuiviStore.enregistrerMarques(["alice_x"], plateforme: .x, defaults: defaults, notifier: false)
+
+        let renomme = try SuiviStore.renommerSuiviManuel(
+            "Alice_X",
+            saisie: "https://x.com/NewAlice/media",
+            plateforme: .x,
+            defaults: defaults,
+            notifier: false
+        )
+        XCTAssertEqual(renomme, "NewAlice")
+        XCTAssertEqual(SuiviStore.chargerListe(plateforme: .x, defaults: defaults), ["NewAlice", "BobX"])
+
+        let etats = SuiviStore.charger(plateforme: .x, defaults: defaults)
+        XCTAssertNil(etats["alice_x"])
+        XCTAssertEqual(etats["newalice"]?.dernierTelechargement, telechargement)
+        XCTAssertEqual(etats["newalice"]?.marque, true)
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .x, defaults: defaults), ["newalice"])
+
+        // Un doublon d'une autre entrée est refusé sans modifier la liste.
+        XCTAssertThrowsError(
+            try SuiviStore.renommerSuiviManuel(
+                "NewAlice", saisie: "bobx", plateforme: .x, defaults: defaults, notifier: false
+            )
+        )
+        XCTAssertEqual(SuiviStore.chargerListe(plateforme: .x, defaults: defaults), ["NewAlice", "BobX"])
+    }
+
+    @MainActor
+    func testRenommageSuiviManuelFusionneHistoriqueDejaPresent() throws {
+        try SuiviStore.ajouterSuiviX("OldName", defaults: defaults, notifier: false)
+        try SuiviStore.ajouterSuiviX("Source", defaults: defaults, notifier: false)
+        let ancien = Date(timeIntervalSince1970: 1_760_040_000)
+        let recent = Date(timeIntervalSince1970: 1_760_050_000)
+        SuiviStore.enregistrer(
+            ["oldname": CompteSuiviEtat(marque: true, dernierTelechargement: ancien),
+             "source": CompteSuiviEtat(marque: false, dernierTelechargement: recent)],
+            plateforme: .x, defaults: defaults, notifier: false
+        )
+        SuiviStore.enregistrerMarques(["oldname"], plateforme: .x, defaults: defaults, notifier: false)
+
+        // Le pseudo cible n'est plus suivi mais son historique subsiste après suppression.
+        SuiviStore.supprimerSuiviX("OldName", defaults: defaults, notifier: false)
+        _ = try SuiviStore.renommerSuiviManuel(
+            "Source", saisie: "OldName", plateforme: .x, defaults: defaults, notifier: false
+        )
+
+        let etat = SuiviStore.charger(plateforme: .x, defaults: defaults)["oldname"]
+        XCTAssertEqual(etat?.marque, true)
+        XCTAssertEqual(etat?.dernierTelechargement, recent)
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .x, defaults: defaults), ["oldname"])
+    }
+
+    @MainActor
+    func testRenommageSuiviTikTokManuelConserveHistorique() throws {
+        try SuiviStore.ajouterSuiviTikTok("@Alice.TT", defaults: defaults, notifier: false)
+        SuiviStore.enregistrer(
+            ["alice.tt": CompteSuiviEtat(marque: true)],
+            plateforme: .tiktok, defaults: defaults, notifier: false
+        )
+        SuiviStore.enregistrerMarques(["alice.tt"], plateforme: .tiktok, defaults: defaults, notifier: false)
+
+        let renomme = try SuiviStore.renommerSuiviManuel(
+            "Alice.TT",
+            saisie: "https://www.tiktok.com/@New_Alice?lang=fr",
+            plateforme: .tiktok,
+            defaults: defaults,
+            notifier: false
+        )
+        XCTAssertEqual(renomme, "New_Alice")
+        XCTAssertEqual(SuiviStore.chargerListe(plateforme: .tiktok, defaults: defaults), ["New_Alice"])
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .tiktok, defaults: defaults), ["new_alice"])
+        XCTAssertEqual(SuiviStore.charger(plateforme: .tiktok, defaults: defaults)["new_alice"]?.marque, true)
+    }
+
+    @MainActor
     func testSuivisTikTokManuelsStatutsEtSynchronisation() throws {
         let telechargement = Date(timeIntervalSince1970: 1_760_020_000)
         let upload = Date(timeIntervalSince1970: 1_760_023_600)

@@ -104,10 +104,12 @@ struct SourceDiagnosticsView: View {
         present ? .ok(ok) : .unconfigured(missing)
     }
 
-    /// Sonde le listing JSON public de Reddit (`/r/pics/new.json`). Depuis le
-    /// 13/11/2026 les `.rss` sont coupés (404) et les `.json` exigent une
-    /// session : 200 = OK avec session, 403/401 = session manquante (attendu
-    /// sans connexion).
+    /// Sonde le listing JSON d'un subreddit (`/r/pics/new.json`), c'est-à-dire
+    /// exactement le chemin utilisé par un téléchargement : `Network` ajoute les
+    /// en-têtes navigateur et la session, puis tente `old.reddit.com` et le
+    /// navigateur intégré. Depuis le 13/11/2026 les `.rss` sont coupés (404) et
+    /// le `.json` est devenu la voie normale — cette sonde vérifie qu'il répond
+    /// encore, pas qu'un flux RSS existe.
     private func probeRedditListing(_ network: Network) async -> DiagnosticState {
         let url = URL(string: "https://www.reddit.com/r/pics/new.json?limit=1")!
         do {
@@ -116,7 +118,8 @@ struct SourceDiagnosticsView: View {
                 ? .fail(L("Réponse vide.", "Empty response."))
                 : .ok(L("Listing JSON servi (\(data.count) octets).", "JSON listing served (\(data.count) bytes)."))
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            return .fail(L("HTTP \(code) : session requise — les flux RSS sont coupés depuis le 13/11/2026 et les `.json` exigent une connexion.", "HTTP \(code): session required — RSS feeds have been off since 11/13/2026 and `.json` requires sign-in."))
+            return .fail(L("HTTP \(code) : listing de subreddit refusé malgré la session et les replis — le téléchargement depuis un subreddit est indisponible.",
+                           "HTTP \(code): subreddit listing refused despite sign-in and fallbacks — downloading from a subreddit is unavailable."))
         } catch {
             return .fail(error.localizedDescription)
         }

@@ -36,6 +36,7 @@ struct ContentView: View {
         }
         .tint(DS.accentEmphasis)
         .task {
+            IdleTimerGuard.shared.surveiller(model)
             await SyncService.shared.demarrer()
             await SessionCookieSyncService.shared.demarrer()
             model.appliquerDonneesDuServeur()
@@ -48,6 +49,7 @@ struct ContentView: View {
                 .padding(.top, DS.space(1))
         }
         .onChange(of: scenePhase) { phase in
+            IdleTimerGuard.shared.scenePhaseDidChange(phase)
             if phase == .active { model.reloadIfFolderChanged() }
             if phase == .background { model.stop() }
         }

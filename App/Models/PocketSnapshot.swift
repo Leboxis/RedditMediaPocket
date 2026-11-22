@@ -162,6 +162,62 @@ enum SuiviStore {
         enregistrerListe(liste, plateforme: plateforme, defaults: defaults, notifier: notifier)
     }
 
+    /// Renomme un suivi manuel (X ou TikTok) en gardant sa place dans la liste et
+    /// en transférant son historique (statut et coche) sur le nouveau pseudo.
+    @discardableResult
+    static func renommerSuiviManuel(
+        _ pseudoActuel: String,
+        saisie: String,
+        plateforme: PlateformeSuivi,
+        defaults: UserDefaults = .standard,
+        notifier: Bool = true
+    ) throws -> String {
+        let nouveauPseudo: String
+        switch plateforme {
+        case .x: nouveauPseudo = try XTwitterAPI.username(saisie)
+        case .tiktok: nouveauPseudo = try TikTokAPI.username(saisie)
+        case .reddit: nouveauPseudo = try MediaExtractor.username(saisie)
+        }
+
+        var liste = chargerListe(plateforme: plateforme, defaults: defaults)
+        guard let index = liste.firstIndex(where: { $0.caseInsensitiveCompare(pseudoActuel) == .orderedSame }) else {
+            throw NetworkError.invalid(L("Ce suivi n'existe plus.", "This follow no longer exists."))
+        }
+        if let doublon = liste.firstIndex(where: { $0.caseInsensitiveCompare(nouveauPseudo) == .orderedSame }),
+           doublon != index {
+            throw NetworkError.invalid(L("Ce compte est déjà suivi.", "This account is already followed."))
+        }
+
+        let ancienneCle = pseudoActuel.lowercased()
+        let nouvelleCle = nouveauPseudo.lowercased()
+        if ancienneCle != nouvelleCle {
+            var etats = charger(plateforme: plateforme, defaults: defaults)
+            if let etat = etats.removeValue(forKey: ancienneCle) {
+                var fusion = etat
+                // Un pseudo déjà supprimé peut encore avoir un historique : on le garde.
+                if let existant = etats[nouvelleCle] {
+                    fusion.marque = fusion.marque || existant.marque
+                    fusion.dernierTelechargement = [fusion.dernierTelechargement, existant.dernierTelechargement]
+                        .compactMap { $0 }.max()
+                    fusion.dernierUpload = [fusion.dernierUpload, existant.dernierUpload]
+                        .compactMap { $0 }.max()
+                }
+                etats[nouvelleCle] = fusion
+                enregistrer(etats, plateforme: plateforme, defaults: defaults, notifier: notifier)
+            }
+            var marques = chargerMarques(plateforme: plateforme, defaults: defaults)
+            if marques.remove(ancienneCle) != nil {
+                marques.insert(nouvelleCle)
+                enregistrerMarques(marques, plateforme: plateforme, defaults: defaults, notifier: notifier)
+            }
+        }
+        if liste[index] != nouveauPseudo {
+            liste[index] = nouveauPseudo
+            enregistrerListe(liste, plateforme: plateforme, defaults: defaults, notifier: notifier)
+        }
+        return nouveauPseudo
+    }
+
     /// Retourne les suivis connus hors connexion : la liste synchronisée si présente,
     /// sinon un repli sur les comptes ayant déjà un statut ou une coche (anciennes sauvegardes).
     static func pseudosConnus(plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard) -> [String] {

@@ -22,6 +22,9 @@ struct FollowingView: View {
     @State private var ajoutManuelPresente = false
     @State private var nouveauPseudoManuel = ""
     @State private var erreurAjoutManuel: String?
+    @State private var suiviManuelEnEdition: String?
+    @State private var pseudoManuelEdite = ""
+    @State private var erreurEditionManuelle: String?
     @AppStorage("following.downloadedUsernames") private var downloadedUsernamesData = Data()
     @AppStorage("following.x.downloadedUsernames") private var xDownloadedUsernamesData = Data()
     @AppStorage("following.tiktok.downloadedUsernames") private var tikTokDownloadedUsernamesData = Data()
@@ -137,10 +140,40 @@ struct FollowingView: View {
                 Text(L("Ajoute un compte \(nomPlateformeManuelle) manuellement pour suivre son statut et le synchroniser.",
                        "Add a \(nomPlateformeManuelle) account manually to track its status and sync it."))
             }
+            .alert(
+                L("Modifier le suivi \(nomPlateformeManuelle)", "Edit \(nomPlateformeManuelle) follow"),
+                isPresented: Binding(
+                    get: { suiviManuelEnEdition != nil },
+                    set: { presentee in
+                        if !presentee {
+                            suiviManuelEnEdition = nil
+                            pseudoManuelEdite = ""
+                        }
+                    }
+                )
+            ) {
+                TextField(
+                    plateforme == .tiktok
+                        ? L("@pseudo ou lien tiktok.com/@…", "@username or tiktok.com/@… link")
+                        : L("@pseudo ou lien x.com/…", "@username or x.com/… link"),
+                    text: $pseudoManuelEdite
+                )
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                Button(L("Enregistrer", "Save")) { enregistrerEditionManuelle() }
+                Button(L("Annuler", "Cancel"), role: .cancel) {
+                    suiviManuelEnEdition = nil
+                    pseudoManuelEdite = ""
+                }
+            } message: {
+                Text(L("Corrige le pseudo de ce compte \(nomPlateformeManuelle) suivi, son historique est conservé.",
+                       "Edit the username of this followed \(nomPlateformeManuelle) account; its history is kept."))
+            }
         }
         .tint(DS.accentEmphasis)
-        .errorAlert(erreurAjoutManuel ?? errorMessage) {
+        .errorAlert(erreurAjoutManuel ?? erreurEditionManuelle ?? errorMessage) {
             erreurAjoutManuel = nil
+            erreurEditionManuelle = nil
         }
         .task {
             if kDriveConfigured, !model.running, kDriveIndex == nil {
@@ -320,7 +353,22 @@ struct FollowingView: View {
                             )
                         }
                     }
-                    .onDelete { offsets in supprimerSuivisManuels(offsets, plateforme: plateforme) }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button {
+                            suiviManuelEnEdition = name
+                            pseudoManuelEdite = "@\(name)"
+                            erreurEditionManuelle = nil
+                        } label: {
+                            Label(L("Modifier", "Edit"), systemImage: "pencil")
+                        }
+                        .tint(DS.accentEmphasis)
+                        Button(role: .destructive) {
+                            supprimerSuiviManuel(name, plateforme: plateforme)
+                        } label: {
+                            Label(L("Supprimer", "Delete"), systemImage: "trash")
+                        }
+                        .tint(DS.error)
+                    }
                 }
             }
             .listStyle(.insetGrouped)
@@ -406,27 +454,43 @@ struct FollowingView: View {
         erreurAjoutManuel = nil
         do {
             _ = try SuiviStore.ajouterSuiviManuel(nouveauPseudoManuel, plateforme: plateforme)
-            if plateforme == .tiktok {
-                tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
-            } else {
-                xFriends = SuiviStore.pseudosConnus(plateforme: .x)
-            }
+            rechargerSuivisManuels(plateforme: plateforme)
             nouveauPseudoManuel = ""
         } catch {
             erreurAjoutManuel = error.localizedDescription
         }
     }
 
-    private func supprimerSuivisManuels(_ offsets: IndexSet, plateforme: PlateformeSuivi) {
-        let source = plateforme == .tiktok ? tikTokFriends : xFriends
-        let aSupprimer = offsets.map { source[$0] }
-        for pseudo in aSupprimer {
-            SuiviStore.supprimerSuiviManuel(pseudo, plateforme: plateforme)
+    private func enregistrerEditionManuelle() {
+        guard let pseudoActuel = suiviManuelEnEdition else { return }
+        erreurEditionManuelle = nil
+        do {
+            _ = try SuiviStore.renommerSuiviManuel(
+                pseudoActuel,
+                saisie: pseudoManuelEdite,
+                plateforme: plateforme
+            )
+            rechargerSuivisManuels(plateforme: plateforme)
+            suiviManuelEnEdition = nil
+            pseudoManuelEdite = ""
+        } catch {
+            // L'alerte d'édition se ferme d'elle-même : le détail sort via errorAlert.
+            erreurEditionManuelle = error.localizedDescription
         }
+    }
+
+    private func supprimerSuiviManuel(_ pseudo: String, plateforme: PlateformeSuivi) {
+        SuiviStore.supprimerSuiviManuel(pseudo, plateforme: plateforme)
+        rechargerSuivisManuels(plateforme: plateforme)
+    }
+
+    private func rechargerSuivisManuels(plateforme: PlateformeSuivi) {
         if plateforme == .tiktok {
             tikTokFriends = SuiviStore.pseudosConnus(plateforme: .tiktok)
+            tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
         } else {
             xFriends = SuiviStore.pseudosConnus(plateforme: .x)
+            xEtats = SuiviStore.charger(plateforme: .x)
         }
     }
 
