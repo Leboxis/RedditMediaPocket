@@ -235,7 +235,7 @@ RedGIFs utilise son propre service API ; aucune API Reddit n'est utilisée. X n'
 ## Comportement réseau et stockage
 
 - De 1 à 16 médias simultanés (10 par défaut pour toutes les sources), remplacement immédiat de chaque transfert terminé. Aucun délai de départ n’est appliqué par service. Les transferts peuvent se chevaucher. Aucun débit ne garantit l’accès.
-- Pas de cookies persistants, compte, proxy, rotation d'identité ou tentative de contournement.
+- Pas de proxy, rotation d'identité ou tentative de contournement. Les cookies de session sont conservés dans des magasins WebKit distincts par site et synchronisés avec le backend Cloudflare personnel (voir « Sessions synchronisées »).
 - Un HTTP 429 arrête la session entière, flux RSS comme média, et annule les transferts en vol. L’alerte indique uniquement la cause (service et code HTTP) et le nombre total de médias conservés dans la collection. Les limites annoncées par le serveur sont mémorisées, mais une relance manuelle efface ces limites et le cache RSS puis retente le réseau ; un refus réel du serveur peut donc se reproduire.
 - Les curseurs des nouveautés et de l’historique restent distincts. Seule une page complètement traitée est validée ; une page interrompue est reprise et les fichiers complets déjà présents sont ignorés. L’ancien historique est reconstruit une fois par collection pour récupérer les posts marqués à tort comme terminés par les versions précédentes.
 - Les médias sont dans `Documents/<pseudo>/`, accessibles via le bouton de partage. LiveContainer peut également exposer les documents de l'app invitée. Aucun post texte n'est enregistré.
@@ -309,6 +309,14 @@ Les requêtes HTTPS reddit.com peuvent recevoir les cookies correspondants à le
 Déconnexion supprime les cookies et autres données WebKit de l’app. Le changement de session invalide le cache RSS. Connexion et déconnexion sont désactivées pendant les téléchargements pour éviter un changement de compte en cours de transfert. Une déconnexion n’efface pas les pauses enregistrées, mais le démarrage d’une session les efface toujours. La présence de reddit_session affiche « Session détectée », sans prétendre avoir vérifié le compte côté serveur. En cas de session expirée, rouvrir Reddit depuis les réglages.
 
 Cette fonction reste à valider dans LiveContainer avec une connexion réelle sur l’iPhone. Elle ne garantit ni l’acceptation du RSS authentifié, ni la suppression des blocages et quotas. L’app continue de lire le RSS sans API JSON Reddit. La session sert aussi à lire l’onglet Sauvegardés (`♥`) du compte.
+
+## Sessions synchronisées (Cloudflare)
+
+Réglages → **Sessions (Cloudflare)** : les cookies des sessions Reddit, X, TikTok et Instagram sont envoyés au Worker après chaque connexion, puis réinjectés dans les magasins WebKit de l'iPhone au lancement. Sur une installation neuve, il suffit donc d'enregistrer sa clé API (Réglages → Clé API) : les comptes suivis **et** les connexions aux quatre sites reviennent aussitôt, sans ressaisir d'identifiants. Les indicateurs de session des Réglages se mettent à jour dès la restauration.
+
+Le serveur utilise une table D1 `cookies` dédiée, protégée par la même clé que les suivis (routes `GET`, `PUT` et `DELETE /api/cookies`). Seuls les cookies dont le domaine appartient au site concerné sont archivés : aucun cookie de CDN média ne quitte l'appareil, et les cookies expirés sont ignorés à la restauration. Une déconnexion depuis l'app efface aussi la sauvegarde du site concerné ; le bouton « Effacer les sessions du serveur » efface les quatre. Les envois sont groupés (1,5 s) et une empreinte évite les allers-retours inutiles.
+
+Ce serveur est personnel et à utilisateur unique : les cookies y sont stockés en clair dans D1 et la clé API donne accès à tout. Aucun média n'est synchronisé. Côté serveur, relancer `npm run db:init` après la mise à jour pour créer la table `cookies`.
 
 ## Transferts immédiats et état de session
 

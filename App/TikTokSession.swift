@@ -105,6 +105,7 @@ import MediaCore
         hasSession = false; hasAPICredentials = false
         apiAccepted = false; apiRejected = false
         credentialValues = []; cachedCookies = []; clearing = false
+        NotificationCenter.default.post(name: .pocketSessionsDidChange, object: nil)
     }
 }
 

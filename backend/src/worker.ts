@@ -2,11 +2,19 @@
 
 // Tout le code et les commentaires sont en français.
 // Backend de RedditMediaPocket : Worker Cloudflare + base D1 (SQLite dans le cloud).
+// Deux usages : synchroniser l'écran Suivis et restaurer les sessions WebKit
+// (cookies des sites) après une réinstallation de l'application.
 
 export interface Env {
   DB: D1Database;
   API_KEY: string;
 }
+
+/** Sites dont les cookies de session peuvent être synchronisés. */
+const SITES_SESSION = new Set(["reddit", "x", "tiktok", "instagram"]);
+const MAX_COOKIES_PAR_SITE = 400;
+const MAX_LONGUEUR_CORPS = 1_000_000;
+const MAX_LONGUEUR_CHAMP = 8_192;
 
 /** En-têtes CORS : l'app iOS est un client navigateur-like, le prévol doit passer sans clé. */
 const ENTETES_CORS: Record<string, string> = {
@@ -23,6 +31,14 @@ interface LigneItem {
   name: string;
   description: string | null;
   data: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+/** Ligne de la table `cookies`, une par site. */
+interface LigneCookie {
+  site: string;
+  data: string;
   created_at: string;
   updated_at: string | null;
 }
@@ -67,9 +83,15 @@ function verifierCle(requete: Request, env: Env): Response | null {
 }
 
 /** Lit un corps JSON d'objet. Un corps vide est accepté comme un objet vide. */
-async function lireCorps(requete: Request): Promise<Record<string, unknown> | Response> {
+async function lireCorps(
+  requete: Request,
+  limiteOctets = MAX_LONGUEUR_CORPS
+): Promise<Record<string, unknown> | Response> {
   try {
     const texte = await requete.text();
+    if (texte.length > limiteOctets) {
+      return erreur(413, "Corps trop volumineux");
+    }
     if (!texte.trim()) return {};
     const valeur: unknown = JSON.parse(texte);
     if (typeof valeur !== "object" || valeur === null || Array.isArray(valeur)) {
@@ -243,6 +265,92 @@ async function supprimer(id: number, env: Env): Promise<Response> {
   return json({ message: "Élément supprimé", id });
 }
 
+/** Valide un cookie sérialisé, sans jamais journaliser sa valeur. */
+function cookieValide(valeur: unknown): boolean {
+  if (typeof valeur !== "object" || valeur === null || Array.isArray(valeur)) return false;
+  const cookie = valeur as Record<string, unknown>;
+  for (const cle of ["name", "domain"] as const) {
+    const champ = cookie[cle];
+    if (typeof champ !== "string" || !champ.trim() || champ.length > MAX_LONGUEUR_CHAMP) return false;
+  }
+  const chemin = cookie.path;
+  if (typeof chemin !== "string" || chemin.length > MAX_LONGUEUR_CHAMP) return false;
+  const valeurCookie = cookie.value;
+  if (typeof valeurCookie !== "string" || valeurCookie.length > MAX_LONGUEUR_CHAMP) return false;
+  if ("expires" in cookie && cookie.expires !== null &&
+      (typeof cookie.expires !== "number" || !Number.isFinite(cookie.expires))) return false;
+  for (const cle of ["secure", "httpOnly"] as const) {
+    if (cle in cookie && typeof cookie[cle] !== "boolean") return false;
+  }
+  return true;
+}
+
+/** Valide la carte { site: [cookies] } : seuls les quatre sites connus sont acceptés. */
+function validerSites(corps: Record<string, unknown>): Record<string, unknown[]> | Response {
+  if (!("sites" in corps)) return erreur(400, "Le champ « sites » est obligatoire");
+  const brut = corps.sites;
+  if (typeof brut !== "object" || brut === null || Array.isArray(brut)) {
+    return erreur(400, "« sites » doit être un objet");
+  }
+  const sortie: Record<string, unknown[]> = {};
+  for (const [site, valeur] of Object.entries(brut as Record<string, unknown>)) {
+    if (!SITES_SESSION.has(site)) return erreur(400, `Site inconnu : ${site}`);
+    if (!Array.isArray(valeur)) return erreur(400, `Les cookies de « ${site} » doivent être une liste`);
+    if (valeur.length > MAX_COOKIES_PAR_SITE) {
+      return erreur(400, `Trop de cookies pour « ${site} » (max. ${MAX_COOKIES_PAR_SITE})`);
+    }
+    if (!valeur.every(cookieValide)) return erreur(400, `Cookie invalide pour « ${site} »`);
+    sortie[site] = valeur;
+  }
+  return sortie;
+}
+
+/** Lit tous les cookies sauvegardés, par site. */
+async function lireCookies(env: Env): Promise<Response> {
+  const resultat = await env.DB.prepare("SELECT site, data, updated_at FROM cookies ORDER BY site")
+    .all<LigneCookie>();
+  const sites: Record<string, unknown> = {};
+  let derniere: string | null = null;
+  for (const ligne of resultat.results) {
+    sites[ligne.site] = donneesObjet(ligne.data) ?? [];
+    if (ligne.updated_at && (!derniere || ligne.updated_at > derniere)) derniere = ligne.updated_at;
+  }
+  return json({ sites, updated_at: derniere });
+}
+
+/** Remplace les cookies d'un site. Une liste vide supprime la ligne du site. */
+async function ecrireCookies(requete: Request, env: Env): Promise<Response> {
+  const corps = await lireCorps(requete);
+  if (corps instanceof Response) return corps;
+  const sites = validerSites(corps);
+  if (sites instanceof Response) return sites;
+
+  const ecrits: string[] = [];
+  for (const [site, cookies] of Object.entries(sites)) {
+    if (cookies.length === 0) {
+      await env.DB.prepare("DELETE FROM cookies WHERE site = ?").bind(site).run();
+      continue;
+    }
+    await env.DB.prepare(
+      "INSERT INTO cookies (site, data, updated_at) VALUES (?, ?, datetime('now')) " +
+      "ON CONFLICT(site) DO UPDATE SET data = excluded.data, updated_at = datetime('now')"
+    ).bind(site, JSON.stringify(cookies)).run();
+    ecrits.push(site);
+  }
+  if (Object.keys(sites).length === 0) {
+    await env.DB.prepare("DELETE FROM cookies").run();
+  }
+  const ligne = await env.DB.prepare("SELECT MAX(updated_at) AS updated_at FROM cookies")
+    .first<{ updated_at: string | null }>();
+  return json({ sites: ecrits, updated_at: ligne?.updated_at ?? null });
+}
+
+/** Efface toutes les sessions sauvegardées (déconnexion de toutes les installations). */
+async function supprimerCookies(env: Env): Promise<Response> {
+  await env.DB.prepare("DELETE FROM cookies").run();
+  return json({ message: "Sessions effacées" });
+}
+
 /** Liste publique des routes, utile pour vérifier le déploiement. */
 function routeIndex(): Response {
   return json({
@@ -256,6 +364,9 @@ function routeIndex(): Response {
       "POST /api/items        — créer un élément (clé requise)",
       "PUT  /api/items/:id    — modifier un élément (clé requise)",
       "DELETE /api/items/:id  — supprimer un élément (clé requise)",
+      "GET  /api/cookies      — cookies de session par site (clé requise)",
+      "PUT  /api/cookies      — enregistrer les cookies (clé requise)",
+      "DELETE /api/cookies    — effacer toutes les sessions (clé requise)",
     ],
   });
 }
@@ -300,6 +411,17 @@ export default {
         if (requete.method === "GET") return await lireUn(id, env);
         if (requete.method === "PUT") return await modifier(id, requete, env);
         if (requete.method === "DELETE") return await supprimer(id, env);
+        return nonAutorise();
+      }
+
+      // Cookies de session : mêmes clé et en-têtes que /api/items, table dédiée.
+      if (chemin === "/api/cookies" || chemin.startsWith("/api/cookies/")) {
+        const refus = verifierCle(requete, env);
+        if (refus) return refus;
+        if (chemin !== "/api/cookies") return erreur(404, "Route inconnue");
+        if (requete.method === "GET") return await lireCookies(env);
+        if (requete.method === "PUT") return await ecrireCookies(requete, env);
+        if (requete.method === "DELETE") return await supprimerCookies(env);
         return nonAutorise();
       }
 

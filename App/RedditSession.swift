@@ -41,6 +41,7 @@ import MediaCore
             store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) { continuation.resume() }
         }
         hasSession = false; revision += 1; clearing = false
+        NotificationCenter.default.post(name: .pocketSessionsDidChange, object: nil)
     }
 }
 

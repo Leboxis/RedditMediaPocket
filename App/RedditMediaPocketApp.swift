@@ -37,6 +37,7 @@ struct ContentView: View {
         .tint(DS.accentEmphasis)
         .task {
             await SyncService.shared.demarrer()
+            await SessionCookieSyncService.shared.demarrer()
             model.appliquerDonneesDuServeur()
         }
         .onReceive(NotificationCenter.default.publisher(for: .pocketDonneesRestaurees)) { _ in

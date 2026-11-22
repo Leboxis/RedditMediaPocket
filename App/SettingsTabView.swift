@@ -15,6 +15,8 @@ private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
     /// État de la synchronisation Cloudflare, partagé avec toute l'app.
     @StateObject private var synchronisation = SyncService.shared
+    /// État de la synchronisation des cookies de session.
+    @StateObject private var sessions = SessionCookieSyncService.shared
     @State private var clePresentee = false
     /// Vrai quand la vue est embarquée dans un onglet (pas de bouton « OK »).
     let embedded: Bool
@@ -199,7 +201,39 @@ private struct DownloadSettings: View {
                 } header: {
                     Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
                 } footer: {
-                    Text(L("La liste des comptes suivis (Reddit, X et TikTok) ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion et reviennent après une réinstallation. Aucune session, aucun jeton et aucun média ne quitte l'iPhone.", "The list of followed accounts (Reddit, X and TikTok) and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when signed out and come back after a reinstall. No session, token or media leaves the iPhone."))
+                    Text(L("La liste des comptes suivis (Reddit, X et TikTok) ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion et reviennent après une réinstallation. Les cookies de session sont synchronisés dans la section ci-dessous. Aucun média ne quitte l'iPhone.", "The list of followed accounts (Reddit, X and TikTok) and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when signed out and come back after a reinstall. Session cookies are synced in the section below. No media leaves the iPhone."))
+                }
+                Section {
+                    HStack {
+                        Text(L("État", "Status"))
+                        Spacer()
+                        Text(sessions.etat)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    if let date = sessions.derniereSynchronisation {
+                        Text("\(L("Dernière synchronisation", "Last sync")) : \(date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if !sessions.sitesSauvegardes.isEmpty {
+                        Text("\(L("Sites sauvegardés", "Backed-up sites")) : \(sessions.sitesSauvegardes.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Button(L("Synchroniser les sessions", "Sync sessions")) {
+                        Task { await sessions.synchroniser() }
+                    }
+                    Button(L("Restaurer les sessions", "Restore sessions")) {
+                        Task { await sessions.restaurer() }
+                    }
+                    Button(L("Effacer les sessions du serveur", "Clear remote sessions"), role: .destructive) {
+                        Task { await sessions.supprimerSauvegarde() }
+                    }
+                } header: {
+                    Text(L("Sessions (Cloudflare)", "Sessions (Cloudflare)"))
+                } footer: {
+                    Text(L("Les cookies Reddit, X, TikTok et Instagram sont envoyés après chaque connexion puis réinjectés dans l'iPhone dès que la clé API est renseignée : une installation neuve retrouve donc ses connexions. Serveur personnel, protégé par la même clé. Aucun média n'est synchronisé.", "Reddit, X, TikTok and Instagram cookies are uploaded after each sign-in and injected back into the iPhone as soon as the API key is entered: a fresh install therefore recovers its sign-ins. Personal server, protected by the same key. No media is synced."))
                 }
             }
             .sheet(isPresented: $clePresentee) {

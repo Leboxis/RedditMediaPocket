@@ -132,6 +132,7 @@ import MediaCore
         apiAccepted = false; apiRejected = false
         credentialValues = []; cachedCookies = []; clearing = false
         csrfCache = nil
+        NotificationCenter.default.post(name: .pocketSessionsDidChange, object: nil)
     }
 }
 
