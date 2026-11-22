@@ -352,22 +352,22 @@ struct FollowingView: View {
                                 downloadTarget: target
                             )
                         }
-                    }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        Button {
-                            suiviManuelEnEdition = name
-                            pseudoManuelEdite = "@\(name)"
-                            erreurEditionManuelle = nil
-                        } label: {
-                            Label(L("Modifier", "Edit"), systemImage: "pencil")
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                suiviManuelEnEdition = name
+                                pseudoManuelEdite = "@\(name)"
+                                erreurEditionManuelle = nil
+                            } label: {
+                                Label(L("Modifier", "Edit"), systemImage: "pencil")
+                            }
+                            .tint(DS.accentEmphasis)
+                            Button(role: .destructive) {
+                                supprimerSuiviManuel(name, plateforme: plateforme)
+                            } label: {
+                                Label(L("Supprimer", "Delete"), systemImage: "trash")
+                            }
+                            .tint(DS.error)
                         }
-                        .tint(DS.accentEmphasis)
-                        Button(role: .destructive) {
-                            supprimerSuiviManuel(name, plateforme: plateforme)
-                        } label: {
-                            Label(L("Supprimer", "Delete"), systemImage: "trash")
-                        }
-                        .tint(DS.error)
                     }
                 }
             }
