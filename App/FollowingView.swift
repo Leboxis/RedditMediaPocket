@@ -434,43 +434,69 @@ struct FollowingView: View {
         freshness: KDriveFreshnessStatus? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(displayName).fontWeight(.medium).lineLimit(1)
-                if let freshness {
-                    KDriveFreshnessBadge(status: freshness)
-                }
+            Text(displayName)
+                .fontWeight(.medium)
+                .lineLimit(1)
+
+            if let dateLine = ligneDatesSobres(etat) {
+                Text(dateLine)
+                    .font(.caption2)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .lineLimit(1)
             }
-            if let etat {
-                if let date = etat.dernierTelechargement {
-                    Text(L("Téléchargé le \(dateCourte(date))", "Downloaded \(dateCourte(date))"))
-                        .font(.caption2)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .lineLimit(1)
-                }
-                if let date = etat.dernierUpload {
-                    Text(L("Uploadé le \(dateCourte(date))", "Uploaded \(dateCourte(date))"))
-                        .font(.caption2)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .lineLimit(1)
-                }
-            }
+
             if let freshness {
-                HStack(spacing: 4) {
-                    Image(systemName: freshness.symbolName)
-                    Text(freshness.summaryText)
-                        .lineLimit(1)
+                HStack(spacing: 5) {
+                    if freshness.isChecking {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else if freshness.isUpToDate {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(DS.calmSage)
+                    } else {
+                        Circle()
+                            .fill(freshness.tintColor)
+                            .frame(width: 6, height: 6)
+                    }
+                    KDriveBicolorDetail(status: freshness, font: .caption2)
                 }
-                .font(.caption2)
-                .foregroundStyle(freshness.tintColor)
             } else if let folder = kDriveFolder {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(DS.calmSage)
                     Text(kDriveBadgeText(folder))
                         .lineLimit(1)
                 }
                 .font(.caption2)
-                .foregroundStyle(DS.accentEmphasis)
+                .foregroundStyle(DS.onSurfaceMuted)
+            } else if kDriveConfigured, kDriveIndex != nil {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(DS.calmRose)
+                        .frame(width: 6, height: 6)
+                    Text(L("Absent de kDrive", "Not on kDrive"))
+                        .lineLimit(1)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(DS.calmRose)
             }
+        }
+    }
+
+    private func ligneDatesSobres(_ etat: CompteSuiviEtat?) -> String? {
+        guard let etat else { return nil }
+        switch (etat.dernierTelechargement, etat.dernierUpload) {
+        case let (dl?, up?):
+            return L("Téléch. \(dateCourte(dl)) · Uploadé \(dateCourte(up))",
+                     "Down. \(dateCourte(dl)) · Uploaded \(dateCourte(up))")
+        case let (dl?, nil):
+            return L("Téléchargé le \(dateCourte(dl))", "Downloaded \(dateCourte(dl))")
+        case let (nil, up?):
+            return L("Uploadé le \(dateCourte(up))", "Uploaded \(dateCourte(up))")
+        case (nil, nil):
+            return nil
         }
     }
 

@@ -379,40 +379,57 @@ public enum KDriveFreshnessStatus: Equatable, Sendable {
         }
     }
 
-    /// Résumé lisible affiché dans les listes, bannières et détails de collection.
-    public var summaryText: String {
+    /// Mot-clé principal d'état (affiché en couleur sémantique Émeraude / Ambre / Corail).
+    public var primaryLabel: String {
         switch self {
         case .checking:
-            return L("Vérification kDrive et source en cours…", "Checking kDrive and source…")
-        case .upToDate(let remoteCount, let checkedCount):
-            if checkedCount > 0 {
-                return L("À jour avec la source · \(remoteCount) sur kDrive", "Up to date with source · \(remoteCount) on kDrive")
-            }
-            return L("À jour sur kDrive · \(remoteCount) fichier(s)", "Up to date on kDrive · \(remoteCount) file(s)")
-        case .pendingUpload(let local, let remoteCount):
-            return L("Source à jour · \(local) sur l'iPhone à envoyer (\(remoteCount) sur kDrive)",
-                     "Source up to date · \(local) on iPhone to upload (\(remoteCount) on kDrive)")
-        case .outdated(let count, let fullPage, let localPending, let remoteCount):
+            return L("Vérification…", "Checking…")
+        case .upToDate:
+            return L("À jour", "Up to date")
+        case .pendingUpload(let local, _):
+            return L("\(local) à envoyer", "\(local) to upload")
+        case .outdated(let count, let fullPage, _, _):
             let plus = fullPage ? "+" : ""
-            if localPending > 0 {
-                return L("Pas à jour : +\(count)\(plus) nouveau(x) sur la source, \(localPending) à envoyer (\(remoteCount) sur kDrive)",
-                         "Outdated: +\(count)\(plus) new on source, \(localPending) to upload (\(remoteCount) on kDrive)")
-            }
-            return L("Pas à jour : +\(count)\(plus) nouveau(x) sur la source (\(remoteCount) sur kDrive)",
-                     "Outdated: +\(count)\(plus) new on source (\(remoteCount) on kDrive)")
-        case .notOnDrive(let sourceCount, let localPending):
-            if sourceCount > 0 {
-                return L("Absent de kDrive · \(sourceCount)+ média(s) sur la source",
-                         "Not on kDrive · \(sourceCount)+ media on source")
-            }
-            if localPending > 0 {
-                return L("Absent de kDrive · \(localPending) sur l'iPhone à envoyer",
-                         "Not on kDrive · \(localPending) on iPhone to upload")
-            }
+            return L("+\(count)\(plus) sur la source", "+\(count)\(plus) on source")
+        case .notOnDrive:
             return L("Absent de kDrive", "Not on kDrive")
         case .unavailable(let reason):
             return reason
         }
+    }
+
+    /// Métadonnée technique secondaire (affichée en gris apaisé `DS.onSurfaceMuted` après « · »).
+    public var secondaryDetail: String? {
+        switch self {
+        case .checking, .unavailable:
+            return nil
+        case .upToDate(let remoteCount, _):
+            return L("\(remoteCount) sur kDrive", "\(remoteCount) on kDrive")
+        case .pendingUpload(_, let remoteCount):
+            return L("\(remoteCount) sur kDrive", "\(remoteCount) on kDrive")
+        case .outdated(_, _, let localPending, let remoteCount):
+            if localPending > 0 {
+                return L("\(localPending) à envoyer · \(remoteCount) sur kDrive",
+                         "\(localPending) to upload · \(remoteCount) on kDrive")
+            }
+            return L("\(remoteCount) sur kDrive", "\(remoteCount) on kDrive")
+        case .notOnDrive(let sourceCount, let localPending):
+            if localPending > 0 {
+                return L("\(localPending) sur l'iPhone", "\(localPending) on iPhone")
+            }
+            if sourceCount > 0 {
+                return L("\(sourceCount)+ sur la source", "\(sourceCount)+ on source")
+            }
+            return nil
+        }
+    }
+
+    /// Résumé lisible et sobre affiché dans les listes, bannières et détails de collection.
+    public var summaryText: String {
+        if let secondaryDetail {
+            return "\(primaryLabel) · \(secondaryDetail)"
+        }
+        return primaryLabel
     }
 }
 

@@ -3,21 +3,20 @@ import MediaCore
 import SwiftUI
 
 extension KDriveFreshnessStatus {
-    /// Couleur sémantique du Design System associée à l'état de fraîcheur.
+    /// Palette « Apple Calm Tech » (Colorimétrie C) :
+    /// - Vert Sauge (`DS.calmSage`) : à jour avec le site source (coche discrète, texte neutre).
+    /// - Ambre (`DS.calmAmber`) : nouveautés disponibles sur la source ou fichiers locaux à envoyer.
+    /// - Rose-Corail (`DS.calmRose`) : absent de kDrive ou erreur de vérification.
     var tintColor: Color {
         switch self {
         case .checking:
-            return DS.accentEmphasis
-        case .upToDate:
-            return DS.success
-        case .pendingUpload:
-            return DS.accentEmphasis
-        case .outdated:
-            return DS.warning
-        case .notOnDrive:
             return DS.onSurfaceMuted
-        case .unavailable:
-            return DS.error
+        case .upToDate:
+            return DS.calmSage
+        case .pendingUpload, .outdated:
+            return DS.calmAmber
+        case .notOnDrive, .unavailable:
+            return DS.calmRose
         }
     }
 }
@@ -327,6 +326,23 @@ final class KDriveFreshnessCenter: ObservableObject {
         }.count
     }
 
+    var unavailableCount: Int {
+        statuses.values.filter {
+            if case .unavailable = $0 { return true }
+            return false
+        }.count
+    }
+
+    /// Compteur Orange (collections avec nouveautés sur la source ou fichiers locaux à envoyer).
+    var orangeCount: Int {
+        outdatedCount + pendingUploadCount
+    }
+
+    /// Compteur Rouge (collections absentes de kDrive ou en erreur de vérification).
+    var redCount: Int {
+        notOnDriveCount + unavailableCount
+    }
+
     /// Résumé court pour la ligne de l'onglet Activité ou l'en-tête.
     var summaryLine: String {
         if isCheckingAll {
@@ -336,55 +352,89 @@ final class KDriveFreshnessCenter: ObservableObject {
         guard !statuses.isEmpty else {
             return L("Non vérifié", "Not checked")
         }
-        if outdatedCount > 0 {
-            return L("\(outdatedCount) à mettre à jour · \(upToDateCount) à jour",
-                     "\(outdatedCount) outdated · \(upToDateCount) up to date")
+        if redCount > 0 {
+            return L("\(upToDateCount) à jour · \(orangeCount) en retard · \(redCount) absent/err.",
+                     "\(upToDateCount) up to date · \(orangeCount) behind · \(redCount) missing/err.")
         }
-        if pendingUploadCount > 0 {
-            return L("\(pendingUploadCount) à envoyer · \(upToDateCount) à jour",
-                     "\(pendingUploadCount) to upload · \(upToDateCount) up to date")
+        if orangeCount > 0 {
+            return L("\(orangeCount) en retard · \(upToDateCount) à jour",
+                     "\(orangeCount) behind · \(upToDateCount) up to date")
         }
         return L("\(upToDateCount) à jour sur kDrive",
                  "\(upToDateCount) up to date on kDrive")
     }
 }
 
-/// Pastille compacte d'indicateur de fraîcheur kDrive vs site source.
+/// Ligne de détail « Apple Calm Tech » (Colorimétrie C) :
+/// - Quand la collection est **à jour**, tout le texte reste en gris secondaire apaisé (`DS.onSurfaceMuted`).
+/// - Quand une action est requise, seul le mot-clé (`+4 sur la source`, `3 à envoyer`, `Absent de kDrive`)
+///   s'allume en Ambre (`DS.calmAmber`) ou Rose-Corail (`DS.calmRose`), tandis que le compteur technique
+///   (`· 98 sur kDrive`) reste en gris secondaire `DS.onSurfaceMuted`.
+struct KDriveBicolorDetail: View {
+    let status: KDriveFreshnessStatus
+    var font: Font = .caption
+
+    var body: some View {
+        Group {
+            if status.isUpToDate || status.isChecking {
+                Text(status.summaryText)
+                    .font(font)
+                    .foregroundStyle(DS.onSurfaceMuted)
+            } else {
+                HStack(spacing: 0) {
+                    Text(status.primaryLabel)
+                        .font(font.weight(.semibold))
+                        .foregroundStyle(status.tintColor)
+                    if let detail = status.secondaryDetail {
+                        Text(" · \(detail)")
+                            .font(font)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                    }
+                }
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(status.summaryText)
+    }
+}
+
+/// Indicateur sobre (coche Sauge ou point lumineux 6 pt + libellé court).
 struct KDriveFreshnessBadge: View {
     let status: KDriveFreshnessStatus
     var onAccentBackground = false
 
     var body: some View {
         let color = onAccentBackground ? DS.onAccent : status.tintColor
-        HStack(spacing: 4) {
+        HStack(spacing: 5) {
             if status.isChecking {
                 ProgressView()
                     .controlSize(.mini)
                     .tint(color)
+            } else if status.isUpToDate {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(color)
             } else {
-                Image(systemName: status.symbolName)
-                    .font(.caption2.weight(.semibold))
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
             }
             Text(status.badgeText)
-                .font(.caption2.weight(.semibold))
+                .font(.caption2.weight(.medium))
                 .monospacedDigit()
                 .lineLimit(1)
+                .foregroundStyle(status.isUpToDate && !onAccentBackground ? DS.onSurfaceMuted : color)
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(
-            (onAccentBackground ? DS.onAccent : status.tintColor).opacity(0.14),
-            in: Capsule()
-        )
         .accessibilityElement(children: .combine)
         .accessibilityLabel(status.summaryText)
     }
 }
 
-/// Bandeau compact affiché sous les pastilles de la Bibliothèque pour indiquer
-/// si la collection active est à jour sur kDrive par rapport au site source,
-/// avec vérification en un geste et accès au tableau de bord complet.
+/// Carte compacte « Apple Calm Tech » affichée sous les pastilles de la Bibliothèque :
+/// coche Vert Sauge + texte gris apaisé + compteur monospaced à droite quand tout est à jour,
+/// ou point Ambre / Rose-Corail + détail bicolore en cas d'écart.
 struct KDriveActiveCollectionStrip: View {
     let collection: UserCollection
     @ObservedObject var model: Downloader
@@ -402,31 +452,50 @@ struct KDriveActiveCollectionStrip: View {
 
     var body: some View {
         HStack(spacing: DS.space(2)) {
-            Group {
-                if let status {
-                    if status.isChecking {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: status.symbolName)
-                            .foregroundStyle(status.tintColor)
-                    }
+            if let status {
+                if status.isChecking {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else if status.isUpToDate {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(DS.calmSage)
                 } else {
-                    Image(systemName: "icloud.badge.magnifyingglass")
-                        .foregroundStyle(DS.accentEmphasis)
+                    Circle()
+                        .fill(status.tintColor)
+                        .frame(width: 6, height: 6)
                 }
+            } else {
+                Image(systemName: "icloud")
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceMuted)
             }
-            .font(.subheadline.weight(.semibold))
 
             Button {
                 onOpenDashboard()
             } label: {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(status?.summaryText ?? L("kDrive : toucher pour vérifier si la collection est à jour avec la source",
-                                                  "kDrive: tap to check if collection is up to date with source"))
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(status?.tintColor ?? DS.onSurface)
-                        .lineLimit(1)
+                HStack {
+                    if case .upToDate(let remoteCount, _) = status {
+                        Text(L("kDrive synchronisé avec la source", "kDrive synced with source"))
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(L("\(remoteCount) fichiers", "\(remoteCount) files"))
+                            .font(DS.monoCaption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .lineLimit(1)
+                    } else if let status {
+                        KDriveBicolorDetail(status: status, font: .caption)
+                        Spacer(minLength: 4)
+                    } else {
+                        Text(L("kDrive : toucher pour vérifier avec la source",
+                               "kDrive: tap to check against source"))
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -436,10 +505,10 @@ struct KDriveActiveCollectionStrip: View {
                 Button {
                     onDownloadCollection(collection)
                 } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.body)
-                        .foregroundStyle(DS.warning)
-                        .frame(width: 34, height: 34)
+                    Image(systemName: "arrow.down.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(DS.calmAmber)
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -458,32 +527,19 @@ struct KDriveActiveCollectionStrip: View {
                 )
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.accentEmphasis)
-                    .frame(width: 34, height: 34)
+                    .font(.caption)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(status?.isChecking == true)
             .accessibilityLabel(L("Vérifier \(collection.displayName) sur kDrive et le site source",
                                   "Check \(collection.displayName) on kDrive and source site"))
-
-            Button {
-                onOpenDashboard()
-            } label: {
-                Image(systemName: "checklist")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.onSurfaceMuted)
-                    .frame(width: 34, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(L("État kDrive de toutes les collections",
-                                  "kDrive status of all collections"))
         }
         .padding(.horizontal, DS.space(3))
-        .padding(.vertical, DS.space(1))
-        .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
+        .padding(.vertical, DS.space(2))
+        .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusM))
         .padding(.horizontal, DS.space(4))
         .padding(.bottom, DS.space(2))
     }
@@ -548,8 +604,12 @@ struct KDriveCollectionsStatusView: View {
             case .upToDate:
                 return status?.isUpToDate == true
             case .notOnDrive:
-                if case .notOnDrive = status { return true }
-                return status == nil && center.remoteFolder(for: collection.id) == nil
+                switch status {
+                case .notOnDrive, .unavailable:
+                    return true
+                default:
+                    return status == nil && center.remoteFolder(for: collection.id) == nil
+                }
             }
         }
     }
@@ -607,8 +667,35 @@ struct KDriveCollectionsStatusView: View {
             .navigationTitle(L("État kDrive", "kDrive Status"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if kDriveConfigured {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            if center.isCheckingAll {
+                                center.stopChecking()
+                            } else {
+                                center.checkAll(
+                                    model: model,
+                                    token: token,
+                                    driveId: driveId,
+                                    directoryId: directoryId
+                                )
+                            }
+                        } label: {
+                            if center.isCheckingAll {
+                                HStack(spacing: 4) {
+                                    ProgressView().controlSize(.small)
+                                    Text("\(center.checkedCount)/\(max(1, center.totalToCheck))")
+                                        .font(.caption.monospacedDigit())
+                                }
+                            } else {
+                                Text(L("Vérifier", "Check"))
+                            }
+                        }
+                        .disabled(allCollections.isEmpty && !center.isCheckingAll)
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L("Fermer", "Close")) { dismiss() }
+                    Button(L("OK", "OK")) { dismiss() }
                 }
             }
             .task {
@@ -624,64 +711,165 @@ struct KDriveCollectionsStatusView: View {
         .tint(DS.accentEmphasis)
     }
 
-    private var summaryHeader: some View {
-        let stats: [(label: String, value: String)] = [
-            (L("À jour", "Up to date"), "\(center.upToDateCount)"),
-            (L("Nouveaux source", "New on source"), "\(center.outdatedCount)"),
-            (L("À envoyer", "Pending upload"), "\(center.pendingUploadCount)"),
-            (L("Hors kDrive", "Not on kDrive"), "\(center.notOnDriveCount)")
-        ]
-        let progress: Double? = center.isCheckingAll && center.totalToCheck > 0
-            ? Double(center.checkedCount) / Double(max(1, center.totalToCheck))
-            : nil
-        let counter: String? = center.isCheckingAll
-            ? "\(center.checkedCount) / \(max(1, center.totalToCheck))"
-            : nil
-        let folderTitle = directoryName.isEmpty
-            ? L("Racine kDrive", "kDrive Root")
-            : directoryName
-
-        return VStack(spacing: DS.space(3)) {
-            UploadConsoleCard(
-                icon: center.outdatedCount > 0
-                    ? "exclamationmark.icloud.fill"
-                    : (center.upToDateCount > 0 ? "checkmark.icloud.fill" : "icloud.fill"),
-                iconColor: center.outdatedCount > 0
-                    ? DS.warning
-                    : (center.upToDateCount > 0 ? DS.success : DS.accentEmphasis),
-                title: L("Collections kDrive vs sites sources", "kDrive collections vs source sites"),
-                status: L("Dossier cible : \(folderTitle) · \(center.summaryLine)",
-                          "Target folder: \(folderTitle) · \(center.summaryLine)"),
-                counter: counter,
-                progress: progress,
-                stats: stats,
-                summary: center.lastGlobalError
-            )
-
-            if center.isCheckingAll {
-                UploadActionButton(
-                    title: L("Arrêter la vérification", "Stop checking"),
-                    systemImage: "stop.fill",
-                    destructive: true
-                ) {
-                    center.stopChecking()
+    private func consoleMetric(
+        count: Int,
+        label: String,
+        valueColor: Color,
+        leadingSymbol: String? = nil,
+        symbolColor: Color? = nil
+    ) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 5) {
+                if let leadingSymbol {
+                    Image(systemName: leadingSymbol)
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(symbolColor ?? valueColor)
                 }
+                Text("\(count)")
+                    .font(.system(.title3, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(valueColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+            }
+            Text(label)
+                .font(DS.caption2)
+                .foregroundStyle(DS.onSurfaceMuted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var metricDivider: some View {
+        DS.separator
+            .frame(width: 1, height: 30)
+            .padding(.vertical, DS.space(1))
+    }
+
+    /// Fine jauge de répartition 3 pt (Sauge / Ambre / Rose-Corail) placée
+    /// sous les 3 compteurs de la console (« Apple Calm Tech »).
+    private var calmTricolorGauge: some View {
+        let up = max(0, center.upToDateCount)
+        let orange = max(0, center.orangeCount)
+        let red = max(0, center.redCount)
+        let total = up + orange + red
+
+        return GeometryReader { geo in
+            let width = geo.size.width
+            if total == 0 {
+                Capsule()
+                    .fill(DS.separator)
+                    .frame(width: width, height: 3)
             } else {
-                UploadActionButton(
-                    title: L("Vérifier toutes les collections", "Check all collections"),
-                    systemImage: "icloud.badge.magnifyingglass",
-                    prominent: true
-                ) {
-                    center.checkAll(
-                        model: model,
-                        token: token,
-                        driveId: driveId,
-                        directoryId: directoryId
-                    )
+                HStack(spacing: 3) {
+                    if up > 0 {
+                        Capsule()
+                            .fill(DS.calmSage.opacity(0.8))
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(up))
+                    }
+                    if orange > 0 {
+                        Capsule()
+                            .fill(DS.calmAmber)
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(orange))
+                    }
+                    if red > 0 {
+                        Capsule()
+                            .fill(DS.calmRose)
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(red))
+                    }
                 }
-                .disabled(allCollections.isEmpty)
+                .frame(width: width, height: 3)
             }
         }
+        .frame(height: 3)
+        .accessibilityHidden(true)
+    }
+
+    private var summaryHeader: some View {
+        VStack(alignment: .leading, spacing: DS.space(3)) {
+            HStack(spacing: 0) {
+                consoleMetric(
+                    count: center.upToDateCount,
+                    label: L("à jour", "up to date"),
+                    valueColor: DS.onSurface,
+                    leadingSymbol: "checkmark",
+                    symbolColor: DS.calmSage
+                )
+                metricDivider
+                consoleMetric(
+                    count: center.orangeCount,
+                    label: L("en retard", "behind"),
+                    valueColor: DS.calmAmber
+                )
+                metricDivider
+                consoleMetric(
+                    count: center.redCount,
+                    label: L("absents", "missing"),
+                    valueColor: DS.calmRose
+                )
+            }
+
+            if center.isCheckingAll, center.totalToCheck > 0 {
+                let fraction = min(1.0, Double(center.checkedCount) / Double(max(1, center.totalToCheck)))
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+                    .tint(DS.calmAmber)
+            } else {
+                calmTricolorGauge
+            }
+
+            if let error = center.lastGlobalError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(DS.calmRose)
+            }
+        }
+        .padding(DS.space(3))
+        .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusM))
+        .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
+    }
+
+    @ViewBuilder
+    private func calmLeadingTile(status: KDriveFreshnessStatus?, folder: KDriveFolderItem?) -> some View {
+        let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
+        if isCalmUpToDate {
+            Image(systemName: "checkmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(DS.calmSage)
+                .frame(width: 30, height: 30)
+                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else if let status, !status.isChecking {
+            Image(systemName: "icloud.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(status.tintColor)
+                .frame(width: 30, height: 30)
+                .background(status.tintColor.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else if !center.remoteFolders.isEmpty, status == nil {
+            Image(systemName: "icloud.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DS.calmRose)
+                .frame(width: 30, height: 30)
+                .background(DS.calmRose.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: "icloud")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DS.onSurfaceMuted)
+                .frame(width: 30, height: 30)
+                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func rowDetailColor(status: KDriveFreshnessStatus?, folder: KDriveFolderItem?) -> Color {
+        if let status { return status.tintColor }
+        if folder != nil { return DS.calmSage }
+        if !center.remoteFolders.isEmpty { return DS.calmRose }
+        return DS.onSurfaceMuted
     }
 
     @ViewBuilder
@@ -689,52 +877,51 @@ struct KDriveCollectionsStatusView: View {
         let status = center.status(for: collection.id)
         let folder = center.remoteFolder(for: collection.id)
         let expectedFolderName = folder?.name ?? FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
+        let detailColor = rowDetailColor(status: status, folder: folder)
+        let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
 
         HStack(spacing: DS.space(3)) {
-            Image(systemName: collection.icon)
-                .font(.title3)
-                .foregroundStyle(DS.accentEmphasis)
-                .frame(width: 28)
+            calmLeadingTile(status: status, folder: folder)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: DS.space(2)) {
-                    Text(collection.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(DS.onSurface)
-                        .lineLimit(1)
-                    if let status {
-                        KDriveFreshnessBadge(status: status)
-                    }
-                }
-
-                Text(L("Dossier kDrive : \(expectedFolderName)", "kDrive folder: \(expectedFolderName)"))
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(DS.onSurfaceMuted)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(collection.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(isCalmUpToDate ? DS.onSurface.opacity(0.84) : DS.onSurface)
                     .lineLimit(1)
 
                 if let status {
-                    Text(status.summaryText)
-                        .font(.caption)
-                        .foregroundStyle(status.tintColor)
-                        .lineLimit(2)
+                    KDriveBicolorDetail(status: status, font: .caption)
                 } else if let folder {
                     let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
                     if ts > 0 {
                         let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                        Text(L("Présent sur kDrive (modifié le \(date.formatted(date: .abbreviated, time: .shortened)))",
-                               "Present on kDrive (modified \(date.formatted(date: .abbreviated, time: .shortened)))"))
+                        Text(L("Sur kDrive · \(date.formatted(date: .abbreviated, time: .omitted))",
+                               "On kDrive · \(date.formatted(date: .abbreviated, time: .omitted))"))
                             .font(.caption)
                             .foregroundStyle(DS.onSurfaceMuted)
+                            .lineLimit(1)
                     } else {
-                        Text(L("Présent sur kDrive — non comparé à la source",
-                               "Present on kDrive — not yet compared with source"))
+                        Text(L("Sur kDrive · \(expectedFolderName)",
+                               "On kDrive · \(expectedFolderName)"))
+                            .font(.caption)
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .lineLimit(1)
+                    }
+                } else if !center.remoteFolders.isEmpty {
+                    HStack(spacing: 0) {
+                        Text(L("Absent de kDrive", "Not on kDrive"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(DS.calmRose)
+                        Text(" · \(expectedFolderName)")
                             .font(.caption)
                             .foregroundStyle(DS.onSurfaceMuted)
                     }
+                    .lineLimit(1)
                 } else {
-                    Text(L("Non vérifié", "Not checked"))
+                    Text(L("Non vérifié · \(expectedFolderName)", "Not checked · \(expectedFolderName)"))
                         .font(.caption)
                         .foregroundStyle(DS.onSurfaceMuted)
+                        .lineLimit(1)
                 }
             }
 
@@ -745,10 +932,10 @@ struct KDriveCollectionsStatusView: View {
                     dismiss()
                     onDownloadCollection(collection)
                 } label: {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(DS.warning)
-                        .frame(width: 40, height: 40)
+                    Image(systemName: "arrow.down.circle")
+                        .font(.body)
+                        .foregroundStyle(detailColor)
+                        .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -768,12 +955,13 @@ struct KDriveCollectionsStatusView: View {
             } label: {
                 if status?.isChecking == true {
                     ProgressView()
-                        .frame(width: 40, height: 40)
+                        .controlSize(.small)
+                        .frame(width: 36, height: 36)
                 } else {
-                    Image(systemName: "arrow.clockwise.circle")
-                        .font(.title3)
-                        .foregroundStyle(DS.accentEmphasis)
-                        .frame(width: 40, height: 40)
+                    Image(systemName: "ellipsis.circle")
+                        .font(.body)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                        .frame(width: 36, height: 36)
                         .contentShape(Rectangle())
                 }
             }
@@ -781,7 +969,7 @@ struct KDriveCollectionsStatusView: View {
             .disabled(status?.isChecking == true)
             .accessibilityLabel(L("Vérifier \(collection.displayName)", "Check \(collection.displayName)"))
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
     }
 
     private func shouldOfferDownload(for status: KDriveFreshnessStatus?) -> Bool {

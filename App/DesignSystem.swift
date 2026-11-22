@@ -35,6 +35,25 @@ enum DS {
             ? UIColor(red: 1.00, green: 0.70, blue: 0.25, alpha: 1)
             : UIColor(red: 0.70, green: 0.38, blue: 0.00, alpha: 1)
     })
+    /// Palette « Apple Calm Tech » (Colorimétrie C) :
+    /// - `calmSage` : Vert Sauge discret (#6EE7B7 sombre / #0F766E clair) pour la coche « À jour ».
+    /// - `calmAmber` : Ambre (#F59E0B sombre / #B45309 clair) pour les nouveautés ou envois en attente.
+    /// - `calmRose` : Rose-Corail (#FB7185 sombre / #BE123C clair) pour les collections absentes ou en erreur.
+    static let calmSage = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.431, green: 0.906, blue: 0.718, alpha: 1)
+            : UIColor(red: 0.059, green: 0.463, blue: 0.431, alpha: 1)
+    })
+    static let calmAmber = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.961, green: 0.620, blue: 0.043, alpha: 1)
+            : UIColor(red: 0.706, green: 0.325, blue: 0.035, alpha: 1)
+    })
+    static let calmRose = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.984, green: 0.443, blue: 0.522, alpha: 1)
+            : UIColor(red: 0.745, green: 0.071, blue: 0.235, alpha: 1)
+    })
     static let separator = Color("Separator")
 
     // MARK: - Espacement (pas de 4 pt)

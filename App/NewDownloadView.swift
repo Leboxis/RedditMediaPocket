@@ -14,6 +14,7 @@ struct NewDownloadView: View {
     @ObservedObject private var redditSession = RedditSession.shared
     @ObservedObject private var xSession = XSession.shared
     @ObservedObject private var tikTokSession = TikTokSession.shared
+    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var sourceGridPresented = false
     @State private var filtersPresented = false
     @State private var tikTokSavedPresented = false
@@ -302,6 +303,25 @@ struct NewDownloadView: View {
                 Text(model.status)
                     .font(.caption).foregroundStyle(DS.onSurfaceMuted)
                     .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if !model.running,
+               let activeID = model.activeUser,
+               let driveStatus = kDriveFreshness.status(for: activeID) {
+                HStack(spacing: 6) {
+                    if driveStatus.isChecking {
+                        ProgressView().controlSize(.mini)
+                    } else if driveStatus.isUpToDate {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(DS.calmSage)
+                    } else {
+                        Circle()
+                            .fill(driveStatus.tintColor)
+                            .frame(width: 6, height: 6)
+                    }
+                    KDriveBicolorDetail(status: driveStatus, font: .caption)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if model.storageLimitReached {
                 HStack(spacing: DS.space(2)) {

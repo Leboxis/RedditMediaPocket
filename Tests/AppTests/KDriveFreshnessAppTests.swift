@@ -27,4 +27,27 @@ final class KDriveFreshnessAppTests: XCTestCase {
         XCTAssertEqual(center.status(for: "u/alice"), .upToDate(remoteCount: 42, checkedSourceCount: 0))
         XCTAssertEqual(center.status(for: "u/ALICE"), .upToDate(remoteCount: 42, checkedSourceCount: 0))
     }
+
+    func testTricolorStatusTintColors() {
+        XCTAssertEqual(
+            KDriveFreshnessStatus.upToDate(remoteCount: 10, checkedSourceCount: 5).tintColor,
+            DS.calmSage
+        )
+        XCTAssertEqual(
+            KDriveFreshnessStatus.outdated(newOnSourceCount: 3, fullPageMissing: false, localPendingCount: 0, remoteCount: 10).tintColor,
+            DS.calmAmber
+        )
+        XCTAssertEqual(
+            KDriveFreshnessStatus.pendingUpload(localPendingCount: 2, remoteCount: 10).tintColor,
+            DS.calmAmber
+        )
+        XCTAssertEqual(
+            KDriveFreshnessStatus.notOnDrive(sourceNewCount: 5, localPendingCount: 0).tintColor,
+            DS.calmRose
+        )
+        XCTAssertEqual(
+            KDriveFreshnessStatus.unavailable(reason: "HTTP 429").tintColor,
+            DS.calmRose
+        )
+    }
 }

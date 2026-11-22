@@ -14,9 +14,8 @@ struct ActivityView: View {
     @State private var kDriveStatusPresented = false
 
     private var kDriveStatusColor: Color {
-        if kDriveFreshness.outdatedCount > 0 { return DS.warning }
-        if kDriveFreshness.pendingUploadCount > 0 { return DS.accentEmphasis }
-        if kDriveFreshness.upToDateCount > 0 { return DS.success }
+        if kDriveFreshness.redCount > 0 { return DS.calmRose }
+        if kDriveFreshness.orangeCount > 0 { return DS.calmAmber }
         return DS.onSurfaceMuted
     }
 

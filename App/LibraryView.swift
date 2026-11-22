@@ -206,11 +206,13 @@ struct LibraryView: View {
                     if driveStatus.isChecking {
                         ProgressView()
                             .controlSize(.mini)
-                            .tint(active ? DS.onAccent : DS.accentEmphasis)
-                    } else {
-                        Image(systemName: driveStatus.symbolName)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(active ? DS.onAccent : driveStatus.tintColor)
+                            .tint(active ? DS.onAccent : DS.onSurfaceMuted)
+                    } else if !driveStatus.isUpToDate {
+                        // Calm Tech (Colorimétrie C) : silencieux quand tout est à jour,
+                        // point Ambre ou Rose-Corail uniquement en cas d'écart.
+                        Circle()
+                            .fill(active ? DS.onAccent : driveStatus.tintColor)
+                            .frame(width: 6, height: 6)
                     }
                 }
                 // Ce qui a réellement été ajouté au passage précédent : l'état
@@ -218,7 +220,12 @@ struct LibraryView: View {
                 if let fresh, fresh > 0, !active {
                     Text("+\(fresh)")
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(DS.accentEmphasis)
+                        .foregroundStyle(DS.calmAmber)
+                        .monospacedDigit()
+                } else if case .outdated(let newCount, _, _, _) = driveStatus, newCount > 0, !active {
+                    Text("+\(newCount)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(DS.calmAmber)
                         .monospacedDigit()
                 }
                 if active { Image(systemName: "checkmark") }
