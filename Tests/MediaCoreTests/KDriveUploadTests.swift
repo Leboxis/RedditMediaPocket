@@ -196,4 +196,14 @@ final class KDriveUploadTests: XCTestCase {
         XCTAssertEqual(pacer.count(at: t0), 3)
         XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(61)), 0)
     }
+
+    func testUploadConcurrencyOptionsAndClamping() {
+        XCTAssertEqual(KDriveUploadPolicy.uploadConcurrencyOptions, [4, 6, 8, 10])
+        for option in KDriveUploadPolicy.uploadConcurrencyOptions {
+            XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(option), option)
+        }
+        XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(0), 4)
+        XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(5), 4)
+        XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(12), 4)
+    }
 }

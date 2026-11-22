@@ -66,4 +66,16 @@ final class KDriveRateLimitTests: XCTestCase {
         XCTAssertEqual(center.nextSlotDelay, 0)
         XCTAssertEqual(center.apiRateLabel, "1 req/min")
     }
+
+    func testConcurrentUploadLimitDefaultsAndClamping() {
+        XCTAssertEqual(KDriveService.currentConcurrentUploadLimit(defaults: defaults), 4)
+
+        for option in [4, 6, 8, 10] {
+            defaults.set(option, forKey: KDriveService.concurrentUploadsDefaultsKey)
+            XCTAssertEqual(KDriveService.currentConcurrentUploadLimit(defaults: defaults), option)
+        }
+
+        defaults.set(7, forKey: KDriveService.concurrentUploadsDefaultsKey)
+        XCTAssertEqual(KDriveService.currentConcurrentUploadLimit(defaults: defaults), 4)
+    }
 }

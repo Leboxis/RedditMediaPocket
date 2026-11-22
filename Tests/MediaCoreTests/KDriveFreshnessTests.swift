@@ -209,4 +209,31 @@ final class KDriveFreshnessTests: XCTestCase {
         XCTAssertEqual(status, .notOnDrive(sourceNewCount: 1, localPendingCount: 2))
         XCTAssertTrue(status.needsAttention)
     }
+
+    func testContainsCandidateFileSkipsExistingRemoteAndAllowsMissingGalleryItems() {
+        let fallbackName = FilenamePolicy.kDriveFallbackName(for: "Question? - qqq422.jpg")
+        let index = KDriveRemoteIndex(fileNames: [
+            "Old - aaa111.jpg",
+            "Album 1 - gal222.jpg",
+            fallbackName
+        ])
+
+        XCTAssertTrue(index.containsCandidateFile(
+            fileName: "Old - aaa111.jpg",
+            redditSinglePostID: "t3_aaa111",
+            redditSinglePostTitle: "Old"
+        ))
+        XCTAssertTrue(index.containsCandidateFile(
+            fileName: "Question? - qqq422.jpg",
+            redditSinglePostID: "t3_qqq422",
+            redditSinglePostTitle: "Question?"
+        ))
+        XCTAssertTrue(index.containsCandidateFile(fileName: "Album 1 - gal222.jpg"))
+        XCTAssertFalse(index.containsCandidateFile(fileName: "Album 2 - gal222.jpg"))
+        XCTAssertFalse(index.containsCandidateFile(
+            fileName: "Brand New - zzz999.mp4",
+            redditSinglePostID: "t3_zzz999",
+            redditSinglePostTitle: "Brand New"
+        ))
+    }
 }

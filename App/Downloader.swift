@@ -580,6 +580,8 @@ extension Notification.Name {
     private var tokenTask: Task<String, Error>?
     private var token: String?
     private var tokenDate = Date.distantPast
+    private var pendingRemoteIndex: KDriveRemoteIndex?
+    private var activeRemoteIndex: KDriveRemoteIndex?
     private let fm = FileManager.default
     private var root: URL { fm.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     var archivedCollections: [UserCollection] { collections.filter(\.archived) }
@@ -837,8 +839,9 @@ extension Notification.Name {
     /// Compteurs « nouveautés » du passage précédent, pour l'affichage.
     func lastRunCount(for id: String) -> Int? { lastRunCounts[id] }
 
-    func download(user id: String) {
+    func download(user id: String, skippingRemoteMedia remoteIndex: KDriveRemoteIndex? = nil) {
         guard !running else { return }
+        pendingRemoteIndex = remoteIndex
         if let collection = collections.first(where: { $0.id == id }) {
             display(collection)
             if collection.isTikTokVideo {
@@ -869,6 +872,7 @@ extension Notification.Name {
         // Sélection X-Fetish sans adresses mémorisées : afficher la collection
         // sans lancer un parcours du modèle neutre (`videos`/`albums`).
         if sourceKind == "x", username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            pendingRemoteIndex = nil
             activeUser = id
             UserDefaults.standard.set(id, forKey: "lastUsername")
             reload()
@@ -1125,6 +1129,8 @@ extension Notification.Name {
     }
     func start() {
         guard !running else { return }
+        activeRemoteIndex = pendingRemoteIndex
+        pendingRemoteIndex = nil
         sessionLimit = max(1, min(ConcurrentDownloads.maximumLimit, concurrentLimit))
         sessionSegments = XFetishRangeDownload.segmentCount(xFetishSegments)
         errorMessage = nil
@@ -1164,6 +1170,7 @@ extension Notification.Name {
                 orderingCoalesceTask?.cancel()
                 orderingCoalesceTask = nil
                 applyGalleryOrdering()
+                activeRemoteIndex = nil
                 running = false; stopping = false; active = 0; task = nil
             }
             do {
@@ -1787,6 +1794,7 @@ extension Notification.Name {
         )
         LogCenter.info(L("Dossier : \(source.folderName), \(checkpoint.visited.count) déjà vus, curseur \(checkpoint.cursor ?? "début"), frontière \(checkpoint.frontier ?? "aucune").", "Folder: \(source.folderName), \(checkpoint.visited.count) seen, cursor \(checkpoint.cursor ?? "start"), frontier \(checkpoint.frontier ?? "none")."))
         var pageNumber = 0
+        var remoteCaughtUpIdlePages = 0
         let completed = try await FeedTraversal.run(checkpoint: checkpoint,
             validCursor: { Self.validPageCursor($0, privateFeed: privateFeed) },
             fetch: { after in
@@ -1822,9 +1830,16 @@ extension Notification.Name {
                           let preview = MediaExtractor.previewImage(post.html) else { continue }
                     redditMirrors[post.id] = [preview]
                 }
-                let downloads = try await self.prepareDownloads(posts, folder: folder,
+                let (downloads, pageSkipped) = try await self.prepareDownloadsWithStats(posts, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical,
                     mediaMirrors: redditMirrors)
+                if self.activeRemoteIndex != nil {
+                    if !downloads.isEmpty {
+                        remoteCaughtUpIdlePages = 0
+                    } else if pageSkipped > 0 {
+                        remoteCaughtUpIdlePages += 1
+                    }
+                }
                 LogCenter.info(L("Page \(pageNumber) : \(downloads.count) nouveaux médias à prendre.", "Page \(pageNumber): \(downloads.count) new media to fetch."))
                 try await self.executeDownloads(downloads, &preparedCount)
                 LogCenter.info(L("Page \(pageNumber) terminée : total préparé \(preparedCount).", "Page \(pageNumber) done: total prepared \(preparedCount)."))
@@ -1832,7 +1847,8 @@ extension Notification.Name {
                 Self.persistResumeState(canonical: canonical, cursor: state.cursor, visited: state.visited)
                 Self.persistFrontier(canonical, state.frontier)
                 LogCenter.info(L("Point de reprise : curseur \(state.cursor.map { String($0.suffix(8)) } ?? "fin"), frontière \(state.frontier.map { String($0.suffix(8)) } ?? "aucune"), \(state.visited.count) vus.", "Checkpoint: cursor \(state.cursor.map { String($0.suffix(8)) } ?? "end"), frontier \(state.frontier.map { String($0.suffix(8)) } ?? "none"), \(state.visited.count) seen."))
-            }, trace: { LogCenter.info($0) })
+            }, trace: { LogCenter.info($0) },
+               shouldStopAfterPage: { self.activeRemoteIndex != nil && remoteCaughtUpIdlePages >= 2 })
         LogCenter.info(L("Parcours des pages : \(pageNumber) lues, \(completed ? "complet" : "limite atteinte"), \(preparedCount) médias préparés.", "Page scan: \(pageNumber) read, \(completed ? "complete" : "limit reached"), \(preparedCount) media prepared."))
         if completed, sourceKind == "saved", let index = collections.firstIndex(where: { $0.id == canonical }), collections[index].isSaved {
             let snapshot = try SavedMediaCount(folder: folder)
@@ -1881,9 +1897,12 @@ extension Notification.Name {
         var preparedCount = 0
         // A single scan feeds both keys: switching the selector must not make
         // already-saved files look new, and vice versa.
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.xFetishMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.xFetishMediaIDs)
+        }
 
         if xFetishMediaKind.includesImages {
             try await runXFetishAlbums(model: model, canonical: canonical, folder: folder,
@@ -1986,9 +2005,12 @@ extension Notification.Name {
         var seenMedia = Set<Media>()
         var usedFilenames = Set<String>()
         var preparedCount = 0
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.xFetishMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.xFetishMediaIDs)
+        }
         let savedImageIDs = Set(savedIDs.filter { $0.hasPrefix("xf-") })
         let savedVideoIDs = Set(savedIDs.filter { $0.hasPrefix("xfv-") })
         var seenAlbums = Set<String>()
@@ -2134,9 +2156,12 @@ extension Notification.Name {
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publié.
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.xMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.xMediaIDs)
+        }
         let resumeKey = "xMediaResume.\(canonical)"
         let stored = UserDefaults.standard.dictionary(forKey: resumeKey) as? [String: String]
         let resumeCursor = stored?["userID"] == userID ? stored?["cursor"] : nil
@@ -2248,6 +2273,7 @@ extension Notification.Name {
             let downloads = try await prepareDownloads(posts, folder: folder,
                 seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                 author: canonical, mediaOverrides: mediaOverrides, mediaHeaders: [:])
+            guard !downloads.isEmpty else { return false }
             discovered += downloads.count
             preparedHere += downloads.count
             // Le total de la barre suit le parcours : chaque page repérée
@@ -2488,9 +2514,12 @@ extension Notification.Name {
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publié.
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.tikTokMediaIDs)
+        }
         // Le curseur paginé appartient désormais au JavaScript de TikTok dans
         // la WebView cachée : la reprise par curseur stocké n'a plus de prise
         // dessus, et le dédoublonnage par clé média évite tout retéléchargement.
@@ -2643,12 +2672,16 @@ extension Notification.Name {
                     author: canonical, mediaOverrides: mediaOverrides,
                     mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
                     mediaExtensions: mediaExtensions)
-                // La barre suit la page : TikTok n'annonce aucun total global
-                // et le parcours en découvre en continu, donc une unité de
-                // nombre connu est la seule progression exacte possible.
-                beginTransferUnit(total: downloads.count)
-                try await executeDownloads(downloads, &preparedCount)
-                idle = 0
+                if downloads.isEmpty {
+                    idle += 1
+                } else {
+                    // La barre suit la page : TikTok n'annonce aucun total global
+                    // et le parcours en découvre en continu, donc une unité de
+                    // nombre connu est la seule progression exacte possible.
+                    beginTransferUnit(total: downloads.count)
+                    try await executeDownloads(downloads, &preparedCount)
+                    idle = 0
+                }
                 if !qualityTally.isEmpty {
                     let summary = qualityTally.sorted { $0.key < $1.key }
                         .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
@@ -2902,9 +2935,12 @@ extension Notification.Name {
                                 preparedCount: inout Int) async throws {
         guard await TikTokSession.shared.hasSession else { throw TikTokError.loginRequired }
         // Clés déjà sur disque : dédoublonnage par clé média, comme tt/.
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.tikTokMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.tikTokMediaIDs)
+        }
         var scanned = Set<String>()
         var scannedPages = 0
         var idle = 0
@@ -3060,9 +3096,13 @@ extension Notification.Name {
                     author: canonical, mediaOverrides: mediaOverrides,
                     mediaHeaders: mediaHeadersByMedia, mediaMirrors: mediaMirrorsByMedia,
                     mediaExtensions: mediaExtensions)
-                beginTransferUnit(total: downloads.count)
-                try await executeDownloads(downloads, &preparedCount)
-                idle = 0
+                if downloads.isEmpty {
+                    idle += 1
+                } else {
+                    beginTransferUnit(total: downloads.count)
+                    try await executeDownloads(downloads, &preparedCount)
+                    idle = 0
+                }
                 if !qualityTally.isEmpty {
                     let summary = qualityTally.sorted { $0.key < $1.key }
                         .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
@@ -3123,9 +3163,12 @@ extension Notification.Name {
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publiée.
-        let savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
+        var savedIDs = Set(try CollectionFiles.scan(folder).files.compactMap {
             FilenamePolicy.instagramMediaID(inFileName: $0.lastPathComponent)
         })
+        if let remote = activeRemoteIndex {
+            savedIDs.formUnion(remote.instagramMediaIDs)
+        }
         var scanned = Set<String>()
         var seenKeys = Set<String>()
         var scannedPages = 0
@@ -3204,9 +3247,13 @@ extension Notification.Name {
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames,
                     author: canonical, mediaOverrides: mediaOverrides,
                     mediaHeaders: mediaHeadersByMedia, mediaExtensions: mediaExtensions)
-                beginTransferUnit(total: downloads.count)
-                try await executeDownloads(downloads, &preparedCount)
-                idle = 0
+                if downloads.isEmpty {
+                    idle += 1
+                } else {
+                    beginTransferUnit(total: downloads.count)
+                    try await executeDownloads(downloads, &preparedCount)
+                    idle = 0
+                }
             }
             try Task.checkCancellation()
             // Deux pages sans nouveautés : le compte est rattrapé, même si
@@ -3434,6 +3481,7 @@ extension Notification.Name {
         var orderedVisited = UserDefaults.standard.stringArray(forKey: Self.visitedKey(canonical)) ?? []
         var visited = Set(orderedVisited)
         var seenPages = Set<[String]>()
+        var remoteCaughtUpIdlePages = 0
         for page in 1...100 {
             try Task.checkCancellation()
             try checkStorageQuota(folder: folder, canonical: canonical)
@@ -3446,14 +3494,23 @@ extension Notification.Name {
             guard seenPages.insert(ids).inserted else { return true }
             let fresh = ids.filter { !visited.contains($0) }
             if !fresh.isEmpty {
-                let downloads = prepareRedgifsDownloads(fresh, folder: folder,
+                let (downloads, pageSkipped) = prepareRedgifsDownloadsWithStats(fresh, folder: folder,
                     seenMedia: &seenMedia, usedFilenames: &usedFilenames, author: canonical)
+                if activeRemoteIndex != nil {
+                    if !downloads.isEmpty {
+                        remoteCaughtUpIdlePages = 0
+                    } else if pageSkipped > 0 {
+                        remoteCaughtUpIdlePages += 1
+                    }
+                }
                 LogCenter.info(L("RedGifs page \(page) : \(downloads.count) nouveaux médias à prendre.", "RedGifs page \(page): \(downloads.count) new media to fetch."))
                 try await executeDownloads(downloads, &preparedCount)
             }
             for id in ids where visited.insert(id).inserted { orderedVisited.append(id) }
             Self.persistResumeState(canonical: canonical, cursor: nil, visited: orderedVisited)
-            if page >= max(1, response.pages) { return true }
+            if (activeRemoteIndex != nil && remoteCaughtUpIdlePages >= 2) || page >= max(1, response.pages) {
+                return true
+            }
         }
         return false
     }
@@ -3505,12 +3562,23 @@ extension Notification.Name {
                                          seenMedia: inout Set<Media>,
                                          usedFilenames: inout Set<String>,
                                          author: String) -> [Download] {
+        prepareRedgifsDownloadsWithStats(ids, folder: folder,
+                                         seenMedia: &seenMedia,
+                                         usedFilenames: &usedFilenames,
+                                         author: author).downloads
+    }
+
+    private func prepareRedgifsDownloadsWithStats(_ ids: [String], folder: URL,
+                                                  seenMedia: inout Set<Media>,
+                                                  usedFilenames: inout Set<String>,
+                                                  author: String) -> (downloads: [Download], skippedExisting: Int) {
         var downloads: [Download] = []
         var renamedExisting = false
         var skippedExisting = 0
         var skippedSeen = 0
         var skippedFilter = 0
         let filter = downloadFilter
+        let remote = activeRemoteIndex
         for id in ids {
             let item = Media.redgifs(id.lowercased())
             guard seenMedia.insert(item).inserted else { skippedSeen += 1; continue }
@@ -3531,7 +3599,8 @@ extension Notification.Name {
             let destination = folder.appendingPathComponent(filename)
             let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
             let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension("mp4")
-            if fm.fileExists(atPath: destination.path) {
+            let isOnRemote = remote?.containsLocalFile(filename) == true || remote?.contains(.redgifs(id: id)) == true
+            if fm.fileExists(atPath: destination.path) || isOnRemote {
                 skippedExisting += 1
                 if fm.fileExists(atPath: legacyDestination.path) {
                     try? fm.removeItem(at: legacyDestination)
@@ -3551,7 +3620,7 @@ extension Notification.Name {
             LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus, \(skippedFilter) écartés par les filtres.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen, \(skippedFilter) filtered out."))
         }
         if renamedExisting { reload() }
-        return downloads
+        return (downloads, skippedExisting)
     }
 
     private func executeDownloads(_ downloads: [Download], _ preparedCount: inout Int) async throws {
@@ -3688,11 +3757,47 @@ extension Notification.Name {
                                    mediaMirrors: [String: [URL]] = [:],
                                    mediaExtensions: [String: String] = [:],
                                    xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> [Download] {
+        try await prepareDownloadsWithStats(
+            posts,
+            folder: folder,
+            seenMedia: &seenMedia,
+            usedFilenames: &usedFilenames,
+            author: author,
+            mediaOverrides: mediaOverrides,
+            mediaHeaders: mediaHeaders,
+            mediaMirrors: mediaMirrors,
+            mediaExtensions: mediaExtensions,
+            xFetishVideos: xFetishVideos
+        ).downloads
+    }
+
+    private func prepareDownloadsWithStats(_ posts: [Post], folder: URL,
+                                            seenMedia: inout Set<Media>,
+                                            usedFilenames: inout Set<String>,
+                                            author: String = "",
+                                            mediaOverrides: [String: [Media]] = [:],
+                                            mediaHeaders: [String: [String: String]] = [:],
+                                            mediaMirrors: [String: [URL]] = [:],
+                                            mediaExtensions: [String: String] = [:],
+                                            xFetishVideos: [String: XFetishVideos.Video] = [:]) async throws -> (downloads: [Download], skippedExisting: Int) {
+        let remote = activeRemoteIndex
         var galleryLists: [String: [Media]] = [:]
+        var skippedRemoteGalleryPostIDs = Set<String>()
         // Le listing JSON porte déjà gallery_data/media_metadata : la galerie
         // est résolue sans réseau (Post.galleryMedia) ; l'appel
         // /comments/<id>.json n'est fait que quand le listing ne le porte pas.
-        let candidates = posts.filter { mediaOverrides[$0.id] == nil && $0.galleryMedia == nil && MediaExtractor.extract($0.html).isEmpty && GalleryFeed.linked($0.html) }
+        let candidates = posts.filter { post in
+            guard mediaOverrides[post.id] == nil,
+                  post.galleryMedia == nil,
+                  MediaExtractor.extract(post.html).isEmpty,
+                  GalleryFeed.linked(post.html)
+            else { return false }
+            if let remote, remote.contains(.redditPost(id: post.id, title: post.title)) {
+                skippedRemoteGalleryPostIDs.insert(post.id)
+                return false
+            }
+            return true
+        }
         if !candidates.isEmpty {
             // Borné au même plafond que les transferts : une page de 100 posts
             // galerie lançait auparavant 100 requêtes simultanées vers
@@ -3722,7 +3827,7 @@ extension Notification.Name {
         }
         var downloads: [Download] = []
         var renamedExisting = false
-        var skippedExisting = 0
+        var skippedExisting = skippedRemoteGalleryPostIDs.count
         var skippedSeen = 0
         var skippedFilter = 0
         let filter = downloadFilter
@@ -3731,6 +3836,7 @@ extension Notification.Name {
             LogCenter.info(L("Galeries : \(candidates.count) à résoudre, \(resolved) médias trouvés.", "Galleries: \(candidates.count) to resolve, \(resolved) media found."))
         }
         for post in posts {
+            if skippedRemoteGalleryPostIDs.contains(post.id) { continue }
             var media = mediaOverrides[post.id] ?? MediaExtractor.extract(post.html)
             if media.isEmpty {
                 media = post.galleryMedia ?? galleryLists[post.id] ?? []
@@ -3777,8 +3883,14 @@ extension Notification.Name {
                 let destination = folder.appendingPathComponent(filename)
                 let digest = SHA256.hash(data: Data(item.key.utf8)).map { String(format: "%02x", $0) }.joined()
                 let legacyDestination = folder.appendingPathComponent(digest).appendingPathExtension(ext)
+                let singleRedditPostID = (media.count == 1 && mediaOverrides[post.id] == nil && xFetishVideos[post.id] == nil) ? post.id : nil
+                let isOnRemote = remote?.containsCandidateFile(
+                    fileName: filename,
+                    redditSinglePostID: singleRedditPostID,
+                    redditSinglePostTitle: post.title
+                ) == true
 
-                if fm.fileExists(atPath: destination.path) {
+                if fm.fileExists(atPath: destination.path) || isOnRemote {
                     skippedExisting += 1
                     if fm.fileExists(atPath: legacyDestination.path) {
                         try? fm.removeItem(at: legacyDestination)
@@ -3803,7 +3915,7 @@ extension Notification.Name {
             LogCenter.info(L("Déjà là : \(skippedExisting) fichiers, \(skippedSeen) médias déjà vus, \(skippedFilter) écartés par les filtres.", "Already here: \(skippedExisting) files, \(skippedSeen) media seen, \(skippedFilter) filtered out."))
         }
         if renamedExisting { reload() }
-        return downloads
+        return (downloads, skippedExisting)
     }
 
     /// Nature d'un média candidat, pour les filtres. Une vidéo Reddit ou

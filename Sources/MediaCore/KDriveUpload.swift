@@ -12,10 +12,17 @@ public enum KDriveUploadPolicy {
     public static let chunkSize: Int64 = 250 * 1000 * 1000
     /// Chunks envoyés en parallèle par fichier.
     public static let maxConcurrentChunks = 4
-    /// Fichiers uploadés en parallèle.
+    /// Fichiers uploadés en parallèle par défaut.
     public static let maxConcurrentUploads = 4
+    /// Choix proposés dans Réglages pour le nombre d'uploads simultanés.
+    public static let uploadConcurrencyOptions = [4, 6, 8, 10]
     /// Connexions HTTP simultanées par hôte (borne aussi le débit côté edge).
     public static let maxConnectionsPerHost = 8
+
+    /// Valide une valeur issue des réglages et retombe sur le défaut (`4`) si hors liste.
+    public static func clampedConcurrentUploads(_ value: Int) -> Int {
+        uploadConcurrencyOptions.contains(value) ? value : maxConcurrentUploads
+    }
     /// L'API accepte au plus 10 000 chunks par session et 1 Gio par requête chunk.
     public static let maxChunksPerSession: Int64 = 10_000
     public static let maxChunkRequestSize: Int64 = 1_000_000_000

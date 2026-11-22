@@ -22,7 +22,8 @@ public enum FeedTraversal {
         fetch: (String?) async throws -> [Post],
         process: ([Post]) async throws -> Void,
         persist: (FeedCheckpoint) -> Void,
-        trace: (String) -> Void = { _ in }
+        trace: (String) -> Void = { _ in },
+        shouldStopAfterPage: () -> Bool = { false }
     ) async throws -> Bool {
         var state = checkpoint
         var visited = Set(state.visited)
@@ -53,6 +54,13 @@ public enum FeedTraversal {
                     try await process(fresh)
                     try Task.checkCancellation()
                     commit(fresh)
+                }
+                if shouldStopAfterPage() {
+                    trace(L("Nouveautés terminées : médias distants déjà à jour atteints.", "New-post scan ended: caught up with remote media."))
+                    state.frontier = nil
+                    state.cursor = nil
+                    persist(state)
+                    return true
                 }
                 guard let last = posts.last?.id, validCursor(last),
                       pages.insert(posts.map(\.id)).inserted else {
@@ -100,6 +108,12 @@ public enum FeedTraversal {
                 try await process(fresh)
                 try Task.checkCancellation()
                 commit(fresh)
+            }
+            if shouldStopAfterPage() {
+                trace(L("Historique terminé : médias distants déjà à jour atteints.", "History complete: caught up with remote media."))
+                state.cursor = nil
+                persist(state)
+                return true
             }
             guard let last = posts.last?.id, validCursor(last), last != after else {
                 trace(L("Historique terminé : curseur invalide ou inchangé.", "History complete: invalid or unchanged cursor."))

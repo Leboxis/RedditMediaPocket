@@ -78,6 +78,7 @@ private struct DownloadSettings: View {
                 }
                 Section {
                     KDrivePacingToggle()
+                    KDriveConcurrentUploadsPicker()
                 } header: {
                     Text(L("Upload kDrive", "kDrive upload"))
                 }

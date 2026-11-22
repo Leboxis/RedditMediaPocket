@@ -138,4 +138,24 @@ final class FeedTraversalTests: XCTestCase {
         XCTAssertEqual(downloaded, ["t3_one"])
         XCTAssertTrue(events.contains { $0.contains("repeated") || $0.contains("répétée") })
     }
+
+    @MainActor func testShouldStopAfterPageHaltsHistoryScanAndClearsCursor() async throws {
+        var saved = FeedCheckpoint()
+        var requests: [String?] = []
+        var pagesProcessed = 0
+        let completed = try await FeedTraversal.run(checkpoint: saved, fetch: { after in
+            requests.append(after)
+            switch after {
+            case nil: return [self.post("t3_p1")]
+            case "t3_p1": return [self.post("t3_p2")]
+            case "t3_p2": return [self.post("t3_p3")]
+            default: return [self.post("t3_p4")]
+            }
+        }, process: { _ in
+            pagesProcessed += 1
+        }, persist: { saved = $0 }, shouldStopAfterPage: { pagesProcessed >= 2 })
+        XCTAssertTrue(completed)
+        XCTAssertEqual(requests, [nil, "t3_p1"])
+        XCTAssertNil(saved.cursor)
+    }
 }

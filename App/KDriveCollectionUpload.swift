@@ -300,7 +300,10 @@ final class KDriveUploadSession: NSObject, URLSessionTaskDelegate {
     /// fichiers en vol.
     static let session: URLSession = {
         let configuration = URLSessionConfiguration.default
-        configuration.httpMaximumConnectionsPerHost = KDriveUploadPolicy.maxConnectionsPerHost
+        configuration.httpMaximumConnectionsPerHost = max(
+            KDriveUploadPolicy.maxConnectionsPerHost,
+            KDriveUploadPolicy.uploadConcurrencyOptions.max() ?? KDriveUploadPolicy.maxConnectionsPerHost
+        )
         return URLSession(configuration: configuration, delegate: KDriveUploadSession.shared, delegateQueue: nil)
     }()
 
@@ -354,7 +357,7 @@ struct KDriveUploadLot {
 @MainActor
 final class KDriveContinuousUploadController: ObservableObject {
     static let shared = KDriveContinuousUploadController()
-    static let concurrentLimit = KDriveUploadPolicy.maxConcurrentUploads
+    static var concurrentLimit: Int { KDriveService.concurrentUploadLimit }
 
     @Published var isUploading = false
     @Published var completedCount = 0

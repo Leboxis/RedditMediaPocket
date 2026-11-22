@@ -748,8 +748,8 @@ struct KDriveCollectionsStatusView: View {
             }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            Text(L("Chaque collection déjà présente sur kDrive sera téléchargée, envoyée sur kDrive puis supprimée de l'app (médias et collection) avant de passer à la suivante.",
-                   "Each collection already on kDrive will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
+            Text(L("Pour chaque collection déjà présente sur kDrive, seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés de l'app (médias et collection) avant de passer à la suivante.",
+                   "For each collection already on kDrive, only missing media will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
         }
         .confirmationDialog(
             L("Tout envoyer sur kDrive et supprimer ?", "Upload all to kDrive and delete?"),
@@ -1294,9 +1294,38 @@ final class KDriveBatchController: ObservableObject {
             for collection in collections {
                 if Task.isCancelled { cancelled = true; break }
 
+                var remoteIndex: KDriveRemoteIndex?
+                var preFetchedRemoteCount: Int?
+                if let remoteFolder = self.matchingRemoteFolder(for: collection, in: existingSubdirectories) {
+                    self.progressLabel = L("Analyse kDrive : \(collection.displayName)",
+                                           "Scanning kDrive: \(collection.displayName)")
+                    do {
+                        let remoteNames = try await service.fetchFileNames(
+                            token: token,
+                            driveId: driveId,
+                            directoryId: String(remoteFolder.id)
+                        )
+                        remoteIndex = KDriveRemoteIndex(fileNames: remoteNames)
+                        preFetchedRemoteCount = remoteNames.count
+                        LogCenter.kdrive(L("kDrive (lot) : \(remoteNames.count) fichier(s) déjà présent(s) pour \(collection.displayName) — seuls les médias manquants seront téléchargés.",
+                                           "kDrive (batch): \(remoteNames.count) file(s) already present for \(collection.displayName) — downloading missing media only."))
+                    } catch is CancellationError {
+                        cancelled = true
+                        break
+                    } catch {
+                        LogCenter.err(L("kDrive (lot) : lecture impossible pour \(collection.displayName) : \(error.localizedDescription)",
+                                        "kDrive (batch): could not read \(collection.displayName): \(error.localizedDescription)"))
+                        totalFailed += 1
+                        self.completedCount += 1
+                        continue
+                    }
+                }
+
+                if Task.isCancelled { cancelled = true; break }
+
                 self.progressLabel = L("Téléchargement : \(collection.displayName)",
                                        "Downloading: \(collection.displayName)")
-                model.download(user: collection.id)
+                model.download(user: collection.id, skippingRemoteMedia: remoteIndex)
 
                 while model.running {
                     if Task.isCancelled {
@@ -1322,7 +1351,8 @@ final class KDriveBatchController: ObservableObject {
                     token: token,
                     driveId: driveId,
                     parentDirectoryId: parentDirectoryId,
-                    existingSubdirectories: &existingSubdirectories
+                    existingSubdirectories: &existingSubdirectories,
+                    preFetchedRemoteCount: preFetchedRemoteCount
                 )
                 totalUploaded += outcome.uploaded
                 totalDeleted += outcome.deleted
@@ -1447,13 +1477,26 @@ final class KDriveBatchController: ObservableObject {
         }
     }
 
+    private func matchingRemoteFolder(
+        for collection: UserCollection,
+        in subdirectories: [KDriveFolderItem]
+    ) -> KDriveFolderItem? {
+        for candidate in KDriveFreshness.candidateFolderNames(for: collection.id) {
+            if let match = subdirectories.first(where: { FilenamePolicy.kDriveNameMatch($0.name, candidate) }) {
+                return match
+            }
+        }
+        return nil
+    }
+
     private func uploadAndCleanCollection(
         _ collection: UserCollection,
         model: Downloader,
         token: String,
         driveId: String,
         parentDirectoryId: String,
-        existingSubdirectories: inout [KDriveFolderItem]
+        existingSubdirectories: inout [KDriveFolderItem],
+        preFetchedRemoteCount: Int? = nil
     ) async -> (uploaded: Int, deleted: Int, failed: Int, cancelled: Bool) {
         let service = KDriveService.shared
         let uploader = KDriveContinuousUploadController.shared
@@ -1466,15 +1509,19 @@ final class KDriveBatchController: ObservableObject {
             if model.collections.contains(where: { $0.id == collection.id }) {
                 model.deleteDownloads(for: collection.id)
             }
+            if let preFetchedRemoteCount {
+                KDriveFreshnessCenter.shared.markUploaded(
+                    collectionLabel: collection.id,
+                    remoteFileCount: preFetchedRemoteCount
+                )
+            }
             return (0, 0, 0, false)
         }
 
         do {
             let targetFolderName = FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
             let folder: KDriveFolderItem
-            if let match = existingSubdirectories.first(where: {
-                $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-            }) {
+            if let match = matchingRemoteFolder(for: collection, in: existingSubdirectories) {
                 folder = match
             } else {
                 let created = try await service.createDirectory(
@@ -1550,6 +1597,12 @@ final class KDriveBatchController: ObservableObject {
                 uploaded = uploader.successCount
                 failed = uploader.failedCount
                 confirmedOnDrive.append(contentsOf: uploader.uploadedFileURLs)
+                if failed == 0 {
+                    KDriveFreshnessCenter.shared.markUploaded(
+                        collectionLabel: collection.id,
+                        remoteFileCount: remoteNames.count + uploaded
+                    )
+                }
             } else if !duplicates.isEmpty {
                 KDriveFreshnessCenter.shared.markUploaded(
                     collectionLabel: collection.id,

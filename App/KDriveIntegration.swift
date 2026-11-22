@@ -265,7 +265,18 @@ final class KDriveRateLimitCenter: ObservableObject {
 @MainActor
 final class KDriveService: ObservableObject {
     static let shared = KDriveService()
-    static let concurrentUploadLimit = KDriveUploadPolicy.maxConcurrentUploads
+    static let concurrentUploadsDefaultsKey = "kDriveConcurrentUploads"
+
+    nonisolated static func currentConcurrentUploadLimit(defaults: UserDefaults = .standard) -> Int {
+        guard defaults.object(forKey: concurrentUploadsDefaultsKey) != nil else {
+            return KDriveUploadPolicy.maxConcurrentUploads
+        }
+        return KDriveUploadPolicy.clampedConcurrentUploads(defaults.integer(forKey: concurrentUploadsDefaultsKey))
+    }
+
+    static var concurrentUploadLimit: Int {
+        currentConcurrentUploadLimit()
+    }
 
     @Published var isUploading = false
     @Published var currentProgress = 0.0
@@ -829,6 +840,35 @@ struct KDrivePacingToggle: View {
     }
 }
 
+/// Sélecteur partagé entre Réglages et le détail Infomaniak kDrive pour
+/// choisir le nombre d'uploads simultanés (4, 6, 8 ou 10).
+struct KDriveConcurrentUploadsPicker: View {
+    @AppStorage(KDriveService.concurrentUploadsDefaultsKey) private var concurrentUploads = KDriveUploadPolicy.maxConcurrentUploads
+
+    var body: some View {
+        let clamped = KDriveUploadPolicy.clampedConcurrentUploads(concurrentUploads)
+        VStack(alignment: .leading, spacing: DS.space(2)) {
+            HStack {
+                Text(L("Uploads simultanés", "Concurrent uploads"))
+                Spacer()
+                Text("\(clamped)")
+                    .monospacedDigit()
+                    .foregroundStyle(DS.onSurfaceMuted)
+            }
+            Picker(L("Uploads simultanés", "Concurrent uploads"), selection: Binding(
+                get: { clamped },
+                set: { concurrentUploads = KDriveUploadPolicy.clampedConcurrentUploads($0) }
+            )) {
+                ForEach(KDriveUploadPolicy.uploadConcurrencyOptions, id: \.self) { count in
+                    Text("\(count)").tag(count)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityValue("\(clamped)")
+        }
+    }
+}
+
 /// Détail de la connexion kDrive, poussé depuis la ligne kDrive de la zone
 /// Connexions des Réglages (même habillage que les autres services).
 struct KDriveSettingsDetailView: View {
@@ -964,6 +1004,7 @@ struct KDriveSettingsDetailView: View {
 
             Section {
                 KDrivePacingToggle()
+                KDriveConcurrentUploadsPicker()
             } header: {
                 Text(L("Cadence d'upload", "Upload pacing"))
             } footer: {

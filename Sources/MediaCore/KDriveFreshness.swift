@@ -193,6 +193,23 @@ public struct KDriveRemoteIndex: Sendable, Equatable {
         }
     }
 
+    /// Vérifie si un média candidat à un téléchargement est déjà présent sur
+    /// kDrive (nom de fichier attendu, ou post Reddit mono-média correspondant).
+    public func containsCandidateFile(
+        fileName: String,
+        redditSinglePostID: String? = nil,
+        redditSinglePostTitle: String = ""
+    ) -> Bool {
+        if containsLocalFile(fileName) {
+            return true
+        }
+        if let postID = redditSinglePostID,
+           contains(.redditPost(id: postID, title: redditSinglePostTitle)) {
+            return true
+        }
+        return false
+    }
+
     /// Vérifie si un élément issu de la première page du site source est
     /// déjà présent dans ce dossier kDrive.
     public func contains(_ item: KDriveSourceItem) -> Bool {
