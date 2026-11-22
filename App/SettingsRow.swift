@@ -15,6 +15,7 @@ struct SettingsRow: View {
     }
 
     let symbol: String
+    var customIcon: AnyView? = nil
     let tint: Color
     let title: String
     let status: String
@@ -59,12 +60,18 @@ struct SettingsRow: View {
 
     @ViewBuilder private var rowLabel: some View {
         let info = HStack(spacing: DS.space(3)) {
-            Image(systemName: symbol)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(tint)
-                .frame(width: 30, height: 30)
-                .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                .accessibilityHidden(true)
+            Group {
+                if let customIcon {
+                    customIcon
+                } else {
+                    Image(systemName: symbol)
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+            .foregroundStyle(tint)
+            .frame(width: 30, height: 30)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
+            .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
                     .font(.subheadline.weight(.semibold))

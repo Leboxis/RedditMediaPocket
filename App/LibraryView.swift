@@ -39,6 +39,12 @@ struct LibraryView: View {
             && !kDriveId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var kDriveStatusDotColor: Color? {
+        if kDriveFreshness.redCount > 0 { return DS.calmRose }
+        if kDriveFreshness.orangeCount > 0 { return DS.calmAmber }
+        return nil
+    }
+
     private var visibleSelection: [URL] {
         orderedSelection()
     }
@@ -63,15 +69,13 @@ struct LibraryView: View {
             .background(DS.background)
             .navigationTitle(L("Bibliothèque", "Library"))
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button { savedPostsPresented = true } label: { Image(systemName: "bookmark.fill") }
                         .accessibilityLabel(L("Posts sauvegardés", "Saved posts"))
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
                     Button { followingPresented = true } label: { Image(systemName: "person.2") }
                         .accessibilityLabel(L("Comptes suivis", "Followed accounts"))
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         if selectingMedia { exitSelection() } else { selectingMedia = true }
                     } label: {
@@ -79,29 +83,24 @@ struct LibraryView: View {
                     }
                     .disabled(model.displayedFiles.isEmpty && !selectingMedia)
                     .accessibilityLabel(selectingMedia ? L("Quitter la sélection", "Exit selection") : L("Sélectionner des médias", "Select media"))
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
+
                     Button { export = ExportSelection(files: model.files) } label: {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .disabled(model.files.isEmpty)
                     .accessibilityLabel(L("Exporter les médias affichés", "Export displayed media"))
-                }
-                // Dernier item de la barre : rangé dans le menu « … » du
-                // système, l'envoi vers kDrive y apparaît comme une action à plat.
-                ToolbarItem(placement: .navigationBarTrailing) {
+
                     KDriveCollectionUploadAction(
                         files: model.files,
                         collectionLabel: model.activeCollection?.kDriveLabel ?? "Pocket"
                     )
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
+
                     Button {
                         kDriveStatusPresented = true
                     } label: {
-                        Label(L("État kDrive des collections", "kDrive collections status"),
-                              systemImage: "icloud.badge.magnifyingglass")
+                        KDriveStatusIcon(baseSize: 20, statusDotColor: kDriveStatusDotColor)
                     }
+                    .accessibilityLabel(L("État kDrive des collections", "kDrive collections status"))
                 }
             }
             .onChange(of: model.activeUser) { _ in exitSelection() }
@@ -250,7 +249,7 @@ struct LibraryView: View {
                     )
                 } label: {
                     Label(L("Vérifier kDrive vs source", "Check kDrive vs source"),
-                          systemImage: "icloud.badge.magnifyingglass")
+                          systemImage: "arrow.clockwise.icloud")
                 }
             }
             Button {

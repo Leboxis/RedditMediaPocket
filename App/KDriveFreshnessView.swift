@@ -981,3 +981,65 @@ struct KDriveCollectionsStatusView: View {
         }
     }
 }
+
+/// Logo vectoriel dédié à l'état kDrive des collections (nuage + coche de
+/// vérification), dessiné en géométrie native pour rester net à toute taille
+/// Dynamic Type et cohérent avec le style de l'app.
+struct KDriveStatusIcon: View {
+    var baseSize: CGFloat = 20
+    var statusDotColor: Color? = nil
+    @ScaledMetric(relativeTo: .body) private var scale: CGFloat = 1
+
+    private var renderedSize: CGFloat {
+        min(baseSize * scale, baseSize * 1.35)
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            KDriveCloudCheckShape()
+                .stroke(
+                    style: StrokeStyle(
+                        lineWidth: max(1.5, renderedSize * 0.095),
+                        lineCap: .round,
+                        lineJoin: .round
+                    )
+                )
+                .frame(width: renderedSize, height: renderedSize)
+
+            if let statusDotColor {
+                Circle()
+                    .fill(statusDotColor)
+                    .frame(width: 7, height: 7)
+                    .overlay(Circle().strokeBorder(DS.surfaceElevated, lineWidth: 1.2))
+                    .offset(x: 2, y: -1)
+            }
+        }
+    }
+}
+
+private struct KDriveCloudCheckShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let sx = rect.width / 24.0
+        let sy = rect.height / 24.0
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: rect.minX + x * sx, y: rect.minY + y * sy)
+        }
+
+        var path = Path()
+        // Contour nuage équilibré (viewBox 24×24)
+        path.move(to: pt(6.5, 18.0))
+        path.addCurve(to: pt(3.0, 14.5), control1: pt(4.5, 18.0), control2: pt(3.0, 16.5))
+        path.addCurve(to: pt(6.2, 11.1), control1: pt(3.0, 12.7), control2: pt(4.4, 11.3))
+        path.addCurve(to: pt(12.2, 6.0), control1: pt(6.8, 8.1), control2: pt(9.2, 6.0))
+        path.addCurve(to: pt(17.8, 10.6), control1: pt(15.2, 6.0), control2: pt(17.6, 8.0))
+        path.addCurve(to: pt(21.0, 14.3), control1: pt(19.7, 10.9), control2: pt(21.0, 12.4))
+        path.addCurve(to: pt(17.4, 18.0), control1: pt(21.0, 16.4), control2: pt(19.4, 18.0))
+        path.closeSubpath()
+
+        // Coche de vérification centrée dans le nuage
+        path.move(to: pt(9.0, 13.4))
+        path.addLine(to: pt(11.2, 15.5))
+        path.addLine(to: pt(15.4, 11.1))
+        return path
+    }
+}

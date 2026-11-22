@@ -124,7 +124,7 @@ struct FollowingView: View {
                                         .font(.caption.monospacedDigit())
                                 }
                             } else {
-                                Image(systemName: "icloud.badge.magnifyingglass")
+                                KDriveStatusIcon(baseSize: 20)
                             }
                         }
                         .accessibilityLabel(kDriveFreshness.isCheckingAll
@@ -280,7 +280,7 @@ struct FollowingView: View {
                                     verifierCompte(name, plateforme: .reddit)
                                 } label: {
                                     Label(L("Vérifier kDrive", "Check kDrive"),
-                                          systemImage: "icloud.badge.magnifyingglass")
+                                          systemImage: "arrow.clockwise.icloud")
                                 }
                                 .tint(DS.accentEmphasis)
                             }
@@ -397,7 +397,7 @@ struct FollowingView: View {
                                     verifierCompte(name, plateforme: plateforme)
                                 } label: {
                                     Label(L("Vérifier kDrive", "Check kDrive"),
-                                          systemImage: "icloud.badge.magnifyingglass")
+                                          systemImage: "arrow.clockwise.icloud")
                                 }
                                 .tint(DS.accentEmphasis)
                             }

@@ -55,8 +55,6 @@ private struct DownloadSettings: View {
                         Text("English").tag("en")
                     }
                     .disabled(model.running)
-                } footer: {
-                    Text(L("Détectée automatiquement au premier lancement. Modifiable ici.", "Detected automatically on first launch. You can change it here."))
                 }
                 Section {
                     Stepper(value: $model.concurrentLimit, in: 1...ConcurrentDownloads.maximumLimit) {
@@ -66,8 +64,6 @@ private struct DownloadSettings: View {
                             Text("\(model.concurrentLimit)").monospacedDigit().foregroundStyle(DS.onSurfaceMuted)
                         }
                     }
-                } footer: {
-                    Text(model.running ? L("Appliqué au prochain lancement. En cours : \(model.sessionLimit).", "Applies to the next run. Current: \(model.sessionLimit).") : L("1 à 16. Par défaut : 10, ou 6 pour X-Fetish. Un nombre élevé peut augmenter les limitations du serveur.", "1 to 16. Defaults: 10, or 6 for X-Fetish. Higher values may increase server rate limiting."))
                 }
                 Section {
                     Picker(L("Morceaux par vidéo", "Parts per video"), selection: $model.xFetishSegments) {
@@ -79,11 +75,6 @@ private struct DownloadSettings: View {
                     .accessibilityValue("\(model.xFetishSegments)")
                 } header: {
                     Text("X-Fetish")
-                } footer: {
-                    Text(L("Vidéos uniquement. 24 morceaux et 6 téléchargements simultanés par défaut. Repli automatique en connexion unique si nécessaire. Plus de morceaux peut augmenter les refus 403/429.", "Videos only. 24 parts and 6 concurrent downloads by default. Falls back to a single connection when needed. More parts may increase 403/429 refusals."))
-                    if model.running {
-                        Text(L("Appliqué au prochain lancement. En cours : \(model.sessionSegments).", "Applies to the next run. Current: \(model.sessionSegments)."))
-                    }
                 }
                 Section {
                     SettingsRow(
@@ -160,10 +151,6 @@ private struct DownloadSettings: View {
                     .disabled(model.running)
                 } header: {
                     Text(L("Stockage", "Storage"))
-                } footer: {
-                    Text(model.running
-                         ? L("Appliqué au prochain lancement.", "Applies to the next run.")
-                         : L("Le parcours s'arrête proprement quand le plafond est atteint ; les médias déjà téléchargés restent en place. Le plafond porte sur la collection en cours.", "The scan stops cleanly once the limit is reached; media already downloaded stay in place. The limit applies to the current collection."))
                 }
                 Section {
                     Button(L("Supprimer tous les téléchargements", "Delete all downloads"), role: .destructive) { confirmDeleteAll = true }
@@ -200,8 +187,6 @@ private struct DownloadSettings: View {
                     Button(L("Clé API", "API key")) { clePresentee = true }
                 } header: {
                     Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
-                } footer: {
-                    Text(L("La liste des comptes suivis (Reddit, X et TikTok) ainsi que leur statut (coche « déjà téléchargé », date du dernier téléchargement complet et du dernier upload) sont synchronisés. Ils restent affichés même sans connexion et reviennent après une réinstallation. Les cookies de session sont synchronisés dans la section ci-dessous. Aucun média ne quitte l'iPhone.", "The list of followed accounts (Reddit, X and TikTok) and their status (“already downloaded” checkmark, last full download date and last upload date) are synced. They remain visible even when signed out and come back after a reinstall. Session cookies are synced in the section below. No media leaves the iPhone."))
                 }
                 Section {
                     HStack {
@@ -232,8 +217,6 @@ private struct DownloadSettings: View {
                     }
                 } header: {
                     Text(L("Sessions (Cloudflare)", "Sessions (Cloudflare)"))
-                } footer: {
-                    Text(L("Les cookies Reddit, X, TikTok et Instagram sont envoyés après chaque connexion puis réinjectés dans l'iPhone dès que la clé API est renseignée : une installation neuve retrouve donc ses connexions. Serveur personnel, protégé par la même clé. Aucun média n'est synchronisé.", "Reddit, X, TikTok and Instagram cookies are uploaded after each sign-in and injected back into the iPhone as soon as the API key is entered: a fresh install therefore recovers its sign-ins. Personal server, protected by the same key. No media is synced."))
                 }
             }
             .sheet(isPresented: $clePresentee) {
