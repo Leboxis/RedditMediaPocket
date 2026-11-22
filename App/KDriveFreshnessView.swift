@@ -580,6 +580,7 @@ struct KDriveCollectionsStatusView: View {
     @AppStorage("kDriveDirectoryId") private var directoryId = "1"
     @AppStorage("kDriveDirectoryName") private var directoryName = ""
     @State private var filter: KDriveFreshnessFilter = .all
+    @State private var confirmDownloadSync = false
     @State private var confirmUploadAndDelete = false
 
     private var kDriveConfigured: Bool {
@@ -732,6 +733,25 @@ struct KDriveCollectionsStatusView: View {
         }
         .tint(DS.accentEmphasis)
         .confirmationDialog(
+            L("Télécharger, envoyer sur kDrive et nettoyer ?", "Download, upload to kDrive and clean up?"),
+            isPresented: $confirmDownloadSync,
+            titleVisibility: .visible
+        ) {
+            Button(L("Lancer", "Start"), role: .destructive) {
+                batch.startDownloadUploadAndDelete(
+                    collections: downloadableCollections,
+                    model: model,
+                    token: token,
+                    driveId: driveId,
+                    parentDirectoryId: directoryId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "1" : directoryId
+                )
+            }
+            Button(L("Annuler", "Cancel"), role: .cancel) { }
+        } message: {
+            Text(L("Chaque collection déjà présente sur kDrive sera téléchargée, envoyée sur kDrive puis supprimée de l'app (médias et collection) avant de passer à la suivante.",
+                   "Each collection already on kDrive will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
+        }
+        .confirmationDialog(
             L("Tout envoyer sur kDrive et supprimer ?", "Upload all to kDrive and delete?"),
             isPresented: $confirmUploadAndDelete,
             titleVisibility: .visible
@@ -747,8 +767,8 @@ struct KDriveCollectionsStatusView: View {
             }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            Text(L("Toutes les collections locales seront envoyées vers leur dossier kDrive, puis les fichiers envoyés avec succès (et doublons déjà présents) seront supprimés automatiquement du téléphone.",
-                   "All local collections will be uploaded to their kDrive folder, then successfully uploaded files (and duplicates already on Drive) will be automatically deleted from the device."))
+            Text(L("Toutes les collections locales seront envoyées vers leur dossier kDrive, puis les médias et collections envoyés avec succès seront supprimés automatiquement de l'app.",
+                   "All local collections will be uploaded to their kDrive folder, then successfully uploaded media and collections will be automatically removed from the app."))
         }
     }
 
@@ -901,7 +921,7 @@ struct KDriveCollectionsStatusView: View {
     private var batchActionBar: some View {
         let downloadRunning = batch.mode == .downloadAll && batch.isRunning
         let uploadRunning = batch.mode == .uploadAndDelete && batch.isRunning
-        let canStartDownload = !downloadableCollections.isEmpty && !model.running && !batch.isRunning
+        let canStartDownload = !downloadableCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
         let canStartUpload = !localCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
 
         return HStack(spacing: DS.space(2)) {
@@ -909,7 +929,7 @@ struct KDriveCollectionsStatusView: View {
                 if downloadRunning {
                     batch.stop(model: model)
                 } else {
-                    batch.startDownloadAll(collections: downloadableCollections, model: model)
+                    confirmDownloadSync = true
                 }
             } label: {
                 HStack(spacing: DS.space(1)) {
@@ -1183,10 +1203,12 @@ private struct KDriveCloudCheckShape: Shape {
 }
 
 /// Orchestrateur d'actions groupées réservé à la feuille « État kDrive » :
-/// - « Tout télécharger » : enchaîne les collections une à une via `Downloader`.
-/// - « Uploader & supprimer » : envoie chaque collection locale dans son dossier
-///   kDrive, déduplique, puis supprime automatiquement les fichiers confirmés
-///   sur le Drive (jamais les échecs).
+/// - « Tout télécharger » : pour chaque collection déjà sur kDrive, enchaîne
+///   téléchargement → envoi kDrive → suppression des médias et de la collection
+///   dans l'app, puis passe à la suivante.
+/// - « Uploader & supprimer » : pour chaque collection locale, envoie vers
+///   kDrive, déduplique, puis supprime les médias et la collection (les échecs
+///   éventuels sont conservés).
 @MainActor
 final class KDriveBatchController: ObservableObject {
     enum Mode {
@@ -1212,9 +1234,10 @@ final class KDriveBatchController: ObservableObject {
     func stop(model: Downloader) {
         batchTask?.cancel()
         batchTask = nil
-        if mode == .downloadAll, model.running {
+        if model.running {
             model.stop()
-        } else if mode == .uploadAndDelete, KDriveContinuousUploadController.shared.isUploading {
+        }
+        if KDriveContinuousUploadController.shared.isUploading {
             KDriveContinuousUploadController.shared.cancel()
         }
         isRunning = false
@@ -1224,23 +1247,53 @@ final class KDriveBatchController: ObservableObject {
         lastHadError = false
     }
 
-    func startDownloadAll(collections: [UserCollection], model: Downloader) {
+    func startDownloadUploadAndDelete(
+        collections: [UserCollection],
+        model: Downloader,
+        token: String,
+        driveId: String,
+        parentDirectoryId: String
+    ) {
         guard !isRunning, !collections.isEmpty else { return }
         mode = .downloadAll
         isRunning = true
         completedCount = 0
         totalCount = collections.count
-        progressLabel = L("Préparation du téléchargement…", "Preparing download…")
+        progressLabel = L("Préparation…", "Preparing…")
         lastSummary = nil
         lastHadError = false
 
         batchTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            var downloadedCollections = 0
+            let service = KDriveService.shared
+            var existingSubdirectories: [KDriveFolderItem] = []
+
+            do {
+                existingSubdirectories = try await service.fetchSubdirectories(
+                    token: token,
+                    driveId: driveId,
+                    directoryId: parentDirectoryId
+                )
+            } catch {
+                self.isRunning = false
+                self.mode = .idle
+                self.batchTask = nil
+                self.progressLabel = ""
+                self.lastSummary = L("Impossible de lire kDrive : \(error.localizedDescription)",
+                                     "Could not read kDrive: \(error.localizedDescription)")
+                self.lastHadError = true
+                return
+            }
+
+            var totalUploaded = 0
+            var totalDeleted = 0
+            var totalFailed = 0
             var stoppedForStorage = false
+            var cancelled = false
 
             for collection in collections {
-                if Task.isCancelled { break }
+                if Task.isCancelled { cancelled = true; break }
+
                 self.progressLabel = L("Téléchargement : \(collection.displayName)",
                                        "Downloading: \(collection.displayName)")
                 model.download(user: collection.id)
@@ -1251,38 +1304,58 @@ final class KDriveBatchController: ObservableObject {
                         while model.running {
                             try? await Task.sleep(for: .milliseconds(200))
                         }
+                        cancelled = true
                         break
                     }
                     try? await Task.sleep(for: .milliseconds(300))
                 }
 
-                if Task.isCancelled { break }
-                downloadedCollections += 1
-                self.completedCount = downloadedCollections
+                if cancelled || Task.isCancelled { cancelled = true; break }
 
                 if model.storageLimitReached {
                     stoppedForStorage = true
+                }
+
+                let outcome = await self.uploadAndCleanCollection(
+                    collection,
+                    model: model,
+                    token: token,
+                    driveId: driveId,
+                    parentDirectoryId: parentDirectoryId,
+                    existingSubdirectories: &existingSubdirectories
+                )
+                totalUploaded += outcome.uploaded
+                totalDeleted += outcome.deleted
+                totalFailed += outcome.failed
+                if outcome.cancelled {
+                    cancelled = true
                     break
                 }
+
+                self.completedCount += 1
+                if stoppedForStorage { break }
             }
 
-            let cancelled = Task.isCancelled
             self.isRunning = false
             self.mode = .idle
             self.batchTask = nil
             self.progressLabel = ""
 
-            if cancelled {
-                self.lastSummary = L("Téléchargement groupé arrêté (\(downloadedCollections)/\(collections.count)).",
-                                     "Batch download stopped (\(downloadedCollections)/\(collections.count)).")
+            if cancelled || Task.isCancelled {
+                self.lastSummary = L("Synchronisation arrêtée (\(self.completedCount)/\(collections.count) · \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s)).",
+                                     "Sync stopped (\(self.completedCount)/\(collections.count) · \(totalUploaded) uploaded, \(totalDeleted) deleted).")
                 self.lastHadError = false
             } else if stoppedForStorage {
-                self.lastSummary = L("Plafond d'espace disque atteint après \(downloadedCollections)/\(collections.count) collection(s).",
-                                     "Disk space limit reached after \(downloadedCollections)/\(collections.count) collection(s).")
+                self.lastSummary = L("Plafond disque atteint (\(self.completedCount)/\(collections.count) · \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s)).",
+                                     "Disk limit reached (\(self.completedCount)/\(collections.count) · \(totalUploaded) uploaded, \(totalDeleted) deleted).")
+                self.lastHadError = true
+            } else if totalFailed > 0 {
+                self.lastSummary = L("\(self.completedCount) collection(s) · \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s) · \(totalFailed) échec(s) conservé(s).",
+                                     "\(self.completedCount) collection(s) · \(totalUploaded) uploaded, \(totalDeleted) deleted · \(totalFailed) failure(s) kept.")
                 self.lastHadError = true
             } else {
-                self.lastSummary = L("\(downloadedCollections) collection(s) traitée(s).",
-                                     "\(downloadedCollections) collection(s) processed.")
+                self.lastSummary = L("Terminé : \(self.completedCount) collection(s) · \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s).",
+                                     "Done: \(self.completedCount) collection(s) · \(totalUploaded) uploaded, \(totalDeleted) deleted.")
                 self.lastHadError = false
             }
         }
@@ -1307,11 +1380,6 @@ final class KDriveBatchController: ObservableObject {
         batchTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let service = KDriveService.shared
-            let uploader = KDriveContinuousUploadController.shared
-
-            var totalUploaded = 0
-            var totalDeleted = 0
-            var totalFailed = 0
             var existingSubdirectories: [KDriveFolderItem] = []
 
             do {
@@ -1331,142 +1399,39 @@ final class KDriveBatchController: ObservableObject {
                 return
             }
 
+            var totalUploaded = 0
+            var totalDeleted = 0
+            var totalFailed = 0
+            var cancelled = false
+
             for collection in collections {
-                if Task.isCancelled { break }
-                self.progressLabel = L("Préparation : \(collection.displayName)",
-                                       "Preparing: \(collection.displayName)")
+                if Task.isCancelled { cancelled = true; break }
 
-                let localURLs = await model.localFileURLs(forFolderName: collection.folderName)
-                if localURLs.isEmpty {
-                    self.completedCount += 1
-                    continue
-                }
-
-                do {
-                    let targetFolderName = FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
-                    let folder: KDriveFolderItem
-                    if let match = existingSubdirectories.first(where: {
-                        $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-                    }) {
-                        folder = match
-                    } else {
-                        let created = try await service.createDirectory(
-                            token: token,
-                            driveId: driveId,
-                            parentDirectoryId: parentDirectoryId,
-                            folderName: targetFolderName
-                        )
-                        existingSubdirectories.append(created)
-                        folder = created
-                    }
-
-                    if Task.isCancelled { break }
-                    let remoteNames = try await service.fetchFileNames(
-                        token: token,
-                        driveId: driveId,
-                        directoryId: String(folder.id)
-                    )
-                    if Task.isCancelled { break }
-
-                    let (toUpload, duplicates) = await Task.detached(priority: .utility) {
-                        let normalizedRemote = Set(remoteNames.map { FilenamePolicy.kDriveNormalizedName($0) })
-                        var pending: [URL] = []
-                        var dupes: [URL] = []
-                        for url in localURLs {
-                            if Task.isCancelled { break }
-                            let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: url.lastPathComponent)
-                            let alreadyThere = candidates.contains {
-                                normalizedRemote.contains(FilenamePolicy.kDriveNormalizedName($0))
-                            }
-                            if alreadyThere {
-                                dupes.append(url)
-                            } else {
-                                pending.append(url)
-                            }
-                        }
-                        return (pending, dupes)
-                    }.value
-
-                    if Task.isCancelled { break }
-
-                    var confirmedOnDrive = duplicates
-                    if !toUpload.isEmpty {
-                        self.progressLabel = L("Envoi : \(collection.displayName) (\(toUpload.count))",
-                                               "Uploading: \(collection.displayName) (\(toUpload.count))")
-                        let lot = KDriveUploadLot(
-                            files: toUpload,
-                            directoryId: String(folder.id),
-                            directoryName: folder.name,
-                            collectionLabel: collection.kDriveLabel,
-                            skippedCount: duplicates.count,
-                            alreadyOnDriveURLs: duplicates
-                        )
-                        uploader.start(lot: lot, token: token, driveId: driveId)
-
-                        while uploader.isUploading || !uploader.finished {
-                            if Task.isCancelled {
-                                uploader.cancel()
-                                while uploader.isUploading {
-                                    try? await Task.sleep(for: .milliseconds(200))
-                                }
-                                break
-                            }
-                            try? await Task.sleep(for: .milliseconds(250))
-                        }
-
-                        if Task.isCancelled || uploader.wasCancelled { break }
-                        totalUploaded += uploader.successCount
-                        totalFailed += uploader.failedCount
-                        confirmedOnDrive.append(contentsOf: uploader.uploadedFileURLs)
-                    } else if !duplicates.isEmpty {
-                        KDriveFreshnessCenter.shared.markUploaded(
-                            collectionLabel: collection.id,
-                            remoteFileCount: remoteNames.count
-                        )
-                    }
-
-                    if !confirmedOnDrive.isEmpty {
-                        self.progressLabel = L("Nettoyage : \(collection.displayName)",
-                                               "Cleaning up: \(collection.displayName)")
-                        let urlsToDelete = confirmedOnDrive
-                        let deleted = await Task.detached(priority: .userInitiated) {
-                            let fm = FileManager.default
-                            var count = 0
-                            for url in urlsToDelete where fm.fileExists(atPath: url.path) {
-                                do {
-                                    try fm.removeItem(at: url)
-                                    MediaMetadata.remove(for: url)
-                                    count += 1
-                                } catch {
-                                    LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)",
-                                                    "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
-                                }
-                            }
-                            return count
-                        }.value
-                        totalDeleted += deleted
-                        if deleted > 0 {
-                            NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
-                        }
-                    }
-                } catch is CancellationError {
+                let outcome = await self.uploadAndCleanCollection(
+                    collection,
+                    model: model,
+                    token: token,
+                    driveId: driveId,
+                    parentDirectoryId: parentDirectoryId,
+                    existingSubdirectories: &existingSubdirectories
+                )
+                totalUploaded += outcome.uploaded
+                totalDeleted += outcome.deleted
+                totalFailed += outcome.failed
+                if outcome.cancelled {
+                    cancelled = true
                     break
-                } catch {
-                    totalFailed += 1
-                    LogCenter.err(L("kDrive (lot) : erreur sur \(collection.displayName) : \(error.localizedDescription)",
-                                    "kDrive (batch): error on \(collection.displayName): \(error.localizedDescription)"))
                 }
 
                 self.completedCount += 1
             }
 
-            let cancelled = Task.isCancelled
             self.isRunning = false
             self.mode = .idle
             self.batchTask = nil
             self.progressLabel = ""
 
-            if cancelled {
+            if cancelled || Task.isCancelled {
                 self.lastSummary = L("Envoi groupé arrêté (\(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s)).",
                                      "Batch upload stopped (\(totalUploaded) uploaded, \(totalDeleted) deleted).")
                 self.lastHadError = false
@@ -1475,10 +1440,173 @@ final class KDriveBatchController: ObservableObject {
                                      "\(totalUploaded) uploaded, \(totalDeleted) deleted · \(totalFailed) failure(s) kept.")
                 self.lastHadError = true
             } else {
-                self.lastSummary = L("Terminé : \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s) du téléphone.",
-                                     "Done: \(totalUploaded) uploaded, \(totalDeleted) deleted from device.")
+                self.lastSummary = L("Terminé : \(totalUploaded) envoyé(s), \(totalDeleted) supprimé(s) de l'app.",
+                                     "Done: \(totalUploaded) uploaded, \(totalDeleted) deleted from app.")
                 self.lastHadError = false
             }
+        }
+    }
+
+    private func uploadAndCleanCollection(
+        _ collection: UserCollection,
+        model: Downloader,
+        token: String,
+        driveId: String,
+        parentDirectoryId: String,
+        existingSubdirectories: inout [KDriveFolderItem]
+    ) async -> (uploaded: Int, deleted: Int, failed: Int, cancelled: Bool) {
+        let service = KDriveService.shared
+        let uploader = KDriveContinuousUploadController.shared
+
+        self.progressLabel = L("Préparation : \(collection.displayName)",
+                               "Preparing: \(collection.displayName)")
+
+        let localURLs = await model.localFileURLs(forFolderName: collection.folderName)
+        if localURLs.isEmpty {
+            if model.collections.contains(where: { $0.id == collection.id }) {
+                model.deleteDownloads(for: collection.id)
+            }
+            return (0, 0, 0, false)
+        }
+
+        do {
+            let targetFolderName = FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
+            let folder: KDriveFolderItem
+            if let match = existingSubdirectories.first(where: {
+                $0.name.compare(targetFolderName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }) {
+                folder = match
+            } else {
+                let created = try await service.createDirectory(
+                    token: token,
+                    driveId: driveId,
+                    parentDirectoryId: parentDirectoryId,
+                    folderName: targetFolderName
+                )
+                existingSubdirectories.append(created)
+                folder = created
+            }
+
+            if Task.isCancelled { return (0, 0, 0, true) }
+            let remoteNames = try await service.fetchFileNames(
+                token: token,
+                driveId: driveId,
+                directoryId: String(folder.id)
+            )
+            if Task.isCancelled { return (0, 0, 0, true) }
+
+            let (toUpload, duplicates) = await Task.detached(priority: .utility) {
+                let normalizedRemote = Set(remoteNames.map { FilenamePolicy.kDriveNormalizedName($0) })
+                var pending: [URL] = []
+                var dupes: [URL] = []
+                for url in localURLs {
+                    if Task.isCancelled { break }
+                    let candidates = FilenamePolicy.kDriveRemoteCandidateNames(for: url.lastPathComponent)
+                    let alreadyThere = candidates.contains {
+                        normalizedRemote.contains(FilenamePolicy.kDriveNormalizedName($0))
+                    }
+                    if alreadyThere {
+                        dupes.append(url)
+                    } else {
+                        pending.append(url)
+                    }
+                }
+                return (pending, dupes)
+            }.value
+
+            if Task.isCancelled { return (0, 0, 0, true) }
+
+            var uploaded = 0
+            var failed = 0
+            var confirmedOnDrive = duplicates
+
+            if !toUpload.isEmpty {
+                self.progressLabel = L("Envoi : \(collection.displayName) (\(toUpload.count))",
+                                       "Uploading: \(collection.displayName) (\(toUpload.count))")
+                let lot = KDriveUploadLot(
+                    files: toUpload,
+                    directoryId: String(folder.id),
+                    directoryName: folder.name,
+                    collectionLabel: collection.kDriveLabel,
+                    skippedCount: duplicates.count,
+                    alreadyOnDriveURLs: duplicates
+                )
+                uploader.start(lot: lot, token: token, driveId: driveId)
+
+                while uploader.isUploading || !uploader.finished {
+                    if Task.isCancelled {
+                        uploader.cancel()
+                        while uploader.isUploading {
+                            try? await Task.sleep(for: .milliseconds(200))
+                        }
+                        return (uploaded, 0, failed, true)
+                    }
+                    try? await Task.sleep(for: .milliseconds(250))
+                }
+
+                if Task.isCancelled || uploader.wasCancelled {
+                    return (uploader.successCount, 0, uploader.failedCount, true)
+                }
+                uploaded = uploader.successCount
+                failed = uploader.failedCount
+                confirmedOnDrive.append(contentsOf: uploader.uploadedFileURLs)
+            } else if !duplicates.isEmpty {
+                KDriveFreshnessCenter.shared.markUploaded(
+                    collectionLabel: collection.id,
+                    remoteFileCount: remoteNames.count
+                )
+            }
+
+            if failed == 0 {
+                self.progressLabel = L("Suppression : \(collection.displayName)",
+                                       "Deleting: \(collection.displayName)")
+                if model.collections.contains(where: { $0.id == collection.id }) {
+                    model.deleteDownloads(for: collection.id)
+                } else {
+                    let urlsToDelete = confirmedOnDrive
+                    await Task.detached(priority: .userInitiated) {
+                        let fm = FileManager.default
+                        for url in urlsToDelete where fm.fileExists(atPath: url.path) {
+                            try? fm.removeItem(at: url)
+                            MediaMetadata.remove(for: url)
+                        }
+                    }.value
+                }
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+                return (uploaded, localURLs.count, 0, false)
+            }
+
+            var deleted = 0
+            if !confirmedOnDrive.isEmpty {
+                self.progressLabel = L("Nettoyage partiel : \(collection.displayName)",
+                                       "Partial cleanup: \(collection.displayName)")
+                let urlsToDelete = confirmedOnDrive
+                deleted = await Task.detached(priority: .userInitiated) {
+                    let fm = FileManager.default
+                    var count = 0
+                    for url in urlsToDelete where fm.fileExists(atPath: url.path) {
+                        do {
+                            try fm.removeItem(at: url)
+                            MediaMetadata.remove(for: url)
+                            count += 1
+                        } catch {
+                            LogCenter.err(L("kDrive : suppression impossible de \(url.lastPathComponent) : \(error.localizedDescription)",
+                                            "kDrive: could not delete \(url.lastPathComponent): \(error.localizedDescription)"))
+                        }
+                    }
+                    return count
+                }.value
+                if deleted > 0 {
+                    NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+                }
+            }
+            return (uploaded, deleted, failed, false)
+        } catch is CancellationError {
+            return (0, 0, 0, true)
+        } catch {
+            LogCenter.err(L("kDrive (lot) : erreur sur \(collection.displayName) : \(error.localizedDescription)",
+                            "kDrive (batch): error on \(collection.displayName): \(error.localizedDescription)"))
+            return (0, 0, 1, false)
         }
     }
 }
