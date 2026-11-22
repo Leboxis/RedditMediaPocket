@@ -30,7 +30,7 @@ final class CookieSyncTests: XCTestCase {
             .path: "/",
             .expires: expiration,
             .secure: true,
-            .httpOnly: true,
+            HTTPCookiePropertyKey("HttpOnly"): "TRUE",
             .version: 0,
         ])!
         let record = try XCTUnwrap(CookieRecord(cookie: original))

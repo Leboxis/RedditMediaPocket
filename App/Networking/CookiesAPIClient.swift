@@ -70,8 +70,10 @@ public struct CookieRecord: Codable, Sendable, Equatable {
             .path: path.isEmpty ? "/" : path,
             .version: version,
             .secure: secure,
-            .httpOnly: httpOnly,
         ]
+        // Foundation ne publie pas de constante pour HttpOnly : la clé brute
+        // est reconnue par HTTPCookie et par le magasin WebKit.
+        if httpOnly { properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE" }
         if let expires { properties[.expires] = expires }
         if let comment { properties[.comment] = comment }
         if let commentURL, let url = URL(string: commentURL) { properties[.commentURL] = url }
