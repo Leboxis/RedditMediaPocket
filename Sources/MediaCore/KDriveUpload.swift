@@ -145,6 +145,12 @@ public struct SlidingWindowPacer {
         timestamps.filter { $0 >= now.addingTimeInterval(-window) }.count
     }
 
+    /// Enregistre une requête dans la fenêtre sans appliquer de délai ni de plafond.
+    public mutating func record(now: Date = Date()) {
+        timestamps.removeAll { $0 < now.addingTimeInterval(-window) }
+        timestamps.append(now)
+    }
+
     /// Attente (en s) avant le prochain créneau, sans consommer de créneau :
     /// sert à afficher en continu l'état de la cadence pendant un envoi.
     public func nextSlotWait(now: Date = Date()) -> TimeInterval {

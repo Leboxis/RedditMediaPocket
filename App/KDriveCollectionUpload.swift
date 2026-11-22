@@ -1226,7 +1226,7 @@ private struct KDriveContinuousUploadSheet: View {
         if lot.skippedCount > 0 {
             stats.append((L("Déjà sur le Drive", "Already on Drive"), "\(lot.skippedCount)"))
         }
-        stats.append((L("API", "API"), "\(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) req/min"))
+        stats.append((L("API", "API"), rateLimit.apiRateLabel))
         if paceInfoSecondsRemaining > 0 {
             let eta = paceInfoSecondsRemaining >= 60 ? "\(paceInfoSecondsRemaining / 60) min" : "\(paceInfoSecondsRemaining) s"
             stats.append((L("Reste estimé", "Est. remaining"), "≈ \(eta)"))
@@ -1265,6 +1265,7 @@ private struct KDriveContinuousUploadSheet: View {
 
     /// Durée restante estimée au plafond API (0 masque la ligne aux petits lots).
     private var paceInfoSecondsRemaining: Int {
+        guard KDriveRateLimitCenter.isPacingEnabled() else { return 0 }
         let remaining = uploader.totalCount - uploader.completedCount
         guard remaining > 3 else { return 0 }
         return Int(Double(remaining) * 60 / Double(KDriveRateLimitCenter.pacingLimitPerMinute))

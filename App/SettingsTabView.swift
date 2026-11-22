@@ -77,6 +77,11 @@ private struct DownloadSettings: View {
                     Text("X-Fetish")
                 }
                 Section {
+                    KDrivePacingToggle()
+                } header: {
+                    Text(L("Upload kDrive", "kDrive upload"))
+                }
+                Section {
                     SettingsRow(
                         symbol: "person.crop.circle",
                         tint: reddit.hasSession ? DS.success : DS.warning,

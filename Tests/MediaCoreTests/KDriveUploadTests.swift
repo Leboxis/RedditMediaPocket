@@ -186,4 +186,14 @@ final class KDriveUploadTests: XCTestCase {
         XCTAssertEqual(pacer.oldest(at: t0.addingTimeInterval(61)), t0.addingTimeInterval(7))
         XCTAssertNil(pacer.oldest(at: t0.addingTimeInterval(68)))
     }
+
+    func testPacerRecordAppendsWithoutBlocking() {
+        var pacer = SlidingWindowPacer(limit: 2, window: 60)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        pacer.record(now: t0)
+        pacer.record(now: t0)
+        pacer.record(now: t0)
+        XCTAssertEqual(pacer.count(at: t0), 3)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(61)), 0)
+    }
 }

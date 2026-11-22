@@ -110,12 +110,14 @@ private struct KDriveUploadOutcome {
 @MainActor
 final class KDriveRateLimitCenter: ObservableObject {
     static let shared = KDriveRateLimitCenter()
+    static let pacingEnabledDefaultsKey = "kDriveUploadPacingEnabled"
 
     @Published private(set) var limitedUntil: Date?
     @Published private(set) var requestsLastMinute: Int = 0
     @Published private(set) var nextSlotDelay: TimeInterval = 0
 
     private var pacer = SlidingWindowPacer(limit: KDriveRateLimitCenter.pacingLimitPerMinute)
+    private let defaults: UserDefaults
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
@@ -123,7 +125,25 @@ final class KDriveRateLimitCenter: ObservableObject {
     /// kDrive (chunks compris) passent par `waitForRequestSlot`, espacées
     /// uniformément, pour ne jamais l'atteindre et éviter les 429.
     static let pacingLimitPerMinute = 58
-    private init() {}
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    nonisolated static func isPacingEnabled(defaults: UserDefaults = .standard) -> Bool {
+        if defaults.object(forKey: pacingEnabledDefaultsKey) == nil { return true }
+        return defaults.bool(forKey: pacingEnabledDefaultsKey)
+    }
+
+    var isPacingEnabled: Bool {
+        Self.isPacingEnabled(defaults: defaults)
+    }
+
+    var apiRateLabel: String {
+        isPacingEnabled
+            ? "\(requestsLastMinute)/\(Self.pacingLimitPerMinute) req/min"
+            : "\(requestsLastMinute) req/min"
+    }
 
     /// À appeler après chaque réponse kDrive (listing, envoi, test…).
     /// Retient la fenêtre de rate limit (429 ou code d'erreur dédié) et
@@ -139,8 +159,8 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     /// À appeler avant chaque requête kDrive (listing, envoi, chunk, test…)
     /// : bloque jusqu'à ce qu'un créneau soit disponible dans la fenêtre
-    /// glissante de pacing, ou que la fenêtre de rate limit imposée par le
-    /// serveur (429 / `Retry-After`) soit passée.
+    /// glissante de pacing (si activée), ou que la fenêtre de rate limit
+    /// imposée par le serveur (429 / `Retry-After`) soit passée.
     nonisolated static func waitForRequestSlot() async {
         while true {
             // Arrêt demandé : on sort tout de suite au lieu d'attendre le
@@ -154,12 +174,18 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     /// Enregistre le départ d'une requête et renvoie le délai (en s) avant le
     /// prochain créneau ; 0 si la requête peut partir immédiatement.
-    private func reserveSlot() -> TimeInterval {
-        let now = Date()
+    func reserveSlot(now: Date = Date()) -> TimeInterval {
         if let until = limitedUntil, until > now {
             let wait = until.timeIntervalSince(now)
             if abs(nextSlotDelay - wait) > 0.05 { nextSlotDelay = wait }
             return wait
+        }
+        guard isPacingEnabled else {
+            pacer.record(now: now)
+            let count = pacer.count(at: now)
+            if requestsLastMinute != count { requestsLastMinute = count }
+            if nextSlotDelay != 0 { nextSlotDelay = 0 }
+            return 0
         }
         let wait = pacer.reserveSlot(now: now)
         let count = pacer.count(at: now)
@@ -171,15 +197,16 @@ final class KDriveRateLimitCenter: ObservableObject {
 
     /// Rafraîchit les compteurs de cadence sans consommer de créneau, pour
     /// afficher en continu l'état de l'API pendant un envoi.
-    func refreshPacingInfo() {
-        let now = Date()
+    func refreshPacingInfo(now: Date = Date()) {
         let count = pacer.count(at: now)
         if requestsLastMinute != count { requestsLastMinute = count }
         let nextDelay: TimeInterval
         if let until = limitedUntil, until > now {
             nextDelay = until.timeIntervalSince(now)
-        } else {
+        } else if isPacingEnabled {
             nextDelay = pacer.nextSlotWait(now: now)
+        } else {
+            nextDelay = 0
         }
         if abs(nextSlotDelay - nextDelay) > 0.05 { nextSlotDelay = nextDelay }
     }
@@ -201,8 +228,7 @@ final class KDriveRateLimitCenter: ObservableObject {
             || description.lowercased().contains("too many requests")
     }
 
-    private func sync(statusCode: Int, retryAfter: Double?, isRateLimitBody: Bool) {
-        let now = Date()
+    func sync(statusCode: Int, retryAfter: Double?, isRateLimitBody: Bool, now: Date = Date()) {
         // Le pacer est alimenté par `reserveSlot` (avant l'envoi) :
         // ne pas compter deux fois la même requête ici.
         let count = pacer.count(at: now)
@@ -219,7 +245,7 @@ final class KDriveRateLimitCenter: ObservableObject {
             if limitedUntil != target { limitedUntil = target }
             return
         }
-        if count >= Self.officialLimitPerMinute {
+        if isPacingEnabled && count >= Self.officialLimitPerMinute {
             if let oldest = pacer.oldest(at: now) {
                 let resume = oldest.addingTimeInterval(60)
                 if (limitedUntil ?? .distantPast) < now {
@@ -787,6 +813,22 @@ private enum KDriveConnectionStatus {
     case success(String)
 }
 
+/// Interrupteur partagé entre Réglages et le détail Infomaniak kDrive pour
+/// activer ou désactiver la limite de 58 requêtes/minute en upload.
+struct KDrivePacingToggle: View {
+    @AppStorage(KDriveRateLimitCenter.pacingEnabledDefaultsKey) private var pacingEnabled = true
+
+    var body: some View {
+        Toggle(
+            L("Limite d'upload (58 req/min)", "Upload rate limit (58 req/min)"),
+            isOn: $pacingEnabled
+        )
+        .onChange(of: pacingEnabled) { _, _ in
+            KDriveRateLimitCenter.shared.refreshPacingInfo()
+        }
+    }
+}
+
 /// Détail de la connexion kDrive, poussé depuis la ligne kDrive de la zone
 /// Connexions des Réglages (même habillage que les autres services).
 struct KDriveSettingsDetailView: View {
@@ -918,6 +960,14 @@ struct KDriveSettingsDetailView: View {
                 Text("Infomaniak kDrive")
             } footer: {
                 Text(L("Le token et l’ID restent enregistrés localement sur cet appareil. Le dossier choisi ici sert de destination aux envois depuis la Bibliothèque : un sous-dossier par collection y est créé automatiquement.", "The token and ID remain stored locally on this device. The folder chosen here is the destination for uploads from the Library: a subfolder per collection is created inside it automatically."))
+            }
+
+            Section {
+                KDrivePacingToggle()
+            } header: {
+                Text(L("Cadence d'upload", "Upload pacing"))
+            } footer: {
+                Text(L("Espace les requêtes à 58/min sous la limite officielle Infomaniak (60/min) pour éviter les erreurs 429.", "Spaces requests at 58/min under Infomaniak's official limit (60/min) to avoid 429 errors."))
             }
 
             if configured || directoryId != "1" || !directoryName.isEmpty {
@@ -1349,7 +1399,7 @@ struct KDriveUploadSheet: View {
         if !service.currentFileName.isEmpty {
             stats.append((L("Fichier en cours", "Current file"), service.currentFileName))
         }
-        stats.append((L("API", "API"), "\(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.pacingLimitPerMinute) req/min"))
+        stats.append((L("API", "API"), rateLimit.apiRateLabel))
         if rateLimit.nextSlotDelay > 3 {
             stats.append((L("Cadence API", "API pacing"), "\(Int(rateLimit.nextSlotDelay.rounded())) s"))
         }
