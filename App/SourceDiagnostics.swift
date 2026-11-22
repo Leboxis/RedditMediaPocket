@@ -60,7 +60,7 @@ struct SourceDiagnosticsView: View {
         let xSession = XSession.shared
         let tikTokSession = TikTokSession.shared
         checks = [
-            DiagnosticCheck(id: "reddit-feed", title: L("Reddit : listing JSON (session requise depuis le 13/11/2026)", "Reddit: JSON listing (session required since 11/13/2026)")),
+            DiagnosticCheck(id: "reddit-feed", title: L("Reddit : listing r/ (JSON ou repli HTML)", "Reddit: r/ listing (JSON or HTML fallback)")),
             DiagnosticCheck(id: "reddit-session", title: L("Reddit : session locale", "Reddit: local session")),
             DiagnosticCheck(id: "redgifs", title: L("RedGifs : jeton temporaire", "RedGifs: temporary token")),
             DiagnosticCheck(id: "x-session", title: L("X : session locale", "X: local session")),
@@ -104,22 +104,34 @@ struct SourceDiagnosticsView: View {
         present ? .ok(ok) : .unconfigured(missing)
     }
 
-    /// Sonde le listing JSON d'un subreddit (`/r/pics/new.json`), c'est-à-dire
-    /// exactement le chemin utilisé par un téléchargement : `Network` ajoute les
-    /// en-têtes navigateur et la session, puis tente `old.reddit.com` et le
-    /// navigateur intégré. Depuis le 13/11/2026 les `.rss` sont coupés (404) et
-    /// le `.json` est devenu la voie normale — cette sonde vérifie qu'il répond
-    /// encore, pas qu'un flux RSS existe.
+    /// Suit exactement le chemin d'un téléchargement `r/` : le listing JSON
+    /// d'abord, puis — sur 401/403 — le listing HTML de `old.reddit.com` qu'utilise
+    /// `Downloader.fetchPosts`. Reddit refuse le `.json` des subreddits (403 même
+    /// avec session), mais la page HTML reste servie : tester seulement le JSON
+    /// afficherait donc une panne là où les téléchargements passent.
     private func probeRedditListing(_ network: Network) async -> DiagnosticState {
-        let url = URL(string: "https://www.reddit.com/r/pics/new.json?limit=1")!
+        let jsonURL = FeedSource.subreddit("pics").feedURL(sort: "new")
         do {
-            let data = try await network.data(url)
-            return data.isEmpty
-                ? .fail(L("Réponse vide.", "Empty response."))
-                : .ok(L("Listing JSON servi (\(data.count) octets).", "JSON listing served (\(data.count) bytes)."))
+            let data = try await network.data(jsonURL)
+            let posts = try RedditListing.parse(data)
+            return posts.isEmpty
+                ? .fail(L("Listing JSON vide : aucun post reconnu.", "JSON listing empty: no post recognized."))
+                : .ok(L("Listing JSON servi (\(posts.count) posts).", "JSON listing served (\(posts.count) posts)."))
         } catch NetworkError.refused(let code) where code == 401 || code == 403 {
-            return .fail(L("HTTP \(code) : listing de subreddit refusé malgré la session et les replis — le téléchargement depuis un subreddit est indisponible.",
-                           "HTTP \(code): subreddit listing refused despite sign-in and fallbacks — downloading from a subreddit is unavailable."))
+            let htmlURL = RedditHTMLListing.url(subreddit: "pics", sort: "new", after: nil)
+            do {
+                let html = try await network.data(htmlURL)
+                let posts = try RedditHTMLListing.parse(html)
+                guard !posts.isEmpty else {
+                    return .fail(L("JSON HTTP \(code) et listing HTML vide : aucun post reconnu.",
+                                   "JSON HTTP \(code) and empty HTML listing: no post recognized."))
+                }
+                return .ok(L("JSON refusé (HTTP \(code)) mais listing HTML servi (\(posts.count) posts) — c'est ce repli qu'utilisent les téléchargements r/.",
+                             "JSON refused (HTTP \(code)) but HTML listing served (\(posts.count) posts) — this is the fallback r/ downloads use."))
+            } catch {
+                return .fail(L("JSON HTTP \(code) et listing HTML indisponible : \(error.localizedDescription)",
+                               "JSON HTTP \(code) and HTML listing unavailable: \(error.localizedDescription)"))
+            }
         } catch {
             return .fail(error.localizedDescription)
         }
