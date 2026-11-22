@@ -591,12 +591,14 @@ struct KDriveCollectionsStatusView: View {
         center.allCheckableCollections(model: model)
     }
 
-    /// Collections à télécharger en lot : celles de la liste filtrée qui ne sont
-    /// ni déjà à jour, ni uniquement en attente d'envoi local.
+    /// Collections à télécharger en lot : uniquement celles déjà présentes sur
+    /// kDrive, dans la liste filtrée, qui ne sont ni déjà à jour ni uniquement
+    /// en attente d'envoi local.
     private var downloadableCollections: [UserCollection] {
         filteredCollections.filter { collection in
+            guard center.remoteFolder(for: collection.id) != nil else { return false }
             switch center.status(for: collection.id) {
-            case .upToDate, .pendingUpload:
+            case .upToDate, .pendingUpload, .notOnDrive:
                 return false
             default:
                 return true
@@ -1111,12 +1113,10 @@ struct KDriveCollectionsStatusView: View {
     }
 
     private func shouldOfferDownload(for status: KDriveFreshnessStatus?) -> Bool {
-        switch status {
-        case .outdated, .notOnDrive:
+        if case .outdated = status {
             return true
-        default:
-            return false
         }
+        return false
     }
 }
 
