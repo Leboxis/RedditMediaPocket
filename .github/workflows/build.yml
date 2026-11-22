@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Cache SwiftPM (.build)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .build
           key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.swift', 'Sources/MediaCore/**/*.swift', 'Tests/MediaCoreTests/**/*.swift') }}
@@ -41,15 +41,33 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Cache Homebrew (xcodegen)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/Library/Caches/Homebrew
           key: brew-xcodegen-${{ runner.os }}-${{ runner.arch }}
+      - name: Cache projet Xcode et DerivedData (tests iOS)
+        uses: actions/cache@v5
+        with:
+          path: |
+            RedditMediaPocket.xcodeproj
+            App/Assets.xcassets/AppIcon.appiconset
+            build
+          key: xcode-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'icon.png', 'scripts/make_icon.py') }}-${{ hashFiles('App/**', 'Sources/**', 'Tests/**', 'Package.swift') }}
+          restore-keys: |
+            xcode-test-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'icon.png', 'scripts/make_icon.py') }}-
       - name: Prepare Xcode project
         run: |
           brew install xcodegen
           python3 scripts/make_icon.py
+          # Régénère toujours (pour inclure les nouveaux fichiers) mais rend au
+          # pbxproj son ancienne date si son contenu n'a pas changé : sinon
+          # xcodegen invaliderait tout le build incrémental restauré du cache.
+          old="$RUNNER_TEMP/project.pbxproj"
+          cp RedditMediaPocket.xcodeproj/project.pbxproj "$old" 2>/dev/null || true
           xcodegen generate
+          if [ -f "$old" ] && cmp -s "$old" RedditMediaPocket.xcodeproj/project.pbxproj; then
+            touch -r "$old" RedditMediaPocket.xcodeproj/project.pbxproj
+          fi
       - name: Tests unitaires iOS sur simulateur
         run: |
           DEST=$(xcrun simctl list devices available | grep -m1 -oE 'iPhone [0-9A-Za-z ]+' | sed 's/[[:space:]]*$//')
@@ -69,15 +87,30 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Cache Homebrew (xcodegen)
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/Library/Caches/Homebrew
           key: brew-xcodegen-${{ runner.os }}-${{ runner.arch }}
+      - name: Cache projet Xcode et DerivedData (IPA)
+        uses: actions/cache@v5
+        with:
+          path: |
+            RedditMediaPocket.xcodeproj
+            App/Assets.xcassets/AppIcon.appiconset
+            build
+          key: xcode-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'icon.png', 'scripts/make_icon.py') }}-${{ hashFiles('App/**', 'Sources/**', 'Tests/**', 'Package.swift') }}
+          restore-keys: |
+            xcode-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('project.yml', 'icon.png', 'scripts/make_icon.py') }}-
       - name: Prepare Xcode project
         run: |
           brew install xcodegen
           python3 scripts/make_icon.py
+          old="$RUNNER_TEMP/project.pbxproj"
+          cp RedditMediaPocket.xcodeproj/project.pbxproj "$old" 2>/dev/null || true
           xcodegen generate
+          if [ -f "$old" ] && cmp -s "$old" RedditMediaPocket.xcodeproj/project.pbxproj; then
+            touch -r "$old" RedditMediaPocket.xcodeproj/project.pbxproj
+          fi
       - name: Build unsigned iPhone app
         env:
           BUILD_NUMBER: ${{ github.run_number }}
@@ -115,7 +148,7 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: npm
