@@ -88,6 +88,24 @@ private final class ProtocoleCookiesFaux: URLProtocol {
     static var derniereMethode: String?
     static var dernierCorps: Data?
 
+    /// URLSession peut fournir le corps sous forme de flux plutôt que `httpBody`.
+    private static func lireCorps(_ requete: URLRequest) -> Data? {
+        if let corps = requete.httpBody { return corps }
+        guard let flux = requete.httpBodyStream else { return nil }
+        flux.open()
+        defer { flux.close() }
+        var sortie = Data()
+        var tampon = [UInt8](repeating: 0, count: 4_096)
+        while flux.hasBytesAvailable {
+            let lus = tampon.withUnsafeMutableBufferPointer { memoires in
+                flux.read(memoires.baseAddress!, maxLength: memoires.count)
+            }
+            if lus <= 0 { break }
+            sortie.append(contentsOf: tampon[0..<lus])
+        }
+        return sortie
+    }
+
     override class func canInit(with request: URLRequest) -> Bool { true }
 
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -95,7 +113,7 @@ private final class ProtocoleCookiesFaux: URLProtocol {
     override func startLoading() {
         Self.derniereCle = request.value(forHTTPHeaderField: "X-API-Key")
         Self.derniereMethode = request.httpMethod
-        Self.dernierCorps = request.httpBody
+        Self.dernierCorps = Self.lireCorps(request)
         guard let url = request.url else { return }
         let reponse = HTTPURLResponse(
             url: url,
