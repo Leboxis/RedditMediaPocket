@@ -1040,7 +1040,7 @@ struct KDriveFolderPickerView: View {
             Section {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 5) {
-                        ForEach(Array(pathStack.enumerated()), id: \.offset) { index, node in
+                        ForEach(Array(pathStack.enumerated()), id: \.element.id) { index, node in
                             if index > 0 {
                                 Image(systemName: "chevron.right")
                                     .font(.caption2)

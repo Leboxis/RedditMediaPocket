@@ -142,7 +142,7 @@ struct NewDownloadView: View {
                         .tint(DS.onSurfaceMuted)
                 } else {
                     Image(systemName: model.running ? "stop.fill" : "arrow.down")
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.title3.weight(.semibold))
                 }
                 Text(model.stopping
                      ? L("Arrêt en cours…", "Stopping…")
@@ -312,7 +312,7 @@ struct NewDownloadView: View {
                         ProgressView().controlSize(.mini)
                     } else if driveStatus.isUpToDate {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 10, weight: .bold))
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(DS.calmSage)
                     } else {
                         Circle()
@@ -478,8 +478,9 @@ private struct SourceKindButton: View {
             open()
         } label: {
             Text(SourceSelection.face(kind))
-                .font(.system(size: 17, weight: .semibold, design: .monospaced))
-                .frame(width: 52, height: 48)
+                .font(.system(.headline, design: .monospaced, weight: .semibold))
+                .padding(.horizontal, DS.space(2))
+                .frame(minWidth: 52, minHeight: 48)
                 .foregroundStyle(DS.accentEmphasis)
                 .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
         }
@@ -597,7 +598,7 @@ private struct SourceGridCard: View {
                 .frame(height: 24)
         } else {
             Image(systemName: SourceSelection.icon(kind))
-                .font(.system(size: 20, weight: .semibold))
+                .font(.title3.weight(.semibold))
                 .foregroundStyle(isCurrent ? DS.accentEmphasis : DS.onSurface)
                 .frame(height: 24)
         }

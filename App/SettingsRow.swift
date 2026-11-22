@@ -6,7 +6,8 @@ import MediaCore
 /// zone Connexions des Réglages, la ligne kDrive et l'onglet Activité pour
 /// que toutes ces zones se ressemblent.
 struct SettingsRow: View {
-    struct MenuItem {
+    struct MenuItem: Identifiable {
+        var id: String { "\(label)-\(systemImage)" }
         let label: String
         let systemImage: String
         var destructive = false
@@ -31,15 +32,14 @@ struct SettingsRow: View {
             Spacer(minLength: DS.space(3))
             if !menuItems.isEmpty {
                 Menu {
-                    ForEach(menuItems.indices, id: \.self) { i in
-                        let item = menuItems[i]
+                    ForEach(menuItems) { item in
                         Button(role: item.destructive ? .destructive : nil, action: item.action) {
                             Label(item.label, systemImage: item.systemImage)
                         }
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 18))
+                        .font(.title3)
                         .foregroundStyle(DS.onSurfaceMuted)
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
@@ -60,7 +60,7 @@ struct SettingsRow: View {
     @ViewBuilder private var rowLabel: some View {
         let info = HStack(spacing: DS.space(3)) {
             Image(systemName: symbol)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.subheadline.weight(.semibold))
                 .foregroundStyle(tint)
                 .frame(width: 30, height: 30)
                 .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))

@@ -14,9 +14,9 @@ struct SettingsTabView: View {
 private struct DownloadSettings: View {
     @ObservedObject var model: Downloader
     /// État de la synchronisation Cloudflare, partagé avec toute l'app.
-    @StateObject private var synchronisation = SyncService.shared
+    @ObservedObject private var synchronisation = SyncService.shared
     /// État de la synchronisation des cookies de session.
-    @StateObject private var sessions = SessionCookieSyncService.shared
+    @ObservedObject private var sessions = SessionCookieSyncService.shared
     @State private var clePresentee = false
     /// Vrai quand la vue est embarquée dans un onglet (pas de bouton « OK »).
     let embedded: Bool

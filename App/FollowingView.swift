@@ -300,7 +300,7 @@ struct FollowingView: View {
         } else if let errorMessage {
             VStack(spacing: DS.space(3)) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 36)).foregroundStyle(DS.error)
+                    .font(.largeTitle).foregroundStyle(DS.error)
                 Text(errorMessage)
                     .font(.footnote)
                     .foregroundStyle(DS.onSurfaceMuted)
@@ -312,7 +312,7 @@ struct FollowingView: View {
         } else if !session.hasSession {
             VStack(spacing: 12) {
                 Image(systemName: "person.crop.circle.badge.questionmark")
-                    .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                    .font(.largeTitle).foregroundStyle(DS.onSurfaceMuted)
                 Text(L("Connecte-toi à Reddit dans les Réglages ou restaure tes suivis via la synchronisation Cloudflare.",
                        "Sign in to Reddit in Settings or restore your followed accounts via Cloudflare sync."))
                     .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
@@ -328,7 +328,7 @@ struct FollowingView: View {
         } else {
             VStack(spacing: 10) {
                 Image(systemName: "person.2")
-                    .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                    .font(.largeTitle).foregroundStyle(DS.onSurfaceMuted)
                 Text(L("Aucun compte suivi (ou liste privée indisponible).",
                        "No followed accounts (or the list is unavailable)."))
                     .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
@@ -452,7 +452,7 @@ struct FollowingView: View {
                             .controlSize(.mini)
                     } else if freshness.isUpToDate {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(DS.calmSage)
                     } else {
                         Circle()
@@ -464,7 +464,7 @@ struct FollowingView: View {
             } else if let folder = kDriveFolder {
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(DS.calmSage)
                     Text(kDriveBadgeText(folder))
                         .lineLimit(1)
@@ -750,7 +750,7 @@ struct FollowingUserPosts: View {
             } else if let errorMessage {
                 VStack(spacing: DS.space(3)) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 36)).foregroundStyle(DS.error)
+                        .font(.largeTitle).foregroundStyle(DS.error)
                     Text(errorMessage)
                         .font(.footnote)
                         .foregroundStyle(DS.onSurfaceMuted)
@@ -763,7 +763,7 @@ struct FollowingUserPosts: View {
                 if posts.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "tray")
-                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                            .font(.largeTitle).foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Aucun post accessible (flux privé ou vide).",
                                "No accessible posts (private or empty feed)."))
                             .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
@@ -809,7 +809,7 @@ struct FollowingUserPosts: View {
                                        thumbnail: thumbnail, model: model)
                 }
             } else {
-                ForEach(Array(media.enumerated()), id: \.offset) { index, _ in
+                ForEach(Array(media.enumerated()), id: \.element) { index, _ in
                     FollowingMediaCard(mediaList: media, index: index, gallery: false,
                                        feedID: post.id, galleryID: nil,
                                        thumbnail: thumbnail, model: model)
@@ -1000,7 +1000,7 @@ private struct FollowingMediaCard: View {
             if opening {
                 ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
-                Image(systemName: "play.circle.fill").font(.system(size: 44))
+                Image(systemName: "play.circle.fill").font(.largeTitle)
                     .foregroundStyle(Color.white)
                     .padding(DS.space(1))
                     .background(Color.black.opacity(0.45), in: Circle())

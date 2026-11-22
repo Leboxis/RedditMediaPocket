@@ -414,7 +414,7 @@ struct KDriveFreshnessBadge: View {
                     .tint(color)
             } else if status.isUpToDate {
                 Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.caption2.weight(.bold))
                     .foregroundStyle(color)
             } else {
                 Circle()
@@ -458,7 +458,7 @@ struct KDriveActiveCollectionStrip: View {
                         .controlSize(.mini)
                 } else if status.isUpToDate {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(DS.calmSage)
                 } else {
                     Circle()
@@ -508,7 +508,7 @@ struct KDriveActiveCollectionStrip: View {
                     Image(systemName: "arrow.down.circle")
                         .font(.subheadline)
                         .foregroundStyle(DS.calmAmber)
-                        .frame(width: 28, height: 28)
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -529,7 +529,7 @@ struct KDriveActiveCollectionStrip: View {
                 Image(systemName: "arrow.clockwise")
                     .font(.caption)
                     .foregroundStyle(DS.onSurfaceMuted)
-                    .frame(width: 28, height: 28)
+                    .frame(minWidth: 44, minHeight: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -722,7 +722,7 @@ struct KDriveCollectionsStatusView: View {
             HStack(spacing: 5) {
                 if let leadingSymbol {
                     Image(systemName: leadingSymbol)
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundStyle(symbolColor ?? valueColor)
                 }
                 Text("\(count)")
@@ -836,28 +836,28 @@ struct KDriveCollectionsStatusView: View {
         let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
         if isCalmUpToDate {
             Image(systemName: "checkmark")
-                .font(.system(size: 12, weight: .bold))
+                .font(.caption.weight(.bold))
                 .foregroundStyle(DS.calmSage)
                 .frame(width: 30, height: 30)
                 .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
                 .accessibilityHidden(true)
         } else if let status, !status.isChecking {
             Image(systemName: "icloud.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(status.tintColor)
                 .frame(width: 30, height: 30)
                 .background(status.tintColor.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
                 .accessibilityHidden(true)
         } else if !center.remoteFolders.isEmpty, status == nil {
             Image(systemName: "icloud.fill")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(DS.calmRose)
                 .frame(width: 30, height: 30)
                 .background(DS.calmRose.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "icloud")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(DS.onSurfaceMuted)
                 .frame(width: 30, height: 30)
                 .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
@@ -935,7 +935,7 @@ struct KDriveCollectionsStatusView: View {
                     Image(systemName: "arrow.down.circle")
                         .font(.body)
                         .foregroundStyle(detailColor)
-                        .frame(width: 36, height: 36)
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
@@ -956,12 +956,12 @@ struct KDriveCollectionsStatusView: View {
                 if status?.isChecking == true {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 36, height: 36)
+                        .frame(minWidth: 44, minHeight: 44)
                 } else {
                     Image(systemName: "ellipsis.circle")
                         .font(.body)
                         .foregroundStyle(DS.onSurfaceMuted)
-                        .frame(width: 36, height: 36)
+                        .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }
             }

@@ -335,7 +335,7 @@ struct LibraryView: View {
                 .overlay(alignment: .topTrailing) {
                     if selectingMedia {
                         Image(systemName: picked ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 19, weight: .semibold))
+                            .font(.title3.weight(.semibold))
                             .foregroundStyle(picked ? DS.accent : DS.onSurface)
                             .shadow(color: DS.shadowColor.opacity(0.5), radius: 2)
                             .padding(DS.space(2))
@@ -424,7 +424,7 @@ struct LibraryView: View {
             }
             .accessibilityLabel(L("Quitter la sélection", "Exit selection"))
         }
-        .font(.system(size: 17, weight: .semibold))
+        .font(.headline)
         .padding(.horizontal, DS.space(2))
         .background(DS.surfaceElevated, in: Capsule())
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)

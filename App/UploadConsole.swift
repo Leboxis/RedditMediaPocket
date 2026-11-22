@@ -25,7 +25,7 @@ struct UploadConsoleCard: View {
         VStack(alignment: .leading, spacing: DS.space(2)) {
             HStack(spacing: DS.space(3)) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(iconColor)
                     .frame(width: 36, height: 36)
                     .background(iconColor.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusM))
@@ -67,13 +67,13 @@ struct UploadConsoleCard: View {
 
             if !stats.isEmpty {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: DS.space(2)) {
-                    ForEach(stats.indices, id: \.self) { i in
+                    ForEach(stats, id: \.label) { stat in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(stats[i].label)
+                            Text(stat.label)
                                 .font(DS.caption2)
                                 .foregroundStyle(DS.onSurfaceMuted)
                                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                            Text(stats[i].value)
+                            Text(stat.value)
                                 .font(DS.monoCaption)
                                 .foregroundStyle(DS.onSurface)
                                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)

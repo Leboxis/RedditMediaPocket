@@ -121,7 +121,7 @@ private struct KDriveCollectionUploadFlow: View {
                     VStack(spacing: DS.space(4)) {
                         Spacer()
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 44))
+                            .font(.largeTitle)
                             .foregroundStyle(DS.error)
                         Text(errorMessage)
                             .font(DS.body)
@@ -1364,7 +1364,7 @@ struct KDriveUploadBanner: View {
                 } label: {
                     HStack(spacing: DS.space(2)) {
                         Image(systemName: bannerIcon)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.subheadline.weight(.semibold))
                             .foregroundStyle(bannerColor)
                             .frame(width: 28, height: 28)
                             .background(bannerColor.opacity(0.12), in: RoundedRectangle(cornerRadius: DS.radiusS))
@@ -1385,7 +1385,8 @@ struct KDriveUploadBanner: View {
                         Image(systemName: "xmark")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(DS.onSurfaceMuted)
-                            .frame(width: 36, height: 36)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(L("Masquer le bandeau kDrive", "Dismiss kDrive banner"))

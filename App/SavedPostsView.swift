@@ -150,7 +150,7 @@ struct SavedPostsView: View {
                 if !session.hasSession {
                     VStack(spacing: 12) {
                         Image(systemName: "bookmark.badge.questionmark")
-                            .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                            .font(.largeTitle).foregroundStyle(DS.onSurfaceMuted)
                         Text(L("Connecte-toi à Reddit dans les Réglages pour voir tes posts sauvegardés.",
                                "Sign in to Reddit in Settings to see your saved posts."))
                             .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
@@ -167,7 +167,7 @@ struct SavedPostsView: View {
                 } else if let errorMessage {
                     VStack(spacing: DS.space(3)) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 36)).foregroundStyle(DS.error)
+                            .font(.largeTitle).foregroundStyle(DS.error)
                         Text(errorMessage)
                             .font(.footnote)
                             .foregroundStyle(DS.onSurfaceMuted)
@@ -180,7 +180,7 @@ struct SavedPostsView: View {
                     if posts.isEmpty {
                         VStack(spacing: 10) {
                             Image(systemName: "bookmark.slash")
-                                .font(.system(size: 40)).foregroundStyle(DS.onSurfaceMuted)
+                                .font(.largeTitle).foregroundStyle(DS.onSurfaceMuted)
                             Text(L("Aucun post sauvegardé.",
                                    "No saved posts."))
                                 .font(.footnote).foregroundStyle(DS.onSurfaceMuted)
@@ -295,7 +295,7 @@ struct SavedFeedView: View {
             if entries.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "photo.on.rectangle.angled")
-                        .font(.system(size: 40, weight: .ultraLight)).foregroundStyle(DS.onSurface.opacity(0.4))
+                        .font(.largeTitle.weight(.ultraLight)).foregroundStyle(DS.onSurface.opacity(0.4))
                     Text(L("Aucun média à afficher dans le feed.", "No media to show in the feed."))
                         .font(.footnote).foregroundStyle(DS.onSurface.opacity(0.6))
                         .multilineTextAlignment(.center)
@@ -570,7 +570,7 @@ private struct SavedPostRow: View {
                                    thumbnail: thumbnail, model: model)
                 }
             } else {
-                ForEach(Array(media.enumerated()), id: \.offset) { index, _ in
+                ForEach(Array(media.enumerated()), id: \.element) { index, _ in
                     SavedMediaCard(mediaList: media, index: index, gallery: false,
                                    feedID: post.id, galleryID: nil,
                                    thumbnail: thumbnail, model: model)
@@ -741,7 +741,7 @@ private struct SavedMediaCard: View {
             if opening {
                 ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
-                Image(systemName: "play.circle.fill").font(.system(size: 44))
+                Image(systemName: "play.circle.fill").font(.largeTitle)
                     .foregroundStyle(Color.white)
                     .padding(DS.space(1))
                     .background(Color.black.opacity(0.45), in: Circle())

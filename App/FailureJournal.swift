@@ -126,7 +126,7 @@ struct FailureJournalButton: View {
                 .overlay(alignment: .topTrailing) {
                     if !journal.entries.isEmpty {
                         Text(String(journal.entries.count))
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.caption2.weight(.bold))
                             .foregroundStyle(DS.onAccent)
                             .padding(DS.space(1))
                             .background(Circle().fill(DS.error))
