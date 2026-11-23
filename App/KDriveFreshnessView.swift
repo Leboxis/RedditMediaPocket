@@ -432,119 +432,6 @@ struct KDriveFreshnessBadge: View {
     }
 }
 
-/// Carte compacte « Apple Calm Tech » affichée sous les pastilles de la Bibliothèque :
-/// coche Vert Sauge + texte gris apaisé + compteur monospaced à droite quand tout est à jour,
-/// ou point Ambre / Rose-Corail + détail bicolore en cas d'écart.
-struct KDriveActiveCollectionStrip: View {
-    let collection: UserCollection
-    @ObservedObject var model: Downloader
-    let onDownloadCollection: (UserCollection) -> Void
-    let onOpenDashboard: () -> Void
-
-    @ObservedObject private var center = KDriveFreshnessCenter.shared
-    @AppStorage("kDriveApiToken") private var token = ""
-    @AppStorage("kDriveId") private var driveId = ""
-    @AppStorage("kDriveDirectoryId") private var directoryId = "1"
-
-    private var status: KDriveFreshnessStatus? {
-        center.status(for: collection.id)
-    }
-
-    var body: some View {
-        HStack(spacing: DS.space(2)) {
-            if let status {
-                if status.isChecking {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else if status.isUpToDate {
-                    Image(systemName: "checkmark")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(DS.calmSage)
-                } else {
-                    Circle()
-                        .fill(status.tintColor)
-                        .frame(width: 6, height: 6)
-                }
-            } else {
-                Image(systemName: "icloud")
-                    .font(.caption)
-                    .foregroundStyle(DS.onSurfaceMuted)
-            }
-
-            Button {
-                onOpenDashboard()
-            } label: {
-                HStack {
-                    if case .upToDate(let remoteCount, _) = status {
-                        Text(L("kDrive synchronisé avec la source", "kDrive synced with source"))
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text(L("\(remoteCount) fichiers", "\(remoteCount) files"))
-                            .font(DS.monoCaption)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .lineLimit(1)
-                    } else if let status {
-                        KDriveBicolorDetail(status: status, font: .caption)
-                        Spacer(minLength: 4)
-                    } else {
-                        Text(L("kDrive : toucher pour vérifier avec la source",
-                               "kDrive: tap to check against source"))
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-
-            if case .outdated = status {
-                Button {
-                    onDownloadCollection(collection)
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.subheadline)
-                        .foregroundStyle(DS.calmAmber)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(model.running)
-                .accessibilityLabel(L("Télécharger les nouveautés de \(collection.displayName)",
-                                      "Download new media from \(collection.displayName)"))
-            }
-
-            Button {
-                center.startSingleCheck(
-                    collection: collection,
-                    model: model,
-                    token: token,
-                    driveId: driveId,
-                    directoryId: directoryId
-                )
-            } label: {
-                Image(systemName: "arrow.clockwise")
-                    .font(.caption)
-                    .foregroundStyle(DS.onSurfaceMuted)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(status?.isChecking == true)
-            .accessibilityLabel(L("Vérifier \(collection.displayName) sur kDrive et le site source",
-                                  "Check \(collection.displayName) on kDrive and source site"))
-        }
-        .padding(.horizontal, DS.space(3))
-        .padding(.vertical, DS.space(2))
-        .background(DS.surfaceElevated, in: RoundedRectangle(cornerRadius: DS.radiusM))
-        .padding(.horizontal, DS.space(4))
-        .padding(.bottom, DS.space(2))
-    }
-}
-
 /// Filtre de la feuille « État kDrive des collections ».
 private enum KDriveFreshnessFilter: String, CaseIterable, Identifiable {
     case all
@@ -1663,6 +1550,7 @@ final class KDriveBatchController: ObservableObject {
                     directoryId: String(folder.id),
                     directoryName: folder.name,
                     collectionLabel: collection.kDriveLabel,
+                    collectionID: collection.id,
                     skippedCount: duplicates.count,
                     alreadyOnDriveURLs: duplicates
                 )

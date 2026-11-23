@@ -53,17 +53,6 @@ struct LibraryView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 userChipsRow
-                if kDriveConfigured, let activeCollection = model.activeCollection {
-                    KDriveActiveCollectionStrip(
-                        collection: activeCollection,
-                        model: model,
-                        onDownloadCollection: { collection in
-                            goToDownload()
-                            model.download(user: collection.id)
-                        },
-                        onOpenDashboard: { kDriveStatusPresented = true }
-                    )
-                }
                 gallerySection
             }
             .background(DS.background)
@@ -92,7 +81,8 @@ struct LibraryView: View {
 
                     KDriveCollectionUploadAction(
                         files: model.files,
-                        collectionLabel: model.activeCollection?.kDriveLabel ?? "Pocket"
+                        collectionLabel: model.activeCollection?.kDriveLabel ?? "Pocket",
+                        collectionID: model.activeCollection?.id
                     )
 
                     Button {

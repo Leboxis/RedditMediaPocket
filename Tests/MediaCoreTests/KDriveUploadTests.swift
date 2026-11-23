@@ -206,4 +206,59 @@ final class KDriveUploadTests: XCTestCase {
         XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(5), 4)
         XCTAssertEqual(KDriveUploadPolicy.clampedConcurrentUploads(12), 4)
     }
+
+    // MARK: - Plafond de cadence réglable
+
+    func testPacingLimitConstantsAndClamping() {
+        XCTAssertEqual(KDriveUploadPolicy.minPacingLimitPerMinute, 10)
+        XCTAssertEqual(KDriveUploadPolicy.defaultPacingLimitPerMinute, 58)
+        XCTAssertEqual(KDriveUploadPolicy.maxPacingLimitPerMinute, 60)
+
+        for value in KDriveUploadPolicy.minPacingLimitPerMinute...KDriveUploadPolicy.maxPacingLimitPerMinute {
+            XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(value), value)
+        }
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(0), 10)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(9), 10)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(-50), 10)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(61), 60)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(1_000), 60)
+    }
+
+    func testPacerUpdateLimitUpdatesSpacingImmediately() {
+        var pacer = SlidingWindowPacer(limit: 58, window: 60)
+        XCTAssertEqual(pacer.limit, 58)
+        XCTAssertEqual(pacer.spacing, 60.0 / 57.0, accuracy: 0.001)
+
+        pacer.updateLimit(30)
+        XCTAssertEqual(pacer.limit, 30)
+        XCTAssertEqual(pacer.spacing, 60.0 / 29.0, accuracy: 0.001)
+        XCTAssertEqual(pacer.window, 60)
+    }
+
+    func testPacerUpdateLimitRelaxesSpacingWithoutLosingWindow() {
+        var pacer = SlidingWindowPacer(limit: 3, window: 60)
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertEqual(pacer.reserveSlot(now: t0), 0)
+        XCTAssertEqual(pacer.reserveSlot(now: t0.addingTimeInterval(30)), 0)
+        // Espacement de 30 s (3 req/min) : la 3e requête attend.
+        XCTAssertEqual(pacer.nextSlotWait(now: t0.addingTimeInterval(30.5)), 29.5, accuracy: 0.001)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(30.5)), 2)
+
+        // Plafond relevé à 6 : l'espacement tombe à 12 s, les requêtes déjà
+        // enregistrées restent comptées dans la fenêtre.
+        pacer.updateLimit(6)
+        XCTAssertEqual(pacer.limit, 6)
+        XCTAssertEqual(pacer.spacing, 12, accuracy: 0.001)
+        XCTAssertEqual(pacer.nextSlotWait(now: t0.addingTimeInterval(30.5)), 11.5, accuracy: 0.001)
+        XCTAssertEqual(pacer.count(at: t0.addingTimeInterval(30.5)), 2)
+    }
+
+    func testPacerUpdateLimitClampsToAtLeastOne() {
+        var pacer = SlidingWindowPacer(limit: 58, window: 60)
+        pacer.updateLimit(0)
+        XCTAssertEqual(pacer.limit, 1)
+        XCTAssertEqual(pacer.spacing, 60, accuracy: 0.001)
+        pacer.updateLimit(-3)
+        XCTAssertEqual(pacer.limit, 1)
+    }
 }

@@ -23,6 +23,18 @@ public enum KDriveUploadPolicy {
     public static func clampedConcurrentUploads(_ value: Int) -> Int {
         uploadConcurrencyOptions.contains(value) ? value : maxConcurrentUploads
     }
+
+    /// Bornes du plafond de cadence réglable (10 à 60 req/min) : jamais
+    /// au-delà de la limite officielle Infomaniak.
+    public static let minPacingLimitPerMinute = 10
+    public static let defaultPacingLimitPerMinute = 58
+    public static let maxPacingLimitPerMinute = 60
+
+    /// Ramène un plafond de cadence dans les bornes autorisées.
+    public static func clampedPacingLimit(_ value: Int) -> Int {
+        min(max(value, minPacingLimitPerMinute), maxPacingLimitPerMinute)
+    }
+
     /// L'API accepte au plus 10 000 chunks par session et 1 Gio par requête chunk.
     public static let maxChunksPerSession: Int64 = 10_000
     public static let maxChunkRequestSize: Int64 = 1_000_000_000
@@ -106,7 +118,7 @@ public enum KDriveChunkReply {
     }
 }
 
-/// Fenêtre glissante de pacing (ex. 56 requêtes/min sous la limite officielle
+/// Fenêtre glissante de pacing (ex. 58 requêtes/min sous la limite officielle
 /// Infomaniak de 60 req/min, non augmentable). Les requêtes sont espacées
 /// uniformément (`window / (limit - 1)`) au lieu de partir en rafale : la
 /// fenêtre ne se sature jamais, donc aucune attente longue — le débit visible
@@ -114,13 +126,20 @@ public enum KDriveChunkReply {
 /// bloquée ne consomme pas de créneau : seules les requêtes réellement
 /// parties comptent dans la fenêtre.
 public struct SlidingWindowPacer {
-    public let limit: Int
+    public private(set) var limit: Int
     public let window: TimeInterval
     private var timestamps: [Date] = []
 
     public init(limit: Int, window: TimeInterval = 60) {
         self.limit = max(limit, 1)
         self.window = window
+    }
+
+    /// Change le plafond à chaud (curseur des Réglages) : l'espacement et la
+    /// contrainte de fenêtre suivent immédiatement la nouvelle valeur, sans
+    /// perdre les requêtes déjà enregistrées.
+    public mutating func updateLimit(_ newLimit: Int) {
+        limit = max(newLimit, 1)
     }
 
     /// Espacement minimum entre deux requêtes : limite - 1 requêtes espacées

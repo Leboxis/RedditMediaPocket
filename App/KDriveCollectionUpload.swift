@@ -8,6 +8,7 @@ import SwiftUI
 struct KDriveCollectionUploadAction: View {
     let files: [URL]
     let collectionLabel: String
+    let collectionID: String?
 
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -36,7 +37,8 @@ struct KDriveCollectionUploadAction: View {
                 files: files,
                 token: token,
                 driveId: driveId,
-                collectionLabel: collectionLabel
+                collectionLabel: collectionLabel,
+                collectionID: collectionID
             )
         }
         .alert(L("kDrive non configuré", "kDrive is not configured"), isPresented: $showNotConfigured) {
@@ -52,6 +54,7 @@ private struct KDriveCollectionUploadFlow: View {
     let token: String
     let driveId: String
     let collectionLabel: String
+    let collectionID: String?
 
     @AppStorage("kDriveDirectoryId") private var configuredDirectoryId = "1"
     @AppStorage("kDriveDirectoryName") private var configuredDirectoryName = ""
@@ -256,6 +259,7 @@ private struct KDriveCollectionUploadFlow: View {
                     directoryId: uploadDirectoryId ?? String(folder.id),
                     directoryName: uploadDirectoryName.isEmpty ? folder.name : uploadDirectoryName,
                     collectionLabel: collectionLabel,
+                    collectionID: collectionID,
                     skippedCount: skippedCount,
                     alreadyOnDriveURLs: matchedDuplicates
                 )
@@ -350,6 +354,9 @@ struct KDriveUploadLot {
     let directoryName: String
     /// Collection d'origine (`u/pseudo` pour un compte Reddit suivi).
     let collectionLabel: String
+    /// Identifiant de la collection locale, pour la retirer si elle devient vide
+    /// après suppression manuelle des médias envoyés.
+    let collectionID: String?
     let skippedCount: Int
     let alreadyOnDriveURLs: [URL]
 }
@@ -1199,7 +1206,7 @@ private struct KDriveContinuousUploadSheet: View {
             Button(L("Supprimer", "Delete"), role: .destructive) { deleteUploadedFiles() }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            Text(L("Les fichiers envoyés avec succès seront supprimés définitivement du stockage de l'app (pas de corbeille). Ils restent bien sûr sur kDrive.", "Successfully uploaded files will be permanently removed from the app storage (no trash). They remain on kDrive."))
+            Text(L("Les fichiers envoyés avec succès seront supprimés définitivement du stockage de l'app (pas de corbeille). Ils restent bien sûr sur kDrive. Si aucun média ne reste dans la collection, celle-ci sera aussi supprimée.", "Successfully uploaded files will be permanently removed from the app storage (no trash). They remain on kDrive. If no media remains in the collection, it will also be deleted."))
         }
         .confirmationDialog(
             L("Supprimer les \(alreadyOnDriveURLs.count) média(s) déjà sur le Drive du téléphone ?", "Delete the \(alreadyOnDriveURLs.count) media file(s) already on the Drive from the phone?"),
@@ -1209,7 +1216,7 @@ private struct KDriveContinuousUploadSheet: View {
             Button(L("Supprimer", "Delete"), role: .destructive) { deleteAlreadyOnDriveFiles() }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            Text(L("Ces médias existent déjà sur le Drive. Les copies locales seront supprimées définitivement (pas de corbeille).", "These media files already exist on the Drive. Local copies will be permanently removed (no trash)."))
+            Text(L("Ces médias existent déjà sur le Drive. Les copies locales seront supprimées définitivement (pas de corbeille). Si aucun média ne reste dans la collection, celle-ci sera aussi supprimée.", "These media files already exist on the Drive. Local copies will be permanently removed (no trash). If no media remains in the collection, it will also be deleted."))
         }
         .errorAlert(uploader.finalError)
         .presentationDetents([.large])
@@ -1271,7 +1278,8 @@ private struct KDriveContinuousUploadSheet: View {
         guard KDriveRateLimitCenter.isPacingEnabled() else { return 0 }
         let remaining = uploader.totalCount - uploader.completedCount
         guard remaining > 3 else { return 0 }
-        return Int(Double(remaining) * 60 / Double(KDriveRateLimitCenter.pacingLimitPerMinute))
+        let limit = max(1, KDriveRateLimitCenter.currentPacingLimit())
+        return Int(Double(remaining) * 60 / Double(limit))
     }
 
     private func startUploadIfNeeded() {
@@ -1309,9 +1317,10 @@ private struct KDriveContinuousUploadSheet: View {
             deletedCount = deleted
             deleteFailures = failures
             isDeleting = false
-            if deleted > 0 {
-                // La galerie et les compteurs relisent la collection active.
-                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+            if deleted > 0 || (failures == 0 && !urls.isEmpty) {
+                // La galerie et les compteurs relisent la collection active ;
+                // si plus aucun média n'y reste, la collection est retirée.
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: lot.collectionID)
             }
             LogCenter.info(L("\(deleted) fichier(s) envoyé(s) supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) uploaded file(s) deleted from the device (\(failures) failure(s))."))
         }
@@ -1340,8 +1349,10 @@ private struct KDriveContinuousUploadSheet: View {
             duplicateDeletedCount = deleted
             duplicateDeleteFailures = failures
             isDeleting = false
-            if deleted > 0 {
-                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: nil)
+            if deleted > 0 || (failures == 0 && !urls.isEmpty) {
+                // La galerie et les compteurs relisent la collection active ;
+                // si plus aucun média n'y reste, la collection est retirée.
+                NotificationCenter.default.post(name: .rmpFilesDeletedLocally, object: lot.collectionID)
             }
             LogCenter.info(L("\(deleted) média(s) déjà sur le Drive supprimé(s) du téléphone (\(failures) échec(s)).", "\(deleted) media file(s) already on the Drive deleted from the device (\(failures) failure(s))."))
         }

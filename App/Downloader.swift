@@ -591,11 +591,16 @@ extension Notification.Name {
     init() {
         loadCachedCollections()
         // Fichiers supprimés du téléphone (envoi kDrive) : le compte de
-        // médias de la collection active et la galerie sont relus aussitôt.
+        // médias de la collection active et la galerie sont relus aussitôt ;
+        // une collection devenue vide est retirée.
         filesDeletedObserver = NotificationCenter.default.addObserver(
             forName: .rmpFilesDeletedLocally, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.reload()
+        ) { [weak self] notification in
+            if let collectionID = notification.object as? String {
+                self?.removeCollectionIfEmpty(id: collectionID)
+            } else {
+                self?.reload()
+            }
         }
         // Compteurs « nouveautés » du passage précédent : relus une fois pour
         // que les pastilles les affichent dès l'ouverture, sans attendre un
@@ -950,6 +955,28 @@ extension Notification.Name {
         }
         status = ""
         reload()
+    }
+
+    /// Après un nettoyage manuel kDrive : retire la collection quand son
+    /// dossier ne contient plus aucun média. Un média resté sur place (échec
+    /// d'envoi, doublon non supprimé) la conserve et la galerie est relue.
+    func removeCollectionIfEmpty(id: String) {
+        guard !running, let collection = collections.first(where: { $0.id == id }) else {
+            reload()
+            return
+        }
+        let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
+        Task.detached(priority: .userInitiated) {
+            let hasMedia = CollectionFiles.hasMedia(in: folder)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                if !hasMedia {
+                    self.deleteDownloads(for: id)
+                } else {
+                    self.reload()
+                }
+            }
+        }
     }
 
     func deleteMedia(_ url: URL) {
