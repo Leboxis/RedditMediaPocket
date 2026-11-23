@@ -580,6 +580,7 @@ struct KDriveCollectionsStatusView: View {
     @AppStorage("kDriveDirectoryId") private var directoryId = "1"
     @AppStorage("kDriveDirectoryName") private var directoryName = ""
     @State private var filter: KDriveFreshnessFilter = .all
+    @State private var selectedIds: Set<String> = []
     @State private var confirmDownloadSync = false
     @State private var confirmUploadAndDelete = false
 
@@ -609,6 +610,26 @@ struct KDriveCollectionsStatusView: View {
 
     private var localCollections: [UserCollection] {
         model.collections
+    }
+
+    private var selectedCollections: [UserCollection] {
+        allCollections.filter { selectedIds.contains($0.id) }
+    }
+
+    private var targetDownloadCollections: [UserCollection] {
+        selectedCollections.isEmpty ? downloadableCollections : selectedCollections
+    }
+
+    private var allFilteredSelected: Bool {
+        !filteredCollections.isEmpty && filteredCollections.allSatisfy { selectedIds.contains($0.id) }
+    }
+
+    private func toggleSelection(for id: String) {
+        if selectedIds.contains(id) {
+            selectedIds.remove(id)
+        } else {
+            selectedIds.insert(id)
+        }
     }
 
     private var filteredCollections: [UserCollection] {
@@ -680,7 +701,36 @@ struct KDriveCollectionsStatusView: View {
                                     collectionRow(collection)
                                 }
                             } header: {
-                                Text(L("\(filteredCollections.count) collection(s)", "\(filteredCollections.count) collection(s)"))
+                                HStack(spacing: DS.space(2)) {
+                                    if !selectedCollections.isEmpty {
+                                        Text(L("\(selectedCollections.count) sélectionnée(s)", "\(selectedCollections.count) selected"))
+                                            .foregroundStyle(DS.accentEmphasis)
+                                    } else {
+                                        Text(L("\(filteredCollections.count) collection(s)", "\(filteredCollections.count) collection(s)"))
+                                    }
+                                    Spacer(minLength: 4)
+                                    if !allFilteredSelected {
+                                        Button(selectedCollections.isEmpty
+                                            ? L("Tout sélectionner", "Select all")
+                                            : L("Tout", "All")) {
+                                            for item in filteredCollections {
+                                                selectedIds.insert(item.id)
+                                            }
+                                        }
+                                        .font(.caption.weight(.semibold))
+                                        .textCase(nil)
+                                        .disabled(batch.isRunning)
+                                    }
+                                    if !selectedCollections.isEmpty {
+                                        Button(L("Effacer", "Clear")) {
+                                            selectedIds.removeAll()
+                                        }
+                                        .font(.caption.weight(.semibold))
+                                        .textCase(nil)
+                                        .foregroundStyle(DS.onSurfaceMuted)
+                                        .disabled(batch.isRunning)
+                                    }
+                                }
                             }
                         }
                     }
@@ -733,13 +783,17 @@ struct KDriveCollectionsStatusView: View {
         }
         .tint(DS.accentEmphasis)
         .confirmationDialog(
-            L("Télécharger, envoyer sur kDrive et nettoyer ?", "Download, upload to kDrive and clean up?"),
+            selectedCollections.isEmpty
+                ? L("Télécharger, envoyer sur kDrive et nettoyer ?", "Download, upload to kDrive and clean up?")
+                : L("Télécharger, envoyer et nettoyer (\(selectedCollections.count)) ?", "Download, upload and clean up (\(selectedCollections.count))?"),
             isPresented: $confirmDownloadSync,
             titleVisibility: .visible
         ) {
             Button(L("Lancer", "Start"), role: .destructive) {
+                let targets = targetDownloadCollections
+                selectedIds.removeAll()
                 batch.startDownloadUploadAndDelete(
-                    collections: downloadableCollections,
+                    collections: targets,
                     model: model,
                     token: token,
                     driveId: driveId,
@@ -748,8 +802,13 @@ struct KDriveCollectionsStatusView: View {
             }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            Text(L("Pour chaque collection déjà présente sur kDrive, seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés de l'app (médias et collection) avant de passer à la suivante.",
-                   "For each collection already on kDrive, only missing media will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
+            if selectedCollections.isEmpty {
+                Text(L("Pour chaque collection déjà présente sur kDrive, seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés de l'app (médias et collection) avant de passer à la suivante.",
+                       "For each collection already on kDrive, only missing media will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
+            } else {
+                Text(L("Pour chacune des \(selectedCollections.count) collection(s) sélectionnée(s), seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés automatiquement de l'app (médias et collection) avant de passer à la suivante.",
+                       "For each of the \(selectedCollections.count) selected collection(s), only missing media will be downloaded, uploaded to kDrive, then automatically removed from the app (media and collection) before moving to the next."))
+            }
         }
         .confirmationDialog(
             L("Tout envoyer sur kDrive et supprimer ?", "Upload all to kDrive and delete?"),
@@ -919,9 +978,11 @@ struct KDriveCollectionsStatusView: View {
     }
 
     private var batchActionBar: some View {
+        let targets = targetDownloadCollections
+        let hasSelection = !selectedCollections.isEmpty
         let downloadRunning = batch.mode == .downloadAll && batch.isRunning
         let uploadRunning = batch.mode == .uploadAndDelete && batch.isRunning
-        let canStartDownload = !downloadableCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
+        let canStartDownload = !targets.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
         let canStartUpload = !localCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
 
         return HStack(spacing: DS.space(2)) {
@@ -935,7 +996,11 @@ struct KDriveCollectionsStatusView: View {
                 HStack(spacing: DS.space(1)) {
                     Image(systemName: downloadRunning ? "stop.fill" : "arrow.down.circle.fill")
                         .font(.subheadline.weight(.semibold))
-                    Text(downloadRunning ? L("Arrêter", "Stop") : L("Tout télécharger", "Download all"))
+                    Text(downloadRunning
+                        ? L("Arrêter", "Stop")
+                        : (hasSelection
+                            ? L("Télécharger (\(targets.count))", "Download (\(targets.count))")
+                            : L("Tout télécharger", "Download all")))
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -953,7 +1018,9 @@ struct KDriveCollectionsStatusView: View {
             .disabled(!downloadRunning && !canStartDownload)
             .accessibilityLabel(downloadRunning
                 ? L("Arrêter le téléchargement groupé", "Stop batch download")
-                : L("Tout télécharger (\(downloadableCollections.count) collections)", "Download all (\(downloadableCollections.count) collections)"))
+                : (hasSelection
+                    ? L("Télécharger, envoyer et nettoyer la sélection (\(targets.count) collections)", "Download, upload and clean up selection (\(targets.count) collections)")
+                    : L("Tout télécharger (\(targets.count) collections)", "Download all (\(targets.count) collections)")))
 
             Button {
                 if uploadRunning {
@@ -1039,53 +1106,74 @@ struct KDriveCollectionsStatusView: View {
         let expectedFolderName = folder?.name ?? FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
         let detailColor = rowDetailColor(status: status, folder: folder)
         let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
+        let isSelected = selectedIds.contains(collection.id)
 
-        HStack(spacing: DS.space(3)) {
-            calmLeadingTile(status: status, folder: folder)
+        HStack(spacing: DS.space(2)) {
+            Button {
+                toggleSelection(for: collection.id)
+            } label: {
+                HStack(spacing: DS.space(3)) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? DS.accent : DS.onSurfaceMuted.opacity(0.45))
+                        .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(collection.displayName)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(isCalmUpToDate ? DS.onSurface.opacity(0.84) : DS.onSurface)
-                    .lineLimit(1)
+                    calmLeadingTile(status: status, folder: folder)
 
-                if let status {
-                    KDriveBicolorDetail(status: status, font: .caption)
-                } else if let folder {
-                    let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
-                    if ts > 0 {
-                        let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                        Text(L("Sur kDrive · \(date.formatted(date: .abbreviated, time: .omitted))",
-                               "On kDrive · \(date.formatted(date: .abbreviated, time: .omitted))"))
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(collection.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(isCalmUpToDate ? DS.onSurface.opacity(0.84) : DS.onSurface)
                             .lineLimit(1)
-                    } else {
-                        Text(L("Sur kDrive · \(expectedFolderName)",
-                               "On kDrive · \(expectedFolderName)"))
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
+
+                        if let status {
+                            KDriveBicolorDetail(status: status, font: .caption)
+                        } else if let folder {
+                            let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
+                            if ts > 0 {
+                                let date = Date(timeIntervalSince1970: TimeInterval(ts))
+                                Text(L("Sur kDrive · \(date.formatted(date: .abbreviated, time: .omitted))",
+                                       "On kDrive · \(date.formatted(date: .abbreviated, time: .omitted))"))
+                                    .font(.caption)
+                                    .foregroundStyle(DS.onSurfaceMuted)
+                                    .lineLimit(1)
+                            } else {
+                                Text(L("Sur kDrive · \(expectedFolderName)",
+                                       "On kDrive · \(expectedFolderName)"))
+                                    .font(.caption)
+                                    .foregroundStyle(DS.onSurfaceMuted)
+                                    .lineLimit(1)
+                            }
+                        } else if !center.remoteFolders.isEmpty {
+                            HStack(spacing: 0) {
+                                Text(L("Absent de kDrive", "Not on kDrive"))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(DS.calmRose)
+                                Text(" · \(expectedFolderName)")
+                                    .font(.caption)
+                                    .foregroundStyle(DS.onSurfaceMuted)
+                            }
                             .lineLimit(1)
+                        } else {
+                            Text(L("Non vérifié · \(expectedFolderName)", "Not checked · \(expectedFolderName)"))
+                                .font(.caption)
+                                .foregroundStyle(DS.onSurfaceMuted)
+                                .lineLimit(1)
+                        }
                     }
-                } else if !center.remoteFolders.isEmpty {
-                    HStack(spacing: 0) {
-                        Text(L("Absent de kDrive", "Not on kDrive"))
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(DS.calmRose)
-                        Text(" · \(expectedFolderName)")
-                            .font(.caption)
-                            .foregroundStyle(DS.onSurfaceMuted)
-                    }
-                    .lineLimit(1)
-                } else {
-                    Text(L("Non vérifié · \(expectedFolderName)", "Not checked · \(expectedFolderName)"))
-                        .font(.caption)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
                 }
+                .contentShape(Rectangle())
             }
-
-            Spacer(minLength: 4)
+            .buttonStyle(.plain)
+            .disabled(batch.isRunning)
+            .accessibilityLabel(collection.displayName)
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .accessibilityHint(isSelected
+                ? L("Appuyer pour désélectionner", "Tap to deselect")
+                : L("Appuyer pour sélectionner pour téléchargement, envoi kDrive et nettoyage",
+                    "Tap to select for download, kDrive upload and cleanup"))
 
             if let onDownloadCollection, shouldOfferDownload(for: status) {
                 Button {
