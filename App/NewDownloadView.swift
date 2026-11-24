@@ -724,7 +724,7 @@ struct TikTokSavedPicker: View {
                 if model.tikTokSavedLoading {
                     ProgressView(L("Recherche des collections et des sauvegardés…", "Looking for collections and saved posts…"))
                         .padding(DS.space(4))
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: DS.radiusM))
+                        .glassEffect(in: RoundedRectangle(cornerRadius: DS.radiusM))
                 }
             }
             .task {
