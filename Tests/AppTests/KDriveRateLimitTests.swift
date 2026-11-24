@@ -28,7 +28,7 @@ final class KDriveRateLimitTests: XCTestCase {
         XCTAssertEqual(center.reserveSlot(now: t0), 0)
         XCTAssertGreaterThan(center.reserveSlot(now: t0), 0)
         XCTAssertEqual(center.requestsLastMinute, 1)
-        XCTAssertEqual(center.apiRateLabel, "1/58 req/min")
+        XCTAssertEqual(center.apiRateLabel, "1/60 req/min")
     }
 
     @MainActor
@@ -82,14 +82,14 @@ final class KDriveRateLimitTests: XCTestCase {
     // MARK: - Plafond de cadence configurable
 
     @MainActor
-    func testCurrentPacingLimitDefaultsTo58() {
-        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 58)
-        XCTAssertEqual(KDriveRateLimitCenter.pacingLimitPerMinute, 58)
+    func testCurrentPacingLimitDefaultsTo60() {
+        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 60)
+        XCTAssertEqual(KDriveRateLimitCenter.pacingLimitPerMinute, 60)
     }
 
     @MainActor
     func testCurrentPacingLimitReadsConfiguredValue() {
-        for value in [30, 60] {
+        for value in [60, 120, 300, 600] {
             defaults.set(value, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
             XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), value)
         }
@@ -98,29 +98,29 @@ final class KDriveRateLimitTests: XCTestCase {
     @MainActor
     func testCurrentPacingLimitClampsOutOfRangeValues() {
         defaults.set(0, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
-        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 10)
-        defaults.set(9, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
-        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 10)
-        defaults.set(61, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
         XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 60)
-        defaults.set(500, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        defaults.set(59, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
         XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 60)
+        defaults.set(601, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 600)
+        defaults.set(1_000, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        XCTAssertEqual(KDriveRateLimitCenter.currentPacingLimit(defaults: defaults), 600)
     }
 
     @MainActor
     func testAPIRateLabelUsesConfiguredLimit() {
-        defaults.set(30, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        defaults.set(120, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
         let center = KDriveRateLimitCenter(defaults: defaults)
         let t0 = Date(timeIntervalSince1970: 1_760_000_000)
-        XCTAssertEqual(center.pacingLimit, 30)
+        XCTAssertEqual(center.pacingLimit, 120)
         XCTAssertEqual(center.reserveSlot(now: t0), 0)
-        XCTAssertEqual(center.apiRateLabel, "1/30 req/min")
+        XCTAssertEqual(center.apiRateLabel, "1/120 req/min")
 
         // Mise à jour externe (@AppStorage) prise en compte sans recréer le centre.
-        defaults.set(60, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        defaults.set(600, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
         center.refreshPacingInfo(now: t0)
-        XCTAssertEqual(center.pacingLimit, 60)
-        XCTAssertEqual(center.apiRateLabel, "1/60 req/min")
+        XCTAssertEqual(center.pacingLimit, 600)
+        XCTAssertEqual(center.apiRateLabel, "1/600 req/min")
     }
 
     @MainActor
@@ -128,18 +128,18 @@ final class KDriveRateLimitTests: XCTestCase {
         let center = KDriveRateLimitCenter(defaults: defaults)
         let t0 = Date(timeIntervalSince1970: 1_760_000_000)
         XCTAssertEqual(center.reserveSlot(now: t0), 0)
-        XCTAssertEqual(center.nextSlotDelay, 60.0 / 57.0, accuracy: 0.001)
-        XCTAssertEqual(center.apiRateLabel, "1/58 req/min")
+        XCTAssertEqual(center.nextSlotDelay, 60.0 / 59.0, accuracy: 0.001)
+        XCTAssertEqual(center.apiRateLabel, "1/60 req/min")
 
-        defaults.set(30, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
-        center.updatePacingLimit(30, now: t0)
-        XCTAssertEqual(center.nextSlotDelay, 60.0 / 29.0, accuracy: 0.001)
-        XCTAssertTrue(center.apiRateLabel.hasSuffix("/30 req/min"))
+        defaults.set(120, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        center.updatePacingLimit(120, now: t0)
+        XCTAssertEqual(center.nextSlotDelay, 60.0 / 119.0, accuracy: 0.001)
+        XCTAssertTrue(center.apiRateLabel.hasSuffix("/120 req/min"))
 
-        // Espacement effectif : à 1 s du départ, il reste ~1,07 s à attendre.
+        // Espacement effectif : à 0,2 s du départ, il reste ~0,304 s à attendre.
         XCTAssertEqual(
-            center.reserveSlot(now: t0.addingTimeInterval(1)),
-            60.0 / 29.0 - 1,
+            center.reserveSlot(now: t0.addingTimeInterval(0.2)),
+            60.0 / 119.0 - 0.2,
             accuracy: 0.001
         )
     }
@@ -149,15 +149,15 @@ final class KDriveRateLimitTests: XCTestCase {
         let center = KDriveRateLimitCenter(defaults: defaults)
         XCTAssertEqual(center.reserveSlot(now: Date()), 0)
 
-        defaults.set(500, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
-        center.updatePacingLimit(500)
+        defaults.set(900, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        center.updatePacingLimit(900)
+        XCTAssertEqual(center.pacingLimit, 600)
+        XCTAssertTrue(center.apiRateLabel.hasSuffix("/600 req/min"))
+
+        defaults.set(30, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        center.updatePacingLimit(30)
         XCTAssertEqual(center.pacingLimit, 60)
         XCTAssertTrue(center.apiRateLabel.hasSuffix("/60 req/min"))
-
-        defaults.set(3, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
-        center.updatePacingLimit(3)
-        XCTAssertEqual(center.pacingLimit, 10)
-        XCTAssertTrue(center.apiRateLabel.hasSuffix("/10 req/min"))
     }
 
     @MainActor
@@ -178,7 +178,7 @@ final class KDriveRateLimitTests: XCTestCase {
     }
 
     @MainActor
-    func testSyncAboveOfficialLimitStillSetsLimitedUntil() {
+    func testSyncAboveConfiguredCapSetsLimitedUntil() {
         defaults.set(false, forKey: KDriveRateLimitCenter.pacingEnabledDefaultsKey)
         let center = KDriveRateLimitCenter(defaults: defaults)
         let t0 = Date(timeIntervalSince1970: 1_760_000_000)
@@ -189,5 +189,20 @@ final class KDriveRateLimitTests: XCTestCase {
         defaults.set(true, forKey: KDriveRateLimitCenter.pacingEnabledDefaultsKey)
         center.sync(statusCode: 200, retryAfter: nil, isRateLimitBody: false, now: t0)
         XCTAssertEqual(center.limitedUntil, t0.addingTimeInterval(60))
+    }
+
+    @MainActor
+    func testSyncAbove60WithinHigherCapDoesNotSetLimitedUntil() {
+        defaults.set(false, forKey: KDriveRateLimitCenter.pacingEnabledDefaultsKey)
+        defaults.set(300, forKey: KDriveRateLimitCenter.pacingLimitDefaultsKey)
+        let center = KDriveRateLimitCenter(defaults: defaults)
+        let t0 = Date(timeIntervalSince1970: 1_760_000_000)
+        for _ in 0..<120 {
+            XCTAssertEqual(center.reserveSlot(now: t0), 0)
+        }
+
+        defaults.set(true, forKey: KDriveRateLimitCenter.pacingEnabledDefaultsKey)
+        center.sync(statusCode: 200, retryAfter: nil, isRateLimitBody: false, now: t0)
+        XCTAssertNil(center.limitedUntil)
     }
 }

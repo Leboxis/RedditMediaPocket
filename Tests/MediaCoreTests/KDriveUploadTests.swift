@@ -210,18 +210,18 @@ final class KDriveUploadTests: XCTestCase {
     // MARK: - Plafond de cadence réglable
 
     func testPacingLimitConstantsAndClamping() {
-        XCTAssertEqual(KDriveUploadPolicy.minPacingLimitPerMinute, 10)
-        XCTAssertEqual(KDriveUploadPolicy.defaultPacingLimitPerMinute, 58)
-        XCTAssertEqual(KDriveUploadPolicy.maxPacingLimitPerMinute, 60)
+        XCTAssertEqual(KDriveUploadPolicy.minPacingLimitPerMinute, 60)
+        XCTAssertEqual(KDriveUploadPolicy.defaultPacingLimitPerMinute, 60)
+        XCTAssertEqual(KDriveUploadPolicy.maxPacingLimitPerMinute, 600)
 
-        for value in KDriveUploadPolicy.minPacingLimitPerMinute...KDriveUploadPolicy.maxPacingLimitPerMinute {
+        for value in stride(from: KDriveUploadPolicy.minPacingLimitPerMinute, through: KDriveUploadPolicy.maxPacingLimitPerMinute, by: 10) {
             XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(value), value)
         }
-        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(0), 10)
-        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(9), 10)
-        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(-50), 10)
-        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(61), 60)
-        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(1_000), 60)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(0), 60)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(59), 60)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(-50), 60)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(601), 600)
+        XCTAssertEqual(KDriveUploadPolicy.clampedPacingLimit(1_000), 600)
     }
 
     func testPacerUpdateLimitUpdatesSpacingImmediately() {

@@ -124,10 +124,9 @@ final class KDriveRateLimitCenter {
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).
     static let officialLimitPerMinute = 60
-    /// Plafond par défaut (58) sous la limite officielle : toutes les requêtes
-    /// kDrive (chunks compris) passent par `waitForRequestSlot`, espacées
-    /// uniformément, pour ne jamais l'atteindre et éviter les 429. Le plafond
-    /// est réglable de 10 à 60 req/min dans Réglages.
+    /// Plafond par défaut (60) : toutes les requêtes kDrive (chunks compris)
+    /// passent par `waitForRequestSlot`, espacées uniformément. Le plafond
+    /// est réglable de 60 à 600 req/min dans Réglages.
     static let pacingLimitPerMinute = KDriveUploadPolicy.defaultPacingLimitPerMinute
 
     init(defaults: UserDefaults = .standard) {
@@ -279,11 +278,12 @@ final class KDriveRateLimitCenter {
             if limitedUntil != target { limitedUntil = target }
             return
         }
-        if isPacingEnabled && count > Self.officialLimitPerMinute {
+        let effectiveLimit = pacingLimit
+        if isPacingEnabled && count > effectiveLimit {
             if let oldest = pacer.oldest(at: now) {
                 let resume = oldest.addingTimeInterval(60)
                 if (limitedUntil ?? .distantPast) < now {
-                    LogCenter.err(L("kDrive : \(count) requêtes API en 60 s (limite officielle : \(Self.officialLimitPerMinute)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(count) API requests in 60 s (official limit: \(Self.officialLimitPerMinute)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
+                    LogCenter.err(L("kDrive : \(count) requêtes API en 60 s (plafond : \(effectiveLimit)/min) — reprise estimée à \(resume.formatted(date: .omitted, time: .standard)).", "kDrive: \(count) API requests in 60 s (cap: \(effectiveLimit)/min) — estimated resume at \(resume.formatted(date: .omitted, time: .standard))."))
                 }
                 let target = max(limitedUntil ?? .distantPast, resume)
                 if limitedUntil != target { limitedUntil = target }
@@ -875,7 +875,7 @@ struct KDrivePacingToggle: View {
     }
 }
 
-/// Curseur discret (10 à 60 req/min) du plafond d'upload, partagé entre
+/// Curseur discret (60 à 600 req/min) du plafond d'upload, partagé entre
 /// Réglages et le détail Infomaniak kDrive.
 struct KDrivePacingLimitSlider: View {
     @AppStorage(KDriveRateLimitCenter.pacingEnabledDefaultsKey) private var pacingEnabled = true
@@ -905,12 +905,19 @@ struct KDrivePacingLimitSlider: View {
                     }
                 ),
                 in: Double(KDriveUploadPolicy.minPacingLimitPerMinute)...Double(KDriveUploadPolicy.maxPacingLimitPerMinute),
-                step: 1
+                step: 10
             )
             .tint(DS.accentEmphasis)
             .disabled(!pacingEnabled)
             .accessibilityLabel(L("Limite d'upload", "Upload limit"))
             .accessibilityValue("\(clamped) req/min")
+            HStack {
+                Text("\(KDriveUploadPolicy.minPacingLimitPerMinute) req/min")
+                Spacer()
+                Text("\(KDriveUploadPolicy.maxPacingLimitPerMinute) req/min")
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(DS.onSurfaceMuted)
         }
         .opacity(pacingEnabled ? 1 : 0.45)
     }
@@ -1059,9 +1066,9 @@ struct KDriveSettingsDetailView: View {
                 }
 
                 if configured || rateLimit.requestsLastMinute > 0 {
-                    Text(L("API kDrive : \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requêtes/min (limite officielle)", "kDrive API: \(rateLimit.requestsLastMinute)/\(KDriveRateLimitCenter.officialLimitPerMinute) requests/min (official limit)"))
+                    Text(L("API kDrive : \(rateLimit.apiRateLabel)", "kDrive API: \(rateLimit.apiRateLabel)"))
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(rateLimit.requestsLastMinute >= 45 ? DS.accentEmphasis : DS.onSurfaceMuted)
+                        .foregroundStyle(rateLimit.requestsLastMinute >= Int(Double(rateLimit.pacingLimit) * 0.75) ? DS.accentEmphasis : DS.onSurfaceMuted)
                 }
 
                 if let status = connectionStatus {
@@ -1085,7 +1092,7 @@ struct KDriveSettingsDetailView: View {
             } header: {
                 Text(L("Cadence d'upload", "Upload pacing"))
             } footer: {
-                Text(L("Espace les requêtes jusqu’au plafond choisi sous la limite officielle Infomaniak (\(KDriveRateLimitCenter.officialLimitPerMinute)/min) pour éviter les erreurs 429.", "Spaces requests up to the chosen cap under Infomaniak's official limit (\(KDriveRateLimitCenter.officialLimitPerMinute)/min) to avoid 429 errors."))
+                Text(L("Espace les requêtes jusqu’au plafond choisi (\(KDriveUploadPolicy.minPacingLimitPerMinute) à \(KDriveUploadPolicy.maxPacingLimitPerMinute) req/min ; limite officielle Infomaniak : \(KDriveRateLimitCenter.officialLimitPerMinute)/min) pour limiter les erreurs 429.", "Spaces requests up to the chosen cap (\(KDriveUploadPolicy.minPacingLimitPerMinute)–\(KDriveUploadPolicy.maxPacingLimitPerMinute) req/min; Infomaniak's official limit: \(KDriveRateLimitCenter.officialLimitPerMinute)/min) to avoid 429 errors."))
             }
 
             if configured || directoryId != "1" || !directoryName.isEmpty {

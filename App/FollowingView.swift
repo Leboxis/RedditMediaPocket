@@ -4,6 +4,76 @@ import Combine
 import UIKit
 import ImageIO
 
+/// Ordre d'affichage des comptes dans l'onglet Suivis.
+enum FollowingSortOrder: String, CaseIterable, Identifiable, Sendable {
+    case kDriveFirst
+    case alphabetical
+
+    static let defaultsKey = "following.sortOrder"
+    static let defaultOrder: FollowingSortOrder = .kDriveFirst
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .kDriveFirst:
+            return L("Présents sur kDrive d'abord", "On kDrive first")
+        case .alphabetical:
+            return L("Ordre alphabétique (A–Z)", "Alphabetical (A–Z)")
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .kDriveFirst:
+            return "icloud.fill"
+        case .alphabetical:
+            return "textformat.abc"
+        }
+    }
+
+    /// Sépare en une passe les comptes présents sur kDrive et les autres,
+    /// chaque groupe trié par ordre alphabétique insensible à la casse.
+    static func partition(
+        _ names: [String],
+        isOnKDrive: (String) -> Bool
+    ) -> (onKDrive: [String], others: [String]) {
+        var present: [String] = []
+        var absent: [String] = []
+        present.reserveCapacity(names.count)
+        absent.reserveCapacity(names.count)
+        for name in names {
+            if isOnKDrive(name) {
+                present.append(name)
+            } else {
+                absent.append(name)
+            }
+        }
+        let compare: (String, String) -> Bool = {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        present.sort(by: compare)
+        absent.sort(by: compare)
+        return (present, absent)
+    }
+
+    /// Trie une liste de pseudos selon l'ordre actif.
+    /// - En mode `.kDriveFirst`, les comptes présents sur kDrive sont mis en avant,
+    ///   chaque groupe étant trié par ordre alphabétique insensible à la casse.
+    /// - En mode `.alphabetical`, tous les comptes sont triés de A à Z.
+    func sorted(_ names: [String], isOnKDrive: (String) -> Bool) -> [String] {
+        switch self {
+        case .alphabetical:
+            return names.sorted {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
+        case .kDriveFirst:
+            let groups = Self.partition(names, isOnKDrive: isOnKDrive)
+            return groups.onKDrive + groups.others
+        }
+    }
+}
+
 struct FollowingView: View {
     var model: Downloader
     let onDownloadAll: (String) -> Void
@@ -33,9 +103,14 @@ struct FollowingView: View {
     @State private var etats: [String: CompteSuiviEtat] = [:]
     @State private var xEtats: [String: CompteSuiviEtat] = [:]
     @State private var tikTokEtats: [String: CompteSuiviEtat] = [:]
+    @AppStorage(FollowingSortOrder.defaultsKey) private var sortOrderRaw = FollowingSortOrder.defaultOrder.rawValue
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
+
+    private var sortOrder: FollowingSortOrder {
+        FollowingSortOrder(rawValue: sortOrderRaw) ?? .defaultOrder
+    }
 
     private var kDriveConfigured: Bool {
         !kDriveToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -135,8 +210,26 @@ struct FollowingView: View {
                             : L("Vérifier si kDrive est à jour avec la source", "Check if kDrive is up to date with source"))
                     }
                 }
-                if plateforme != .reddit {
-                    ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Picker(
+                            L("Ordre d'affichage", "Sort order"),
+                            selection: Binding(
+                                get: { sortOrder },
+                                set: { sortOrderRaw = $0.rawValue }
+                            )
+                        ) {
+                            ForEach(FollowingSortOrder.allCases) { option in
+                                Label(option.label, systemImage: option.systemImage).tag(option)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .accessibilityLabel(L("Ordre d'affichage", "Sort order"))
+                    .accessibilityValue(sortOrder.label)
+
+                    if plateforme != .reddit {
                         Button {
                             nouveauPseudoManuel = ""
                             ajoutManuelPresente = true
@@ -251,42 +344,35 @@ struct FollowingView: View {
                         .foregroundStyle(DS.onSurfaceMuted)
                     }
                 }
-                Section {
-                    ForEach(friends, id: \.self) { name in
-                        let isDownloaded = markedNames.contains(name.lowercased())
-                        let redditTarget = "u/\(name)"
-                        HStack(spacing: 10) {
-                            NavigationLink {
-                                FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "person.crop.circle.fill")
-                                        .font(.title3).foregroundStyle(DS.accentEmphasis)
-                                    statusDetails(
-                                        displayName: name,
-                                        etat: etats[name.lowercased()],
-                                        kDriveFolder: kDriveFolder(pour: name),
-                                        freshness: kDriveFreshness.status(for: redditTarget)
-                                    )
-                                }
+                if sortOrder == .kDriveFirst {
+                    let groups = FollowingSortOrder.partition(friends) { kDriveFolder(pour: $0) != nil }
+                    if !groups.onKDrive.isEmpty && !groups.others.isEmpty {
+                        Section {
+                            ForEach(groups.onKDrive, id: \.self) { name in
+                                redditRow(name: name, markedNames: markedNames)
                             }
-                            rowActions(
-                                username: name,
-                                isDownloaded: isDownloaded,
-                                plateforme: .reddit,
-                                downloadTarget: name
-                            )
+                        } header: {
+                            Text(L("Dans kDrive (\(groups.onKDrive.count))", "On kDrive (\(groups.onKDrive.count))"))
                         }
-                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                            if kDriveConfigured {
-                                Button {
-                                    verifierCompte(name, plateforme: .reddit)
-                                } label: {
-                                    Label(L("Vérifier kDrive", "Check kDrive"),
-                                          systemImage: "arrow.clockwise.icloud")
-                                }
-                                .tint(DS.accentEmphasis)
+                        Section {
+                            ForEach(groups.others, id: \.self) { name in
+                                redditRow(name: name, markedNames: markedNames)
                             }
+                        } header: {
+                            Text(L("Autres comptes (\(groups.others.count))", "Other accounts (\(groups.others.count))"))
+                        }
+                    } else {
+                        Section {
+                            ForEach(groups.onKDrive + groups.others, id: \.self) { name in
+                                redditRow(name: name, markedNames: markedNames)
+                            }
+                        }
+                    }
+                } else {
+                    let sorted = sortOrder.sorted(friends) { _ in false }
+                    Section {
+                        ForEach(sorted, id: \.self) { name in
+                            redditRow(name: name, markedNames: markedNames)
                         }
                     }
                 }
@@ -373,59 +459,165 @@ struct FollowingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             List {
-                Section {
-                    ForEach(liste, id: \.self) { name in
-                        let isDownloaded = markedNames.contains(name.lowercased())
-                        let target = "\(prefixe)/\(name)"
-                        HStack(spacing: 10) {
-                            SourceMarkView(mark: marque, tint: DS.accentEmphasis, size: 18)
-                                .frame(width: 24, height: 24)
-                            statusDetails(
-                                displayName: "@\(name)",
-                                etat: etatsPlateforme[name.lowercased()],
-                                kDriveFolder: kDriveFolder(pour: target),
-                                freshness: kDriveFreshness.status(for: target)
-                            )
-                            Spacer(minLength: 8)
-                            rowActions(
-                                username: name,
-                                isDownloaded: isDownloaded,
+                if sortOrder == .kDriveFirst {
+                    let groups = FollowingSortOrder.partition(liste) { kDriveFolder(pour: "\(prefixe)/\($0)") != nil }
+                    if !groups.onKDrive.isEmpty && !groups.others.isEmpty {
+                        Section {
+                            ForEach(groups.onKDrive, id: \.self) { name in
+                                manualRow(
+                                    name: name,
+                                    plateforme: plateforme,
+                                    prefixe: prefixe,
+                                    marque: marque,
+                                    markedNames: markedNames,
+                                    etatsPlateforme: etatsPlateforme
+                                )
+                            }
+                        } header: {
+                            Text(L("Dans kDrive (\(groups.onKDrive.count))", "On kDrive (\(groups.onKDrive.count))"))
+                        }
+                        Section {
+                            ForEach(groups.others, id: \.self) { name in
+                                manualRow(
+                                    name: name,
+                                    plateforme: plateforme,
+                                    prefixe: prefixe,
+                                    marque: marque,
+                                    markedNames: markedNames,
+                                    etatsPlateforme: etatsPlateforme
+                                )
+                            }
+                        } header: {
+                            Text(L("Autres comptes (\(groups.others.count))", "Other accounts (\(groups.others.count))"))
+                        }
+                    } else {
+                        Section {
+                            ForEach(groups.onKDrive + groups.others, id: \.self) { name in
+                                manualRow(
+                                    name: name,
+                                    plateforme: plateforme,
+                                    prefixe: prefixe,
+                                    marque: marque,
+                                    markedNames: markedNames,
+                                    etatsPlateforme: etatsPlateforme
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    let sorted = sortOrder.sorted(liste) { _ in false }
+                    Section {
+                        ForEach(sorted, id: \.self) { name in
+                            manualRow(
+                                name: name,
                                 plateforme: plateforme,
-                                downloadTarget: target
+                                prefixe: prefixe,
+                                marque: marque,
+                                markedNames: markedNames,
+                                etatsPlateforme: etatsPlateforme
                             )
-                        }
-                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                            if kDriveConfigured {
-                                Button {
-                                    verifierCompte(name, plateforme: plateforme)
-                                } label: {
-                                    Label(L("Vérifier kDrive", "Check kDrive"),
-                                          systemImage: "arrow.clockwise.icloud")
-                                }
-                                .tint(DS.accentEmphasis)
-                            }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button {
-                                suiviManuelEnEdition = name
-                                pseudoManuelEdite = "@\(name)"
-                                erreurEditionManuelle = nil
-                            } label: {
-                                Label(L("Modifier", "Edit"), systemImage: "pencil")
-                            }
-                            .tint(DS.accentEmphasis)
-                            Button(role: .destructive) {
-                                supprimerSuiviManuel(name, plateforme: plateforme)
-                            } label: {
-                                Label(L("Supprimer", "Delete"), systemImage: "trash")
-                            }
-                            .tint(DS.error)
                         }
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .refreshable { await rafraichir() }
+        }
+    }
+
+    @ViewBuilder
+    private func redditRow(name: String, markedNames: Set<String>) -> some View {
+        let isDownloaded = markedNames.contains(name.lowercased())
+        let redditTarget = "u/\(name)"
+        HStack(spacing: 10) {
+            NavigationLink {
+                FollowingUserPosts(username: name, model: model, onDownloadAll: onDownloadAll)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.title3).foregroundStyle(DS.accentEmphasis)
+                    statusDetails(
+                        displayName: name,
+                        etat: etats[name.lowercased()],
+                        kDriveFolder: kDriveFolder(pour: name),
+                        freshness: kDriveFreshness.status(for: redditTarget)
+                    )
+                }
+            }
+            rowActions(
+                username: name,
+                isDownloaded: isDownloaded,
+                plateforme: .reddit,
+                downloadTarget: name
+            )
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if kDriveConfigured {
+                Button {
+                    verifierCompte(name, plateforme: .reddit)
+                } label: {
+                    Label(L("Vérifier kDrive", "Check kDrive"),
+                          systemImage: "arrow.clockwise.icloud")
+                }
+                .tint(DS.accentEmphasis)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func manualRow(
+        name: String,
+        plateforme: PlateformeSuivi,
+        prefixe: String,
+        marque: SourceMark,
+        markedNames: Set<String>,
+        etatsPlateforme: [String: CompteSuiviEtat]
+    ) -> some View {
+        let isDownloaded = markedNames.contains(name.lowercased())
+        let target = "\(prefixe)/\(name)"
+        HStack(spacing: 10) {
+            SourceMarkView(mark: marque, tint: DS.accentEmphasis, size: 18)
+                .frame(width: 24, height: 24)
+            statusDetails(
+                displayName: "@\(name)",
+                etat: etatsPlateforme[name.lowercased()],
+                kDriveFolder: kDriveFolder(pour: target),
+                freshness: kDriveFreshness.status(for: target)
+            )
+            Spacer(minLength: 8)
+            rowActions(
+                username: name,
+                isDownloaded: isDownloaded,
+                plateforme: plateforme,
+                downloadTarget: target
+            )
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if kDriveConfigured {
+                Button {
+                    verifierCompte(name, plateforme: plateforme)
+                } label: {
+                    Label(L("Vérifier kDrive", "Check kDrive"),
+                          systemImage: "arrow.clockwise.icloud")
+                }
+                .tint(DS.accentEmphasis)
+            }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                suiviManuelEnEdition = name
+                pseudoManuelEdite = "@\(name)"
+                erreurEditionManuelle = nil
+            } label: {
+                Label(L("Modifier", "Edit"), systemImage: "pencil")
+            }
+            .tint(DS.accentEmphasis)
+            Button(role: .destructive) {
+                supprimerSuiviManuel(name, plateforme: plateforme)
+            } label: {
+                Label(L("Supprimer", "Delete"), systemImage: "trash")
+            }
+            .tint(DS.error)
         }
     }
 

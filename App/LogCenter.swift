@@ -3,7 +3,7 @@ import SwiftUI
 import MediaCore
 import UIKit
 
-enum LogLevel: String, CaseIterable, Identifiable {
+enum LogLevel: String, CaseIterable, Identifiable, Sendable {
     case info, reseau, kdrive, erreur
     var id: String { rawValue }
     var label: String {
@@ -16,19 +16,43 @@ enum LogLevel: String, CaseIterable, Identifiable {
     }
     var icon: String {
         switch self {
-        case .info: return "info.circle"
+        case .info: return "info.circle.fill"
         case .reseau: return "network"
-        case .kdrive: return "icloud"
-        case .erreur: return "exclamationmark.triangle"
+        case .kdrive: return "icloud.fill"
+        case .erreur: return "exclamationmark.triangle.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .info: return DS.onSurfaceMuted
+        case .reseau: return DS.accentEmphasis
+        case .kdrive: return DS.calmSage
+        case .erreur: return DS.calmRose
         }
     }
 }
 
-struct LogEntry: Identifiable, Equatable {
-    let id = UUID()
+struct LogEntry: Identifiable, Equatable, Sendable {
+    let id: UUID
     let date: Date
     let level: LogLevel
     let message: String
+
+    init(id: UUID = UUID(), date: Date, level: LogLevel, message: String) {
+        self.id = id
+        self.date = date
+        self.level = level
+        self.message = message
+    }
+}
+
+struct LogLevelCounts: Equatable, Sendable {
+    let total: Int
+    let byLevel: [LogLevel: Int]
+
+    func count(for level: LogLevel) -> Int {
+        byLevel[level] ?? 0
+    }
 }
 
 @MainActor @Observable
@@ -43,11 +67,11 @@ final class LogCenter {
 
     private let fileURL0: URL
     private let fileURL1: URL
-    private let isoFormatter = ISO8601DateFormatter()
-    private var pendingBuffer: [LogEntry] = []
-    private var uiFlushTask: Task<Void, Never>?
-    private var pendingDiskLines: [String] = []
-    private var diskFlushScheduled = false
+    @ObservationIgnored private let isoFormatter = ISO8601DateFormatter()
+    @ObservationIgnored private var pendingBuffer: [LogEntry] = []
+    @ObservationIgnored private var uiFlushTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingDiskLines: [String] = []
+    @ObservationIgnored private var diskFlushScheduled = false
 
     private init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
@@ -181,14 +205,53 @@ final class LogCenter {
         addSync(level: .info, message: L("Journal effacé.", "Log cleared."))
     }
 
-    func filtered(level: LogLevel?, search: String) -> [LogEntry] {
+    /// Force l'intégration immédiate du tampon dans `entries` (à appeler en dehors de `View.body`).
+    func flushNow() {
         flushPendingEntries()
-        let needle = search.trimmingCharacters(in: .whitespaces)
-        return entries.filter { entry in
+    }
+
+    nonisolated static func filterEntries(
+        _ entries: [LogEntry],
+        level: LogLevel?,
+        search: String,
+        newestFirst: Bool = false
+    ) -> [LogEntry] {
+        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches = entries.filter { entry in
             if let level, entry.level != level { return false }
             if needle.isEmpty { return true }
             return entry.message.localizedCaseInsensitiveContains(needle)
         }
+        return newestFirst ? matches.reversed() : matches
+    }
+
+    nonisolated static func countEntries(
+        _ entries: [LogEntry],
+        search: String
+    ) -> LogLevelCounts {
+        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        var counts: [LogLevel: Int] = [:]
+        var total = 0
+        for entry in entries {
+            if !needle.isEmpty, !entry.message.localizedCaseInsensitiveContains(needle) {
+                continue
+            }
+            total += 1
+            counts[entry.level, default: 0] += 1
+        }
+        return LogLevelCounts(total: total, byLevel: counts)
+    }
+
+    func filtered(level: LogLevel?, search: String, newestFirst: Bool = false) -> [LogEntry] {
+        Self.filterEntries(entries, level: level, search: search, newestFirst: newestFirst)
+    }
+
+    func counts(search: String = "") -> LogLevelCounts {
+        Self.countEntries(entries, search: search)
+    }
+
+    func formattedLine(for entry: LogEntry) -> String {
+        "\(isoFormatter.string(from: entry.date)) [\(entry.level.rawValue)] \(entry.message)"
     }
 
     /// Texte d'export : par onglet (`level`) ou tout l'historique si nil,
@@ -276,6 +339,91 @@ struct LogsButton: View {
     }
 }
 
+@MainActor
+private enum LogTimestampFormatter {
+    static let timeOnly: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
+
+    static let dayAndTime: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM HH:mm:ss"
+        return f
+    }()
+
+    static func string(for date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return timeOnly.string(from: date)
+        }
+        return dayAndTime.string(from: date)
+    }
+}
+
+private struct LogEntryRow: View, Equatable {
+    let entry: LogEntry
+    let compact: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: DS.space(2)) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(entry.level.tint)
+                .frame(width: 3)
+                .padding(.vertical, 2)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: compact ? 2 : DS.space(1)) {
+                HStack(spacing: DS.space(2)) {
+                    HStack(spacing: 4) {
+                        Image(systemName: entry.level.icon)
+                            .font(.caption2.weight(.semibold))
+                        Text(entry.level.label)
+                            .font(DS.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(entry.level.tint)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(entry.level.tint.opacity(0.12), in: Capsule())
+
+                    Spacer(minLength: DS.space(2))
+
+                    Text(LogTimestampFormatter.string(for: entry.date))
+                        .font(DS.monoCaption)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                }
+
+                Text(entry.message)
+                    .font(compact ? .caption : .footnote)
+                    .foregroundStyle(DS.onSurface)
+                    .lineSpacing(compact ? 1 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, DS.space(3))
+        .padding(.vertical, compact ? DS.space(2) : DS.space(3))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            entry.level == .erreur
+                ? DS.calmRose.opacity(0.08)
+                : DS.surface,
+            in: RoundedRectangle(cornerRadius: DS.radiusM)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusM)
+                .stroke(
+                    entry.level == .erreur
+                        ? DS.calmRose.opacity(0.28)
+                        : DS.separator.opacity(0.55),
+                    lineWidth: 0.75
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entry.level.label), \(LogTimestampFormatter.string(for: entry.date)) : \(entry.message)")
+    }
+}
+
 struct LogsView: View {
     @State private var logs = LogCenter.shared
     @Environment(\.dismiss) private var dismiss
@@ -283,97 +431,188 @@ struct LogsView: View {
     @State private var level: LogLevel?
     @State private var search = ""
     @State private var exportURL: URL?
-    @State private var copied = false
+    @State private var copiedFeedback: String?
     @State private var confirmClear = false
+    @AppStorage("logs.newestFirst") private var newestFirst = true
+    @AppStorage("logs.compactMode") private var compactMode = false
+    @State private var autoFollow = true
+
+    private var hasActiveFilter: Bool {
+        level != nil || !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
-        let visible = logs.filtered(level: level, search: search)
+        let counts = logs.counts(search: search)
+        let visible = logs.filtered(level: level, search: search, newestFirst: newestFirst)
+
         return NavigationStack {
-            VStack(spacing: 0) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: DS.space(2)) {
-                        filterPill(title: L("Tout", "All"), selected: level == nil) { level = nil }
-                        ForEach(LogLevel.allCases) { item in
-                            filterPill(title: item.label, selected: level == item) { level = item }
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    filterHeader(counts: counts, visibleCount: visible.count, proxy: proxy, visible: visible)
+                    Divider().overlay(DS.separator)
+
+                    if visible.isEmpty {
+                        emptyState
+                    } else {
+                        List(visible) { entry in
+                            LogEntryRow(entry: entry, compact: compactMode)
+                                .equatable()
+                                .contextMenu {
+                                    Button {
+                                        UIPasteboard.general.string = logs.formattedLine(for: entry)
+                                        showCopiedFeedback(L("Ligne copiée", "Line copied"))
+                                    } label: {
+                                        Label(L("Copier la ligne", "Copy line"), systemImage: "doc.on.doc")
+                                    }
+                                    Button {
+                                        UIPasteboard.general.string = entry.message
+                                        showCopiedFeedback(L("Message copié", "Message copied"))
+                                    } label: {
+                                        Label(L("Copier le message", "Copy message"), systemImage: "text.quote")
+                                    }
+                                    Divider()
+                                    if level == entry.level {
+                                        Button {
+                                            level = nil
+                                        } label: {
+                                            Label(L("Afficher tous les niveaux", "Show all levels"), systemImage: "line.3.horizontal.decrease.circle")
+                                        }
+                                    } else {
+                                        Button {
+                                            level = entry.level
+                                        } label: {
+                                            Label(L("Filtrer : \(entry.level.label)", "Filter: \(entry.level.label)"), systemImage: entry.level.icon)
+                                        }
+                                    }
+                                }
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                .listRowInsets(EdgeInsets(
+                                    top: compactMode ? 3 : 5,
+                                    leading: DS.space(4),
+                                    bottom: compactMode ? 3 : 5,
+                                    trailing: DS.space(4)
+                                ))
+                                .id(entry.id)
                         }
-                    }
-                    .padding(.horizontal, DS.space(4))
-                    .padding(.vertical, DS.space(2))
-                }
-                Text(L("\(visible.count) lignes", "\(visible.count) lines"))
-                    .font(DS.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
-                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, DS.space(4))
-                ScrollViewReader { proxy in
-                    List(visible) { entry in
-                        HStack(alignment: .top, spacing: DS.space(2)) {
-                            Image(systemName: entry.level.icon).foregroundStyle(entry.level == .erreur ? DS.error : DS.onSurfaceMuted).frame(width: 22)
-                            VStack(alignment: .leading, spacing: DS.space(1)) {
-                                Text(entry.message).font(.caption).textSelection(.enabled)
-                                Text(entry.date.formatted(date: .omitted, time: .standard)).font(DS.caption2).foregroundStyle(DS.onSurfaceMuted).monospacedDigit()
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .id(entry.id)
-                    }
-                    .listStyle(.plain)
-                    .onChange(of: logs.entries.count) { _, _ in
-                        if let last = logs.filtered(level: level, search: search).last {
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .background(DS.background)
+                        .onChange(of: logs.entries.count) { _, _ in
+                            guard autoFollow else { return }
+                            let target = newestFirst ? visible.first : visible.last
+                            guard let target else { return }
+                            let anchor: UnitPoint = newestFirst ? .top : .bottom
                             if reduceMotion {
-                                proxy.scrollTo(last.id, anchor: .bottom)
+                                proxy.scrollTo(target.id, anchor: anchor)
                             } else {
-                                withAnimation(DS.micro) { proxy.scrollTo(last.id, anchor: .bottom) }
+                                withAnimation(DS.micro) { proxy.scrollTo(target.id, anchor: anchor) }
                             }
                         }
+                    }
+                }
+                .background(DS.background)
+                .overlay(alignment: .bottom) {
+                    if let copiedFeedback {
+                        Label(copiedFeedback, systemImage: "checkmark.circle.fill")
+                            .font(DS.caption)
+                            .foregroundStyle(DS.onAccent)
+                            .padding(.horizontal, DS.space(4))
+                            .padding(.vertical, DS.space(2))
+                            .background(DS.accent, in: Capsule())
+                            .shadow(
+                                color: DS.shadowColor.opacity(DS.shadowOpacity),
+                                radius: DS.shadowRadius,
+                                y: DS.shadowY
+                            )
+                            .padding(.bottom, DS.space(4))
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .accessibilityAddTraits(.isStaticText)
                     }
                 }
             }
-            .searchable(text: $search, prompt: L("Rechercher", "Search"))
-            .navigationTitle(L("Journal", "Logs"))
+            .searchable(text: $search, prompt: L("Filtrer le journal…", "Filter logs…"))
+            .navigationTitle(L("Journal de bord", "Logs"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(role: .destructive) { confirmClear = true } label: {
-                        Text(L("Effacer", "Clear"))
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Toggle(isOn: $newestFirst) {
+                            Label(L("Plus récents en premier", "Newest first"), systemImage: "arrow.up.arrow.down")
+                        }
+                        Toggle(isOn: $compactMode) {
+                            Label(L("Affichage compact", "Compact display"), systemImage: "rectangle.compress.vertical")
+                        }
+                        Toggle(isOn: $autoFollow) {
+                            Label(L("Suivi automatique", "Auto-follow"), systemImage: "arrow.down.to.line")
+                        }
+                        Divider()
+                        Button(role: .destructive) {
+                            confirmClear = true
+                        } label: {
+                            Label(L("Effacer le journal", "Clear logs"), systemImage: "trash")
+                        }
+                        .disabled(logs.entries.isEmpty)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
-                    .disabled(logs.entries.isEmpty)
+                    .accessibilityLabel(L("Options du journal", "Log options"))
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button {
                             logs.copyToPasteboard(level: level, search: search)
-                            copied = true
+                            showCopiedFeedback(L("Vue copiée", "View copied"))
                         } label: {
-                            Label(L("Copier l'onglet courant", "Copy current tab"), systemImage: "doc.on.doc")
+                            Label(L("Copier la vue filtrée", "Copy filtered view"), systemImage: "doc.on.doc")
                         }
+                        .disabled(visible.isEmpty)
+                        Button {
+                            logs.copyToPasteboard(level: .erreur)
+                            showCopiedFeedback(L("Erreurs copiées", "Errors copied"))
+                        } label: {
+                            Label(L("Copier les erreurs (\(logs.errorCount))", "Copy errors (\(logs.errorCount))"), systemImage: "exclamationmark.triangle")
+                        }
+                        .disabled(logs.errorCount == 0)
                         Button {
                             logs.copyToPasteboard()
-                            copied = true
+                            showCopiedFeedback(L("Journal complet copié", "Full log copied"))
                         } label: {
                             Label(L("Copier tout", "Copy everything"), systemImage: "doc.on.doc.fill")
                         }
+                        .disabled(logs.entries.isEmpty)
+
                         Divider()
-                        Button(L("Exporter l'onglet courant", "Export current tab")) {
+
+                        Button {
                             exportURL = logs.exportFile(level: level, search: search)
+                        } label: {
+                            Label(L("Exporter la vue filtrée (.txt)", "Export filtered view (.txt)"), systemImage: "square.and.arrow.up")
                         }
-                        Divider()
-                        Button(L("Exporter tout", "Export everything")) {
+                        .disabled(visible.isEmpty)
+                        Button {
+                            exportURL = logs.exportFile(level: .erreur)
+                        } label: {
+                            Label(L("Exporter les erreurs (.txt)", "Export errors (.txt)"), systemImage: "exclamationmark.triangle")
+                        }
+                        .disabled(logs.errorCount == 0)
+                        Button {
                             exportURL = logs.exportFile()
+                        } label: {
+                            Label(L("Exporter tout (.txt)", "Export everything (.txt)"), systemImage: "doc.badge.arrow.up")
                         }
+                        .disabled(logs.entries.isEmpty)
                     } label: {
-                        Image(systemName: copied ? "checkmark" : "square.and.arrow.up")
+                        Image(systemName: copiedFeedback != nil ? "checkmark" : "square.and.arrow.up")
                     }
-                    .onChange(of: copied) { _, _ in
-                        guard copied else { return }
-                        Task {
-                            try? await Task.sleep(nanoseconds: 1_500_000_000)
-                            copied = false
-                        }
-                    }
-                    .accessibilityLabel(L("Exporter les logs", "Export logs"))
+                    .accessibilityLabel(L("Partager ou copier les logs", "Share or copy logs"))
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(L("Fermer", "Close")) { dismiss() }
                 }
+            }
+            .onAppear {
+                logs.flushNow()
             }
             .confirmationDialog(L("Effacer le journal ?", "Clear logs?"), isPresented: $confirmClear, titleVisibility: .visible) {
                 Button(L("Effacer", "Clear"), role: .destructive) { logs.clear() }
@@ -391,17 +630,203 @@ struct LogsView: View {
         .tint(DS.accentEmphasis)
     }
 
-    private func filterPill(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(DS.caption)
-                .padding(.horizontal, DS.space(3))
-                .padding(.vertical, DS.space(1))
-                .frame(minHeight: 36)
-                .foregroundStyle(selected ? DS.onAccent : DS.onSurface)
-                .background(selected ? DS.accent : DS.surface, in: Capsule())
+    @ViewBuilder
+    private func filterHeader(
+        counts: LogLevelCounts,
+        visibleCount: Int,
+        proxy: ScrollViewProxy,
+        visible: [LogEntry]
+    ) -> some View {
+        VStack(spacing: DS.space(2)) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: DS.space(2)) {
+                    filterChip(
+                        title: L("Tout", "All"),
+                        icon: "tray.full.fill",
+                        count: counts.total,
+                        tint: DS.accent,
+                        selected: level == nil,
+                        highlightBadge: false
+                    ) { level = nil }
+
+                    ForEach(LogLevel.allCases) { item in
+                        let itemCount = counts.count(for: item)
+                        filterChip(
+                            title: item.label,
+                            icon: item.icon,
+                            count: itemCount,
+                            tint: item.tint,
+                            selected: level == item,
+                            highlightBadge: item == .erreur && itemCount > 0
+                        ) { level = (level == item) ? nil : item }
+                    }
+                }
+                .padding(.horizontal, DS.space(4))
+            }
+
+            HStack(spacing: DS.space(2)) {
+                Text(hasActiveFilter
+                     ? L("\(visibleCount) / \(logs.entries.count) entrées", "\(visibleCount) / \(logs.entries.count) entries")
+                     : L("\(visibleCount) entrées", "\(visibleCount) entries"))
+                    .font(DS.monoCaption)
+                    .foregroundStyle(DS.onSurfaceMuted)
+
+                Spacer()
+
+                Button {
+                    newestFirst.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: newestFirst ? "arrow.down" : "arrow.up")
+                        Text(newestFirst ? L("Récents", "Newest") : L("Anciens", "Oldest"))
+                    }
+                    .font(DS.caption2.weight(.medium))
+                    .foregroundStyle(DS.onSurface)
+                    .padding(.horizontal, DS.space(2))
+                    .padding(.vertical, 4)
+                    .background(DS.surface, in: Capsule())
+                    .overlay(Capsule().stroke(DS.separator.opacity(0.7), lineWidth: 0.75))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L("Changer l'ordre chronologique", "Toggle chronological order"))
+                .accessibilityValue(newestFirst ? L("Plus récents en premier", "Newest first") : L("Plus anciens en premier", "Oldest first"))
+
+                Button {
+                    autoFollow.toggle()
+                } label: {
+                    Image(systemName: autoFollow ? "dot.radiowaves.left.and.right" : "pause.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(autoFollow ? DS.accentEmphasis : DS.onSurfaceMuted)
+                        .frame(width: 28, height: 24)
+                        .background(
+                            autoFollow ? DS.accentEmphasis.opacity(0.12) : DS.surface,
+                            in: Capsule()
+                        )
+                        .overlay(Capsule().stroke(DS.separator.opacity(0.7), lineWidth: 0.75))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L("Suivi automatique en direct", "Live auto-follow"))
+                .accessibilityValue(autoFollow ? L("Activé", "On") : L("En pause", "Paused"))
+
+                if let edge = newestFirst ? visible.last : visible.first {
+                    Button {
+                        let anchor: UnitPoint = newestFirst ? .bottom : .top
+                        if reduceMotion {
+                            proxy.scrollTo(edge.id, anchor: anchor)
+                        } else {
+                            withAnimation(DS.micro) { proxy.scrollTo(edge.id, anchor: anchor) }
+                        }
+                    } label: {
+                        Image(systemName: newestFirst ? "arrow.down.to.line" : "arrow.up.to.line")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(DS.onSurfaceMuted)
+                            .frame(width: 28, height: 24)
+                            .background(DS.surface, in: Capsule())
+                            .overlay(Capsule().stroke(DS.separator.opacity(0.7), lineWidth: 0.75))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(newestFirst
+                        ? L("Aller aux entrées les plus anciennes", "Jump to oldest entries")
+                        : L("Aller aux entrées les plus récentes", "Jump to newest entries"))
+                }
+            }
+            .padding(.horizontal, DS.space(4))
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, DS.space(2))
+        .background(DS.background)
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        if hasActiveFilter {
+            ContentUnavailableView {
+                Label(L("Aucune entrée", "No matching entries"), systemImage: "magnifyingglass")
+            } description: {
+                Text(L("Aucune ligne ne correspond au filtre ou à la recherche en cours.", "No log entries match the active filter or search query."))
+            } actions: {
+                Button(L("Réinitialiser les filtres", "Reset filters")) {
+                    level = nil
+                    search = ""
+                }
+                .buttonStyle(DSPrimaryButtonStyle())
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(DS.background)
+        } else {
+            ContentUnavailableView {
+                Label(L("Journal vide", "No logs yet"), systemImage: "doc.text")
+            } description: {
+                Text(L("Les événements réseau, kDrive et erreurs apparaîtront ici automatiquement.", "Network, kDrive, and error events will appear here automatically."))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(DS.background)
+        }
+    }
+
+    private func showCopiedFeedback(_ message: String) {
+        if reduceMotion {
+            copiedFeedback = message
+        } else {
+            withAnimation(DS.micro) { copiedFeedback = message }
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard copiedFeedback == message else { return }
+            if reduceMotion {
+                copiedFeedback = nil
+            } else {
+                withAnimation(DS.micro) { copiedFeedback = nil }
+            }
+        }
+    }
+
+    private func filterChip(
+        title: String,
+        icon: String,
+        count: Int,
+        tint: Color,
+        selected: Bool,
+        highlightBadge: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(selected ? DS.onAccent : tint)
+
+                Text(title)
+                    .font(DS.caption)
+                    .foregroundStyle(selected ? DS.onAccent : DS.onSurface)
+
+                Text("\(count)")
+                    .font(DS.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(selected ? DS.onAccent : (highlightBadge ? DS.calmRose : DS.onSurfaceMuted))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        selected
+                            ? DS.onAccent.opacity(0.22)
+                            : (highlightBadge ? DS.calmRose.opacity(0.14) : DS.background),
+                        in: Capsule()
+                    )
+            }
+            .padding(.horizontal, DS.space(3))
+            .padding(.vertical, DS.space(1))
+            .frame(minHeight: 34)
+            .background(selected ? tint : DS.surface, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(
+                        selected
+                            ? tint
+                            : (highlightBadge ? DS.calmRose.opacity(0.4) : DS.separator.opacity(0.7)),
+                        lineWidth: 0.75
+                    )
+            )
+        }
+        .buttonStyle(DSPressableButtonStyle())
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityLabel("\(title), \(count)")
     }
 }

@@ -30,6 +30,8 @@ private struct DownloadSettings: View {
     @State private var tikTokLoginPresented = false
     @State private var instagramLoginPresented = false
     @State private var confirmDeleteAll = false
+    @State private var confirmDeleteRemoteSessions = false
+    @State private var hasCloudflareAPIKey = KeychainStore.get() != nil
     @State private var diagnosticsPresented = false
     @State private var logoutServiceTitle: String?
     @State private var logoutAction: (() async -> Void)?
@@ -168,66 +170,66 @@ private struct DownloadSettings: View {
                 }
 
                 Section {
+                    SettingsRow(
+                        symbol: "person.2",
+                        tint: cloudflareStatusColor(
+                            etat: synchronisation.etat,
+                            lastSync: synchronisation.derniereSynchronisation
+                        ),
+                        title: L("Comptes suivis", "Followed accounts"),
+                        status: cloudflareFollowsStatus,
+                        statusColor: cloudflareStatusColor(
+                            etat: synchronisation.etat,
+                            lastSync: synchronisation.derniereSynchronisation
+                        ),
+                        tap: { syncCloudflareFollows() },
+                        menuItems: cloudflareFollowsMenuItems)
+                    SettingsRow(
+                        symbol: "key.icloud",
+                        tint: cloudflareStatusColor(
+                            etat: sessions.etat,
+                            lastSync: sessions.derniereSynchronisation
+                        ),
+                        title: L("Sessions", "Sessions"),
+                        status: cloudflareSessionsStatus,
+                        statusColor: cloudflareStatusColor(
+                            etat: sessions.etat,
+                            lastSync: sessions.derniereSynchronisation
+                        ),
+                        tap: { Task { await sessions.synchroniser() } },
+                        menuItems: cloudflareSessionsMenuItems)
+                } header: {
                     HStack {
-                        Text(L("État", "Status"))
+                        Text("Cloudflare")
                         Spacer()
-                        Text(synchronisation.etat)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    if let date = synchronisation.derniereSynchronisation {
-                        Text("\(L("Dernière synchronisation", "Last sync")) : \(date.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button(L("Synchroniser maintenant", "Sync now")) {
-                        Task {
-                            if reddit.hasSession, let suivis = try? await model.followedUsers() {
-                                SuiviStore.enregistrerListe(suivis, notifier: false)
+                        Button {
+                            clePresentee = true
+                        } label: {
+                            HStack(spacing: DS.space(1)) {
+                                Image(systemName: hasCloudflareAPIKey ? "key.fill" : "key")
+                                Text(hasCloudflareAPIKey ? L("Clé API", "API key") : L("Ajouter clé API", "Add API key"))
                             }
-                            await synchronisation.synchroniser()
+                            .font(.caption.weight(.medium))
+                            .textCase(nil)
+                            .foregroundStyle(hasCloudflareAPIKey ? DS.onSurfaceMuted : DS.warning)
+                            .padding(.vertical, 2)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(hasCloudflareAPIKey ? L("Modifier la clé API Cloudflare", "Edit Cloudflare API key") : L("Configurer la clé API Cloudflare", "Configure Cloudflare API key"))
                     }
-                    Button(L("Restaurer depuis le serveur", "Restore from server")) {
-                        Task { await synchronisation.restaurer() }
-                    }
-                    Button(L("Clé API", "API key")) { clePresentee = true }
-                } header: {
-                    Text(L("Comptes suivis (Cloudflare)", "Followed accounts (Cloudflare)"))
-                }
-                Section {
-                    HStack {
-                        Text(L("État", "Status"))
-                        Spacer()
-                        Text(sessions.etat)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    if let date = sessions.derniereSynchronisation {
-                        Text("\(L("Dernière synchronisation", "Last sync")) : \(date.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !sessions.sitesSauvegardes.isEmpty {
-                        Text("\(L("Sites sauvegardés", "Backed-up sites")) : \(sessions.sitesSauvegardes.joined(separator: ", "))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Button(L("Synchroniser les sessions", "Sync sessions")) {
-                        Task { await sessions.synchroniser() }
-                    }
-                    Button(L("Restaurer les sessions", "Restore sessions")) {
-                        Task { await sessions.restaurer() }
-                    }
-                    Button(L("Effacer les sessions du serveur", "Clear remote sessions"), role: .destructive) {
-                        Task { await sessions.supprimerSauvegarde() }
-                    }
-                } header: {
-                    Text(L("Sessions (Cloudflare)", "Sessions (Cloudflare)"))
+                } footer: {
+                    Text(L("Toucher une ligne synchronise ; « … » ouvre restauration et suppression.", "Tap a row to sync; “…” opens restore and delete."))
                 }
             }
             .sheet(isPresented: $clePresentee) {
                 APIKeySettingsView()
+            }
+            .onChange(of: clePresentee) { _, shown in
+                if !shown { hasCloudflareAPIKey = KeychainStore.get() != nil }
+            }
+            .task {
+                hasCloudflareAPIKey = KeychainStore.get() != nil
             }
             .fullScreenCover(isPresented: $loginPresented) { RedditLogin() }
             .fullScreenCover(isPresented: $xLoginPresented) { XLogin() }
@@ -239,6 +241,18 @@ private struct DownloadSettings: View {
                 Button(L("Annuler", "Cancel"), role: .cancel) { }
             } message: {
                 Text(L("Tous les médias téléchargés seront définitivement effacés.", "All downloaded media will be permanently deleted."))
+            }
+            .confirmationDialog(
+                L("Effacer les sessions du serveur ?", "Clear remote sessions?"),
+                isPresented: $confirmDeleteRemoteSessions,
+                titleVisibility: .visible
+            ) {
+                Button(L("Effacer du serveur", "Clear remote"), role: .destructive) {
+                    Task { await sessions.supprimerSauvegarde() }
+                }
+                Button(L("Annuler", "Cancel"), role: .cancel) { }
+            } message: {
+                Text(L("Les cookies de session sauvegardés sur Cloudflare seront supprimés. Vos connexions locales restent intactes.", "Session cookies backed up on Cloudflare will be removed. Local sessions remain intact."))
             }
             .confirmationDialog(
                 L("Déconnecter \(logoutServiceTitle ?? "") ?", "Sign out of \(logoutServiceTitle ?? "")?"),
@@ -280,6 +294,86 @@ private struct DownloadSettings: View {
     private func sessionStatusColor(hasSession: Bool, rejected: Bool) -> Color {
         if rejected { return DS.error }
         return hasSession ? DS.success : DS.warning
+    }
+
+    private func cloudflareStatusColor(etat: String, lastSync: Date?) -> Color {
+        if !hasCloudflareAPIKey { return DS.warning }
+        let lower = etat.lowercased()
+        if lower.contains("erreur") || lower.contains("error") || lower.contains("impossible") || lower.contains("failed") {
+            return DS.error
+        }
+        return lastSync != nil ? DS.success : DS.onSurfaceMuted
+    }
+
+    private func cloudflareShortDate(_ date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    private var cloudflareFollowsStatus: String {
+        var parts = [synchronisation.etat]
+        if let date = synchronisation.derniereSynchronisation {
+            parts.append(cloudflareShortDate(date))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var cloudflareSessionsStatus: String {
+        var parts = [sessions.etat]
+        if !sessions.sitesSauvegardes.isEmpty {
+            parts.append(sessions.sitesSauvegardes.joined(separator: ", "))
+        }
+        if let date = sessions.derniereSynchronisation {
+            parts.append(cloudflareShortDate(date))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func syncCloudflareFollows() {
+        Task {
+            if reddit.hasSession, let suivis = try? await model.followedUsers() {
+                SuiviStore.enregistrerListe(suivis, notifier: false)
+            }
+            await synchronisation.synchroniser()
+        }
+    }
+
+    private var cloudflareFollowsMenuItems: [SettingsRow.MenuItem] {
+        [
+            .init(
+                label: L("Synchroniser maintenant", "Sync now"),
+                systemImage: "arrow.triangle.2.circlepath",
+                action: { syncCloudflareFollows() }
+            ),
+            .init(
+                label: L("Restaurer depuis le serveur", "Restore from server"),
+                systemImage: "arrow.down.circle",
+                action: { Task { await synchronisation.restaurer() } }
+            )
+        ]
+    }
+
+    private var cloudflareSessionsMenuItems: [SettingsRow.MenuItem] {
+        [
+            .init(
+                label: L("Synchroniser les sessions", "Sync sessions"),
+                systemImage: "arrow.triangle.2.circlepath",
+                action: { Task { await sessions.synchroniser() } }
+            ),
+            .init(
+                label: L("Restaurer les sessions", "Restore sessions"),
+                systemImage: "arrow.down.circle",
+                action: { Task { await sessions.restaurer() } }
+            ),
+            .init(
+                label: L("Effacer du serveur", "Clear remote"),
+                systemImage: "trash",
+                destructive: true,
+                action: { confirmDeleteRemoteSessions = true }
+            )
+        ]
     }
 
     private var redditMenuItems: [SettingsRow.MenuItem] {

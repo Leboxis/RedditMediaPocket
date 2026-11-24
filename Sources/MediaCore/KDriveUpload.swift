@@ -24,11 +24,10 @@ public enum KDriveUploadPolicy {
         uploadConcurrencyOptions.contains(value) ? value : maxConcurrentUploads
     }
 
-    /// Bornes du plafond de cadence réglable (10 à 60 req/min) : jamais
-    /// au-delà de la limite officielle Infomaniak.
-    public static let minPacingLimitPerMinute = 10
-    public static let defaultPacingLimitPerMinute = 58
-    public static let maxPacingLimitPerMinute = 60
+    /// Bornes du plafond de cadence réglable (60 à 600 req/min).
+    public static let minPacingLimitPerMinute = 60
+    public static let defaultPacingLimitPerMinute = 60
+    public static let maxPacingLimitPerMinute = 600
 
     /// Ramène un plafond de cadence dans les bornes autorisées.
     public static func clampedPacingLimit(_ value: Int) -> Int {
