@@ -11,19 +11,20 @@ import MediaCore
 /// session connectée (`sessionid` + `csrftoken`) rend les publications
 /// complètes, vidéos comprises. Ce stockage est distinct de ceux de Reddit, de
 /// X et de TikTok : une déconnexion Instagram n'efface aucune autre session.
-@MainActor final class InstagramSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
+@Observable
+@MainActor final class InstagramSession: NSObject, WKHTTPCookieStoreObserver {
     static let shared = InstagramSession()
     /// Profil WebKit persistant réservé à Instagram. UUID constant : la même
     /// session est retrouvée au prochain lancement.
     let store = WKWebsiteDataStore(forIdentifier:
         UUID(uuidString: "3C9D7E41-2B58-4A6F-9E10-7D4B8A5C2F63")!)
-    @Published private(set) var hasAPICredentials = false
-    @Published private(set) var hasSession = false
-    @Published private(set) var apiAccepted = false
-    @Published private(set) var apiRejected = false
+    private(set) var hasAPICredentials = false
+    private(set) var hasSession = false
+    private(set) var apiAccepted = false
+    private(set) var apiRejected = false
     private var credentialValues: [String] = []
     private var cachedCookies: [HTTPCookie] = []
-    @Published private(set) var clearing = false
+    private(set) var clearing = false
 
     private override init() {
         super.init()
@@ -106,7 +107,7 @@ import MediaCore
 struct InstagramLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var session = InstagramSession.shared
+    private var session = InstagramSession.shared
     @State private var errorMessage: String?
     @State private var webRevision = 0
 

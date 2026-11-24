@@ -4,7 +4,7 @@ import MediaCore
 /// Onglet **Réglages** : le formulaire des réglages, embarqué tel quel dans un
 /// onglet (sans bouton « OK » de fermeture).
 struct SettingsTabView: View {
-    @ObservedObject var model: Downloader
+    @Bindable var model: Downloader
 
     var body: some View {
         DownloadSettings(model: model, embedded: true)
@@ -12,19 +12,19 @@ struct SettingsTabView: View {
 }
 
 private struct DownloadSettings: View {
-    @ObservedObject var model: Downloader
+    @Bindable var model: Downloader
     /// État de la synchronisation Cloudflare, partagé avec toute l'app.
-    @ObservedObject private var synchronisation = SyncService.shared
+    private var synchronisation = SyncService.shared
     /// État de la synchronisation des cookies de session.
-    @ObservedObject private var sessions = SessionCookieSyncService.shared
+    private var sessions = SessionCookieSyncService.shared
     @State private var clePresentee = false
     /// Vrai quand la vue est embarquée dans un onglet (pas de bouton « OK »).
     let embedded: Bool
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    @ObservedObject private var reddit = RedditSession.shared
-    @ObservedObject private var xSession = XSession.shared
-    @ObservedObject private var tikTokSession = TikTokSession.shared
-    @ObservedObject private var instagramSession = InstagramSession.shared
+    private var reddit = RedditSession.shared
+    private var xSession = XSession.shared
+    private var tikTokSession = TikTokSession.shared
+    private var instagramSession = InstagramSession.shared
     @State private var loginPresented = false
     @State private var xLoginPresented = false
     @State private var tikTokLoginPresented = false

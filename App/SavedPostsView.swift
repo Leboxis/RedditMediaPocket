@@ -35,7 +35,8 @@ private func savedFeedEntries(from posts: [Post]) -> [SavedFeedEntry] {
 /// Réserve de fichiers temporaires du feed : les originaux résolus sont
 /// conservés pendant toute la durée du feed (retour arrière instantané,
 /// sans retéléchargement) et purgés à la fermeture.
-@MainActor final class FeedTempBin: ObservableObject {
+@MainActor @Observable
+final class FeedTempBin {
     private(set) var urls: [URL] = []
     func add(_ urls: [URL]) {
         self.urls.append(contentsOf: urls)
@@ -61,7 +62,8 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 /// temporaires résolues sont stockées par entry.id pour que FeedCard
 /// réutilise le préchargement sans retélécharger. Les tâches en cours
 /// sont dédupliquées : préchargement et carte attendent la même tâche.
-@MainActor final class FeedPreloadStore: ObservableObject {
+@MainActor @Observable
+final class FeedPreloadStore {
     private var cache: [String: [URL]] = [:]
     private var tasks: [String: Task<[URL], Error>] = [:]
     private var model: Downloader?
@@ -131,10 +133,10 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 }
 
 struct SavedPostsView: View {
-    @ObservedObject var model: Downloader
+    var model: Downloader
     let onDownloadAll: (String) -> Void
 
-    @ObservedObject private var session = RedditSession.shared
+    private var session = RedditSession.shared
     @Environment(\.dismiss) private var dismiss
     @State private var posts: [Post]?
     @State private var errorMessage: String?
@@ -283,9 +285,9 @@ struct SavedPostsView: View {
 /// immédiatement ; chaque carte résout son original en lazy.
 struct SavedFeedView: View {
     let posts: [Post]
-    @ObservedObject var model: Downloader
-    @StateObject private var bin = FeedTempBin()
-    @StateObject private var preload = FeedPreloadStore()
+    var model: Downloader
+    @State private var bin = FeedTempBin()
+    @State private var preload = FeedPreloadStore()
     @State private var visibleID: SavedFeedEntry.ID?
     @State private var entries: [SavedFeedEntry] = []
 
@@ -327,7 +329,7 @@ struct SavedFeedView: View {
 private struct PagedFeed: View {
     let entries: [SavedFeedEntry]
     @Binding var visibleID: SavedFeedEntry.ID?
-    @ObservedObject var preload: FeedPreloadStore
+    var preload: FeedPreloadStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -362,7 +364,7 @@ private struct PagedFeed: View {
 private struct FeedCard: View, Equatable {
     let entry: SavedFeedEntry
     let isActive: Bool
-    @ObservedObject var preload: FeedPreloadStore
+    var preload: FeedPreloadStore
     @State private var thumb: UIImage?
     @State private var full: UIImage?
     @State private var videoURL: URL?
@@ -556,7 +558,7 @@ private struct AutoPlayVideo: UIViewControllerRepresentable {
 
 private struct SavedPostRow: View {
     let post: Post
-    @ObservedObject var model: Downloader
+    var model: Downloader
 
     var body: some View {
         let media = MediaExtractor.extract(post.html)
@@ -624,7 +626,7 @@ private struct SavedMediaCard: View {
     let feedID: String
     let galleryID: String?
     let thumbnail: URL?
-    @ObservedObject var model: Downloader
+    var model: Downloader
     @State private var image: UIImage?
     @State private var imageLoaded = false
     @State private var opening = false

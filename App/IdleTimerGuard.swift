@@ -1,6 +1,6 @@
 import SwiftUI
 import UIKit
-import Combine
+import Observation
 import Foundation
 
 /// Garde l'écran allumé pendant les transferts actifs — téléchargements et envois
@@ -18,43 +18,42 @@ final class IdleTimerGuard {
     private var envoiContinuActif = false
     private var envoiLotActif = false
     private var premierPlan = true
-    private var abonnements = Set<AnyCancellable>()
 
     private init() {}
 
-    /// Observe les trois sources de transfert. À appeler une fois avec le
-    /// téléchargeur possédé par l'écran principal.
+    /// Observe les trois sources de transfert via le suivi d'observations
+    /// (macro `@Observable`) : chaque changement de l'une des propriétés
+    /// suivies relance la boucle et réévalue la veille. À appeler une fois
+    /// avec le téléchargeur possédé par l'écran principal.
     func surveiller(_ downloader: Downloader) {
-        abonnements.removeAll()
-
-        downloader.$running
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] actif in
-                self?.telechargementActif = actif
-                self?.appliquer()
-            }
-            .store(in: &abonnements)
-
-        KDriveContinuousUploadController.shared.$isUploading
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] actif in
-                self?.envoiContinuActif = actif
-                self?.appliquer()
-            }
-            .store(in: &abonnements)
-
-        KDriveService.shared.$isUploading
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] actif in
-                self?.envoiLotActif = actif
-                self?.appliquer()
-            }
-            .store(in: &abonnements)
+        telechargementActif = downloader.running
+        appliquer()
+        observerSuivant(downloader)
     }
 
     func scenePhaseDidChange(_ phase: ScenePhase) {
         premierPlan = (phase == .active)
         appliquer()
+    }
+
+    private func observerSuivant(_ downloader: Downloader) {
+        withObservationTracking {
+            _ = downloader.running
+            _ = KDriveContinuousUploadController.shared.isUploading
+            _ = KDriveService.shared.isUploading
+        } onChange: {
+            Task { @MainActor in
+                self.reevaluer(downloader)
+            }
+        }
+    }
+
+    private func reevaluer(_ downloader: Downloader) {
+        telechargementActif = downloader.running
+        envoiContinuActif = KDriveContinuousUploadController.shared.isUploading
+        envoiLotActif = KDriveService.shared.isUploading
+        appliquer()
+        observerSuivant(downloader)
     }
 
     private func appliquer() {

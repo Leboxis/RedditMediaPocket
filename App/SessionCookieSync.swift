@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import MediaCore
+import Observation
 
 extension Notification.Name {
     /// Envoyée quand une session locale change (connexion ou déconnexion).
@@ -44,12 +45,13 @@ public enum SiteSession: String, CaseIterable, Sendable {
 /// - Les changements survenus pendant une restauration sont ignorés pour ne pas
 ///   écraser la copie distante avec un magasin encore vide.
 @MainActor
-final class SessionCookieSyncService: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
+@Observable
+final class SessionCookieSyncService: NSObject, WKHTTPCookieStoreObserver {
     static let shared = SessionCookieSyncService()
 
-    @Published private(set) var etat = L("Clé API requise", "API key required")
-    @Published private(set) var derniereSynchronisation: Date?
-    @Published private(set) var sitesSauvegardes: [String] = []
+    private(set) var etat = L("Clé API requise", "API key required")
+    private(set) var derniereSynchronisation: Date?
+    private(set) var sitesSauvegardes: [String] = []
 
     private let client: CookiesAPIClientProtocol
     private var observateursInstallees = false

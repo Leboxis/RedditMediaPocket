@@ -10,20 +10,21 @@ import MediaCore
 /// (appareil), complétés par `msToken` sur les appels paginés. Ce stockage est
 /// distinct de ceux de Reddit et de X pour qu'une déconnexion TikTok n'efface
 /// aucune autre session, et inversement.
-@MainActor final class TikTokSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
+@Observable
+@MainActor final class TikTokSession: NSObject, WKHTTPCookieStoreObserver {
     static let shared = TikTokSession()
     /// Profil WebKit persistant exclusivement réservé à TikTok, sans partage
     /// avec Reddit ni X. UUID constant : une même session est retrouvée au
     /// prochain lancement.
     let store = WKWebsiteDataStore(forIdentifier:
         UUID(uuidString: "5B7C1A62-9D4E-4F3A-8B21-6E0D9A47C3F1")!)
-    @Published private(set) var hasAPICredentials = false
-    @Published private(set) var hasSession = false
-    @Published private(set) var apiAccepted = false
-    @Published private(set) var apiRejected = false
+    private(set) var hasAPICredentials = false
+    private(set) var hasSession = false
+    private(set) var apiAccepted = false
+    private(set) var apiRejected = false
     private var credentialValues: [String] = []
     private var cachedCookies: [HTTPCookie] = []
-    @Published private(set) var clearing = false
+    private(set) var clearing = false
 
     private override init() {
         super.init()
@@ -57,9 +58,10 @@ import MediaCore
         let apiReady = ready && TikTokCookiePolicy.hasCredentials(cookies: cookies)
         let revoked = identity != credentialValues || !ready
         credentialValues = identity
-        // `@Published` est réaffecté uniquement sur un changement réel :
-        // `refresh()` est appelé à chaque écriture de cookie par WebKit, et
-        // une réaffectation de même valeur émet quand même `objectWillChange`.
+        // Les propriétés observées sont réaffectées uniquement sur un
+        // changement réel : `refresh()` est appelé à chaque écriture de
+        // cookie par WebKit, et une réaffectation inutile aurait invalidé
+        // les vues pour rien.
         if revoked {
             if apiAccepted { apiAccepted = false }
             if apiRejected { apiRejected = false }
@@ -112,7 +114,7 @@ import MediaCore
 struct TikTokLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var session = TikTokSession.shared
+    private var session = TikTokSession.shared
     @State private var errorMessage: String?
     @State private var webRevision = 0
 

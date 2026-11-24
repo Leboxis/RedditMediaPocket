@@ -10,11 +10,11 @@ import UIKit
 /// statut et bannière d'archive incomplète. Zéro valeur magique : tout passe
 /// par les tokens `DS`.
 struct NewDownloadView: View {
-    @ObservedObject var model: Downloader
-    @ObservedObject private var redditSession = RedditSession.shared
-    @ObservedObject private var xSession = XSession.shared
-    @ObservedObject private var tikTokSession = TikTokSession.shared
-    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @Bindable var model: Downloader
+    private var redditSession = RedditSession.shared
+    private var xSession = XSession.shared
+    private var tikTokSession = TikTokSession.shared
+    private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var sourceGridPresented = false
     @State private var filtersPresented = false
     @State private var tikTokSavedPresented = false
@@ -494,10 +494,10 @@ private struct SourceKindButton: View {
 /// source ; les deux entrées TikTok y sont visuellement différenciées
 /// (`tt` compte public, `ts` sauvegardés du compte connecté).
 private struct SourceGridSheet: View {
-    @ObservedObject var model: Downloader
-    @ObservedObject private var reddit = RedditSession.shared
-    @ObservedObject private var xSession = XSession.shared
-    @ObservedObject private var tikTokSession = TikTokSession.shared
+    @Bindable var model: Downloader
+    private var reddit = RedditSession.shared
+    private var xSession = XSession.shared
+    private var tikTokSession = TikTokSession.shared
     let onPick: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -612,7 +612,7 @@ private struct SourceGridCard: View {
 /// « toutes les publications enregistrées » reste proposé — le parcours
 /// expliquera en journal ce que la page aura réellement servi.
 struct TikTokSavedPicker: View {
-    @ObservedObject var model: Downloader
+    @Bindable var model: Downloader
     /// Trois cibles différenciées, affichées en sections distinctes :
     /// tout le sauvegardé du compte connecté, un dossier de favoris
     /// (collection), ou un compte TikTok public précis.

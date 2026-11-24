@@ -1,14 +1,16 @@
 import Foundation
 import MediaCore
+import Observation
 
 /// Synchronise toutes les données non secrètes avec le Worker Cloudflare.
 /// Les changements sont regroupés par un anti-rebond de 1,5 s pour éviter les envois en rafale.
 @MainActor
-final class SyncService: ObservableObject {
+@Observable
+final class SyncService {
     static let shared = SyncService()
 
-    @Published private(set) var etat = L("Non synchronisé", "Not synced")
-    @Published private(set) var derniereSynchronisation: Date?
+    private(set) var etat = L("Non synchronisé", "Not synced")
+    private(set) var derniereSynchronisation: Date?
 
     private let client: ItemsAPIClientProtocol
     private var tacheAntiRebond: Task<Void, Never>?

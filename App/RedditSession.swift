@@ -3,12 +3,13 @@ import WebKit
 import Combine
 import MediaCore
 
-@MainActor final class RedditSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
+@Observable
+@MainActor final class RedditSession: NSObject, WKHTTPCookieStoreObserver {
     static let shared = RedditSession()
     let store = WKWebsiteDataStore.default()
-    @Published private(set) var hasSession = false
-    @Published private(set) var revision = 0
-    @Published private(set) var clearing = false
+    private(set) var hasSession = false
+    private(set) var revision = 0
+    private(set) var clearing = false
     private override init() {
         super.init()
         store.httpCookieStore.add(self)
@@ -48,7 +49,7 @@ import MediaCore
 struct RedditLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var session = RedditSession.shared
+    private var session = RedditSession.shared
     @State private var message = ""
     @State private var errorMessage: String?
     @State private var showsFeedPreferences = false

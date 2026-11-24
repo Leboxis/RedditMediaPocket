@@ -15,7 +15,7 @@ import Combine
 /// **Réglages** — avec la bannière d'upload kDrive et l'alerte d'erreur
 /// globales. La synchronisation Cloudflare se règle en bas des Réglages.
 struct ContentView: View {
-    @StateObject private var model = Downloader()
+    @State private var model = Downloader()
     @State private var tab = 0
     @Environment(\.scenePhase) private var scenePhase
 

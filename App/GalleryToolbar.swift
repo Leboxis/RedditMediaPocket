@@ -11,7 +11,7 @@ import MediaCore
 /// `Picker` imbriqués dans un `Menu` : sur iOS, un `Picker` placé dans un menu
 /// se referme parfois sans appliquer le choix.
 struct GalleryToolbar: View {
-    @ObservedObject var model: Downloader
+    @Bindable var model: Downloader
     @FocusState private var searchFocused: Bool
 
     var body: some View {

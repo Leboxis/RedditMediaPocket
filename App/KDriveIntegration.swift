@@ -108,14 +108,15 @@ private struct KDriveUploadOutcome {
 }
 
 @MainActor
-final class KDriveRateLimitCenter: ObservableObject {
+@Observable
+final class KDriveRateLimitCenter {
     static let shared = KDriveRateLimitCenter()
     static let pacingEnabledDefaultsKey = "kDriveUploadPacingEnabled"
     static let pacingLimitDefaultsKey = "kDriveUploadPacingLimit"
 
-    @Published private(set) var limitedUntil: Date?
-    @Published private(set) var requestsLastMinute: Int = 0
-    @Published private(set) var nextSlotDelay: TimeInterval = 0
+    private(set) var limitedUntil: Date?
+    private(set) var requestsLastMinute: Int = 0
+    private(set) var nextSlotDelay: TimeInterval = 0
 
     private var pacer: SlidingWindowPacer
     private let defaults: UserDefaults
@@ -295,7 +296,8 @@ final class KDriveRateLimitCenter: ObservableObject {
 }
 
 @MainActor
-final class KDriveService: ObservableObject {
+@Observable
+final class KDriveService {
     static let shared = KDriveService()
     static let concurrentUploadsDefaultsKey = "kDriveConcurrentUploads"
 
@@ -310,16 +312,16 @@ final class KDriveService: ObservableObject {
         currentConcurrentUploadLimit()
     }
 
-    @Published var isUploading = false
-    @Published var currentProgress = 0.0
-    @Published var currentFileIndex = 0
-    @Published var totalFilesCount = 0
-    @Published var currentFileName = ""
-    @Published var lastError: String?
-    @Published private(set) var uploadedFileURLs: [URL] = []
-    @Published private(set) var wasCancelled = false
-    @Published private(set) var lastSuccessCount = 0
-    @Published private(set) var lastFailedCount = 0
+    var isUploading = false
+    var currentProgress = 0.0
+    var currentFileIndex = 0
+    var totalFilesCount = 0
+    var currentFileName = ""
+    var lastError: String?
+    private(set) var uploadedFileURLs: [URL] = []
+    private(set) var wasCancelled = false
+    private(set) var lastSuccessCount = 0
+    private(set) var lastFailedCount = 0
 
     private var activeTask: Task<Void, Never>?
     private var uploadGeneration = UUID()
@@ -947,7 +949,7 @@ struct KDriveConcurrentUploadsPicker: View {
 struct KDriveSettingsDetailView: View {
     private enum Field: Hashable { case token, driveId }
 
-    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
+    private var rateLimit = KDriveRateLimitCenter.shared
     @State private var now = Date()
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -1414,8 +1416,8 @@ struct KDriveUploadSheet: View {
     let directoryId: String
     let directoryName: String
 
-    @ObservedObject private var service = KDriveService.shared
-    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
+    private var service = KDriveService.shared
+    private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var started = false
     @State private var finished = false

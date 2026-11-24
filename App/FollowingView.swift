@@ -5,11 +5,11 @@ import UIKit
 import ImageIO
 
 struct FollowingView: View {
-    @ObservedObject var model: Downloader
+    var model: Downloader
     let onDownloadAll: (String) -> Void
 
-    @ObservedObject private var session = RedditSession.shared
-    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
+    private var session = RedditSession.shared
+    private var kDriveFreshness = KDriveFreshnessCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var plateforme: PlateformeSuivi = .reddit
     @State private var friends: [String]?
@@ -728,7 +728,7 @@ struct FollowingView: View {
 
 struct FollowingUserPosts: View {
     let username: String
-    @ObservedObject var model: Downloader
+    var model: Downloader
     let onDownloadAll: (String) -> Void
 
     @State private var posts: [Post]?
@@ -877,7 +877,7 @@ private struct FollowingMediaCard: View {
     let feedID: String
     let galleryID: String?
     let thumbnail: URL?
-    @ObservedObject var model: Downloader
+    var model: Downloader
     @State private var image: UIImage?
     @State private var imageLoaded = false
     @State private var opening = false

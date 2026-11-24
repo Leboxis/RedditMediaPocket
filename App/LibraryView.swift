@@ -11,11 +11,11 @@ private struct Selection: Identifiable {
 /// médias téléchargés — recherche, tri, filtre, sélection multiple, aperçu,
 /// infos, export, envoi kDrive, suppressions confirmées.
 struct LibraryView: View {
-    @ObservedObject var model: Downloader
+    var model: Downloader
     /// Bascule vers l'onglet Nouveau pour lancer un téléchargement depuis
     /// les sauvegardés ou les comptes suivis.
     let goToDownload: () -> Void
-    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
+    private var kDriveFreshness = KDriveFreshnessCenter.shared
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"

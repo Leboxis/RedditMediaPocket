@@ -5,10 +5,10 @@ import MediaCore
 /// comme des lignes de la zone Connexions des Réglages (même composant
 /// `SettingsRow`), ouvertes en feuille.
 struct ActivityView: View {
-    @ObservedObject var model: Downloader
-    @ObservedObject private var logs = LogCenter.shared
-    @ObservedObject private var journal = FailureJournal.shared
-    @ObservedObject private var kDriveFreshness = KDriveFreshnessCenter.shared
+    var model: Downloader
+    private var logs = LogCenter.shared
+    private var journal = FailureJournal.shared
+    private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var logsPresented = false
     @State private var failuresPresented = false
     @State private var kDriveStatusPresented = false

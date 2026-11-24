@@ -5,6 +5,7 @@ import CryptoKit
 import ImageIO
 import UIKit
 import MediaCore
+import Observation
 
 struct UserCollection: Codable, Identifiable, Equatable {
     var name: String
@@ -174,35 +175,36 @@ extension Notification.Name {
     static let rmpFilesDeletedLocally = Notification.Name("rmpFilesDeletedLocally")
 }
 
-@MainActor final class Downloader: ObservableObject {
+@MainActor @Observable
+final class Downloader {
     /// Observateur des suppressions locales (feuilles d'envoi kDrive).
     private var filesDeletedObserver: NSObjectProtocol?
     /// Sauvegardés TikTok : état du sélecteur de dossiers de favoris.
     /// `tikTokSavedChoice` est `nil` pour « toutes les publications
     /// enregistrées ».
-    @Published var tikTokSavedChoice: TikTokSavedCollection?
-    @Published private(set) var tikTokSavedCollections: [TikTokSavedCollection] = []
-    @Published private(set) var tikTokSavedLoading = false
-    @Published var tikTokSavedListError: String?
+    var tikTokSavedChoice: TikTokSavedCollection?
+    private(set) var tikTokSavedCollections: [TikTokSavedCollection] = []
+    private(set) var tikTokSavedLoading = false
+    var tikTokSavedListError: String?
     var tikTokSavedAccount: String?
-    @Published var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
-    @Published var collections: [UserCollection] = []
-    @Published var activeUser: String?
-    @Published var running = false
-    @Published private(set) var stopping = false
-    @Published var status = ""
-    @Published var errorMessage: String?
+    var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
+    var collections: [UserCollection] = []
+    var activeUser: String?
+    var running = false
+    private(set) var stopping = false
+    var status = ""
+    var errorMessage: String?
     /// Vrai quand le dernier parcours s'est arrêté avant la fin du contenu
     /// disponible : le budget de pages a été atteint et il reste des pages à
     /// voir. Relancer reprend exactement où le parcours s'était arrêté, donc
     /// aucun média n'est perdu — mais l'archive n'est pas complète. Le bandeau
     /// d'information le signale sans bloquer, et disparaît au lancement suivant.
-    @Published private(set) var scanIncomplete = false
-    @Published var files: [URL] = []
-    @Published private(set) var loadingFiles = false
-    @Published var count = 0
-    @Published private(set) var totalBytes: Int64 = 0
-    @Published private(set) var discovered = 0
+    private(set) var scanIncomplete = false
+    var files: [URL] = []
+    private(set) var loadingFiles = false
+    var count = 0
+    private(set) var totalBytes: Int64 = 0
+    private(set) var discovered = 0
     /// Avancé de l'unité de téléchargement en cours : un album, ou la liste
     /// des vidéos collectées (100 pages maximum). La barre porte sur cette
     /// unité connue, pas sur un historique exhaustif du profil. Les octets des
@@ -214,32 +216,32 @@ extension Notification.Name {
         var inFlight: [String: Double] = [:]
         var fraction: Double { total > 0 ? min(1, (Double(done) + inFlight.values.reduce(0, +)) / Double(total)) : 0 }
     }
-    @Published private(set) var transferUnit: TransferUnit?
+    private(set) var transferUnit: TransferUnit?
     var totalSize: String { ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file) }
 
     /// Médias reçus lors du dernier parcours terminé, par collection. Sert au
     /// compteur « nouveautés » des pastilles : `lastRun` existait déjà mais
     /// n'était affiché nulle part, ce qui rendait invisible ce qui avait été
     /// réellement ajouté au passage précédent.
-    @Published private(set) var lastRunCounts: [String: Int] = [:]
+    private(set) var lastRunCounts: [String: Int] = [:]
 
     /// Filtres de téléchargement, par collection. Rechargé au changement de
     /// collection active, jamais partagé entre deux sources.
-    @Published var downloadFilter = DownloadFilter()
+    var downloadFilter = DownloadFilter()
 
     /// Plafond d'espace disque, global. Zéro signifie « sans limite ».
-    @Published var storageQuota = StorageQuota.load() {
+    var storageQuota = StorageQuota.load() {
         didSet { StorageQuota.save(storageQuota) }
     }
 
     /// Dernier écart lié au plafond d'espace : affiché en information, pas en
     /// erreur — rien n'est cassé, la session s'est arrêtée proprement.
-    @Published private(set) var storageLimitReached = false
+    private(set) var storageLimitReached = false
 
     /// Recherche et tri de la galerie. Purement locaux : ils ne changent que
     /// l'ordre d'affichage des fichiers déjà sur l'écran, jamais ce qui est
     /// téléchargé.
-    @Published var gallerySearch = "" {
+    var gallerySearch = "" {
         didSet {
             searchDebounceTask?.cancel()
             let trimmed = gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -256,7 +258,7 @@ extension Notification.Name {
     }
     private var searchDebounceTask: Task<Void, Never>?
     private var orderingCoalesceTask: Task<Void, Never>?
-    @Published var gallerySort: GallerySort = {
+    var gallerySort: GallerySort = {
         GallerySort(rawValue: UserDefaults.standard.string(forKey: "gallerySort") ?? "") ?? .newest
     }() {
         didSet {
@@ -264,7 +266,7 @@ extension Notification.Name {
             applyGalleryOrdering()
         }
     }
-    @Published var galleryKindFilter: GalleryKindFilter = .all {
+    var galleryKindFilter: GalleryKindFilter = .all {
         didSet { applyGalleryOrdering() }
     }
 
@@ -275,7 +277,7 @@ extension Notification.Name {
     /// de la vue ne suffisait pas : SwiftUI ne relit une propriété dérivée que
     /// s'il a une raison de réévaluer le corps, et le tri semblait alors sans
     /// effet. Une valeur publiée rend le changement explicite.
-    @Published private(set) var displayedFiles: [URL] = []
+    private(set) var displayedFiles: [URL] = []
 
     /// Recalcule `displayedFiles` à partir de l'état courant. Appelée au
     /// rechargement et à chaque changement de recherche, de tri ou de filtre.
@@ -423,7 +425,7 @@ extension Notification.Name {
     static func clearSavedMediaCount(for canonical: String) {
         UserDefaults.standard.removeObject(forKey: savedMediaCountKey(canonical))
     }
-    @Published private var storedConcurrentLimit = UserDefaults.standard.object(forKey: "concurrentLimit") as? Int
+    private var storedConcurrentLimit = UserDefaults.standard.object(forKey: "concurrentLimit") as? Int
     var concurrentLimit: Int {
         get {
             let isXFetish: Bool
@@ -439,8 +441,8 @@ extension Notification.Name {
             UserDefaults.standard.set(valid, forKey: "concurrentLimit")
         }
     }
-    @Published private(set) var sessionLimit = ConcurrentDownloads.defaultLimit
-    @Published var xFetishSegments = XFetishRangeDownload.segmentCount(
+    private(set) var sessionLimit = ConcurrentDownloads.defaultLimit
+    var xFetishSegments = XFetishRangeDownload.segmentCount(
         UserDefaults.standard.object(forKey: XFetishRangeDownload.defaultsKey) as? Int) {
         didSet {
             let valid = XFetishRangeDownload.segmentCount(xFetishSegments)
@@ -448,7 +450,7 @@ extension Notification.Name {
             UserDefaults.standard.set(valid, forKey: XFetishRangeDownload.defaultsKey)
         }
     }
-    @Published private(set) var sessionSegments = XFetishRangeDownload.segmentCount(nil)
+    private(set) var sessionSegments = XFetishRangeDownload.segmentCount(nil)
     /// Sélecteur de source : `u` profil, `r` subreddit, `rg` compte RedGifs,
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
@@ -457,7 +459,7 @@ extension Notification.Name {
     /// `ig` médias publics d'un compte Instagram.
     /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
     /// déjà `/` ou une URL RedGifs garde la priorité.
-    @Published var sourceKind: String = {
+    var sourceKind: String = {
         let saved = UserDefaults.standard.string(forKey: "sourceKind") ?? "u"
         return SourceKind(rawValue: saved) == nil ? "u" : saved
     }() {
@@ -521,7 +523,7 @@ extension Notification.Name {
         // Champ vide/invalide : le sélecteur X conserve son aide de connexion.
         return sourceKind == "tw" || sourceKind == "tt"
     }
-    @Published var subSort: String = {
+    var subSort: String = {
         let saved = UserDefaults.standard.string(forKey: "subSort") ?? "new"
         return FeedSource.subredditSorts.contains(saved) ? saved : "new"
     }() {
@@ -534,7 +536,7 @@ extension Notification.Name {
     /// Médias X-Fetish retenus : images d'album seules (défaut historique),
     /// vidéos seules, ou les deux. `x/nom` reste une seule collection : le
     /// dossier et le dossier kDrive ne changent pas.
-    @Published var xFetishMediaKind: XFetishMediaKind = {
+    var xFetishMediaKind: XFetishMediaKind = {
         guard let raw = UserDefaults.standard.string(forKey: XFetishMediaKind.defaultsKey),
               let kind = XFetishMediaKind(rawValue: raw) else { return .images }
         return kind
@@ -545,7 +547,7 @@ extension Notification.Name {
             UserDefaults.standard.set(valid.rawValue, forKey: XFetishMediaKind.defaultsKey)
         }
     }
-    @Published var active = 0
+    var active = 0
     private var failed = 0
     /// Contexte du parcours en cours, pour le journal des échecs : collection
     /// et dossier des médias dont le transfert échoue.

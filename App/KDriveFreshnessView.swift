@@ -24,19 +24,20 @@ extension KDriveFreshnessStatus {
 /// Centre de vérification de fraîcheur des collections kDrive par rapport
 /// aux sites sources. Partagé entre la Bibliothèque, l'écran Suivis et l'onglet Activité.
 @MainActor
-final class KDriveFreshnessCenter: ObservableObject {
+@Observable
+final class KDriveFreshnessCenter {
     static let shared = KDriveFreshnessCenter()
 
     /// État de fraîcheur par identifiant canonique de collection (`u/pseudo`, `tw/pseudo`, etc.).
-    @Published private(set) var statuses: [String: KDriveFreshnessStatus] = [:]
+    private(set) var statuses: [String: KDriveFreshnessStatus] = [:]
     /// Horodatage de dernière vérification par identifiant canonique.
-    @Published private(set) var checkedDates: [String: Date] = [:]
+    private(set) var checkedDates: [String: Date] = [:]
     /// Index des sous-dossiers présents dans le répertoire kDrive cible (clé = nom normalisé).
-    @Published private(set) var remoteFolders: [String: KDriveFolderItem] = [:]
-    @Published private(set) var isCheckingAll = false
-    @Published private(set) var checkedCount = 0
-    @Published private(set) var totalToCheck = 0
-    @Published private(set) var lastGlobalError: String?
+    private(set) var remoteFolders: [String: KDriveFolderItem] = [:]
+    private(set) var isCheckingAll = false
+    private(set) var checkedCount = 0
+    private(set) var totalToCheck = 0
+    private(set) var lastGlobalError: String?
 
     private var checkAllTask: Task<Void, Never>?
     private var singleTasks: [String: Task<Void, Never>] = [:]
@@ -455,12 +456,12 @@ private enum KDriveFreshnessFilter: String, CaseIterable, Identifiable {
 /// de l'app, les suivis et les dossiers du Drive avec la première page de chaque
 /// site source, affiche un indicateur détaillé et permet de lancer la mise à jour.
 struct KDriveCollectionsStatusView: View {
-    @ObservedObject var model: Downloader
+    var model: Downloader
     var onDownloadCollection: ((UserCollection) -> Void)? = nil
 
-    @ObservedObject private var center = KDriveFreshnessCenter.shared
-    @ObservedObject private var batch = KDriveBatchController.shared
-    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
+    private var center = KDriveFreshnessCenter.shared
+    private var batch = KDriveBatchController.shared
+    private var uploader = KDriveContinuousUploadController.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -1185,7 +1186,8 @@ private struct KDriveCloudCheckShape: Shape {
 ///   kDrive, déduplique, puis supprime les médias et la collection (les échecs
 ///   éventuels sont conservés).
 @MainActor
-final class KDriveBatchController: ObservableObject {
+@Observable
+final class KDriveBatchController {
     enum Mode {
         case idle
         case downloadAll
@@ -1194,13 +1196,13 @@ final class KDriveBatchController: ObservableObject {
 
     static let shared = KDriveBatchController()
 
-    @Published private(set) var mode: Mode = .idle
-    @Published private(set) var isRunning = false
-    @Published private(set) var completedCount = 0
-    @Published private(set) var totalCount = 0
-    @Published private(set) var progressLabel = ""
-    @Published private(set) var lastSummary: String?
-    @Published private(set) var lastHadError = false
+    private(set) var mode: Mode = .idle
+    private(set) var isRunning = false
+    private(set) var completedCount = 0
+    private(set) var totalCount = 0
+    private(set) var progressLabel = ""
+    private(set) var lastSummary: String?
+    private(set) var lastHadError = false
 
     private var batchTask: Task<Void, Never>?
 

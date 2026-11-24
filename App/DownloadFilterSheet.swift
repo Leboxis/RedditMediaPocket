@@ -7,7 +7,7 @@ import MediaCore
 ///
 /// Les réglages sont enregistrés à la fermeture, par collection.
 struct DownloadFilterSheet: View {
-    @ObservedObject var model: Downloader
+    var model: Downloader
     @Environment(\.dismiss) private var dismiss
 
     @State private var kinds: Set<DownloadFilter.MediaKind> = []

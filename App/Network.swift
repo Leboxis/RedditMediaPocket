@@ -1,10 +1,12 @@
 import Foundation
 import Combine
 import MediaCore
+import Observation
 
 // Configurable bounded media pipelines; server-stated service limits only.
-@MainActor final class Network: ObservableObject {
-    @Published private(set) var transfers = 0
+@MainActor @Observable
+final class Network {
+    private(set) var transfers = 0
     private let session: URLSession
     private var sessionRevision = -1
     private var requestGeneration = 0

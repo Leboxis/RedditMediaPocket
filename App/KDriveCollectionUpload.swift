@@ -362,28 +362,29 @@ struct KDriveUploadLot {
 }
 
 @MainActor
-final class KDriveContinuousUploadController: ObservableObject {
+@Observable
+final class KDriveContinuousUploadController {
     static let shared = KDriveContinuousUploadController()
     static var concurrentLimit: Int { KDriveService.concurrentUploadLimit }
 
-    @Published var isUploading = false
-    @Published var completedCount = 0
-    @Published var totalCount = 0
-    @Published var progress = 0.0
-    @Published var lastCompletedFileName = ""
-    @Published var uploadedBytes: Int64 = 0
-    @Published var totalBytes: Int64 = 0
-    @Published var speedBytesPerSecond: Double = 0
-    @Published var startedCount = 0
+    var isUploading = false
+    var completedCount = 0
+    var totalCount = 0
+    var progress = 0.0
+    var lastCompletedFileName = ""
+    var uploadedBytes: Int64 = 0
+    var totalBytes: Int64 = 0
+    var speedBytesPerSecond: Double = 0
+    var startedCount = 0
     var activeUploadCount: Int { max(startedCount - completedCount, 0) }
-    @Published var activeLimit = KDriveContinuousUploadController.concurrentLimit
-    @Published private(set) var uploadedFileURLs: [URL] = []
-    @Published private(set) var wasCancelled = false
-    @Published private(set) var activeLot: KDriveUploadLot?
-    @Published private(set) var finished = false
-    @Published private(set) var finalError: String?
-    @Published private(set) var successCount = 0
-    @Published private(set) var failedCount = 0
+    var activeLimit = KDriveContinuousUploadController.concurrentLimit
+    private(set) var uploadedFileURLs: [URL] = []
+    private(set) var wasCancelled = false
+    private(set) var activeLot: KDriveUploadLot?
+    private(set) var finished = false
+    private(set) var finalError: String?
+    private(set) var successCount = 0
+    private(set) var failedCount = 0
 
     private var activeTask: Task<Void, Never>?
     private var uploadGeneration = UUID()
@@ -1126,8 +1127,8 @@ private struct KDriveContinuousUploadSheet: View {
     let token: String
     let driveId: String
 
-    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
-    @ObservedObject private var rateLimit = KDriveRateLimitCenter.shared
+    private var uploader = KDriveContinuousUploadController.shared
+    private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
@@ -1362,7 +1363,7 @@ private struct KDriveContinuousUploadSheet: View {
 /// Bandeau d'état : visible tant qu'un envoi kDrive tourne ou jusqu'à fermeture
 /// après complétion. Tap = réaffiche la feuille de progression.
 struct KDriveUploadBanner: View {
-    @ObservedObject private var uploader = KDriveContinuousUploadController.shared
+    private var uploader = KDriveContinuousUploadController.shared
     @State private var presented = false
     @State private var dismissed = false
 

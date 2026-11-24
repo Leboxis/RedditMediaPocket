@@ -30,9 +30,10 @@ struct FailureEntry: Codable, Identifiable, Equatable {
 /// Journal persistant des échecs de téléchargement. Le fichier survit aux
 /// relances de l'app : un échec du lundi reste visible et retentable le
 /// vendredi, après que l'hébergeur a réparé son côté.
-@MainActor final class FailureJournal: ObservableObject {
+@MainActor @Observable
+final class FailureJournal {
     static let shared = FailureJournal()
-    @Published private(set) var entries: [FailureEntry] = []
+    private(set) var entries: [FailureEntry] = []
 
     private static let ioQueue = DispatchQueue(label: "FailureJournal.io", qos: .utility)
     private let fileURL: URL
@@ -110,8 +111,8 @@ struct FailureEntry: Codable, Identifiable, Equatable {
 /// Bouton de la barre : ouvre le journal des échecs. Le badge montre le
 /// nombre d'échecs en attente — invisible, un échec restait muet.
 struct FailureJournalButton: View {
-    @ObservedObject private var journal = FailureJournal.shared
-    @ObservedObject private var model: Downloader
+    private var journal = FailureJournal.shared
+    private var model: Downloader
     @State private var presented = false
 
     init(model: Downloader) {
@@ -141,8 +142,8 @@ struct FailureJournalButton: View {
 
 /// Liste des échecs en attente, avec nouveau essai immédiat.
 struct FailureJournalView: View {
-    @ObservedObject private var journal = FailureJournal.shared
-    @ObservedObject private var model: Downloader
+    private var journal = FailureJournal.shared
+    private var model: Downloader
     @Environment(\.dismiss) private var dismiss
     @State private var confirmClear = false
 

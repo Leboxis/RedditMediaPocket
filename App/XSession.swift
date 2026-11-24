@@ -9,19 +9,20 @@ import MediaCore
 /// exige les cookies `auth_token` (session) et `ct0` (CSRF). Ce stockage est
 /// distinct de celui de Reddit pour qu'une déconnexion X n'efface pas la
 /// session Reddit, et inversement.
-@MainActor final class XSession: NSObject, ObservableObject, WKHTTPCookieStoreObserver {
+@Observable
+@MainActor final class XSession: NSObject, WKHTTPCookieStoreObserver {
     static let shared = XSession()
     /// Profil WebKit persistant exclusivement réservé à X, sans partage avec Reddit.
     /// UUID constant : une même session est retrouvée au prochain lancement.
     let store = WKWebsiteDataStore(forIdentifier:
         UUID(uuidString: "E9F9D960-81B3-43D3-85DB-65DCBE7F82CE")!)
-    @Published private(set) var hasAPICredentials = false
-    @Published private(set) var hasSession = false
-    @Published private(set) var apiAccepted = false
-    @Published private(set) var apiRejected = false
+    private(set) var hasAPICredentials = false
+    private(set) var hasSession = false
+    private(set) var apiAccepted = false
+    private(set) var apiRejected = false
     private var credentialValues: [String] = []
     private var cachedCookies: [HTTPCookie] = []
-    @Published private(set) var clearing = false
+    private(set) var clearing = false
     /// Cache court du jeton CSRF : chaque page GraphQL relisait tous les
     /// cookies WebKit, un aller-retour asynchrone à chaque page. X renouvelle
     /// `ct0` rarement en cours de session ; 30 s suffisent, et tout
@@ -63,10 +64,10 @@ import MediaCore
         let revoked = identity != credentialValues || !ready
         credentialValues = identity
         if revoked { csrfCache = nil }
-        // `@Published` est réaffecté uniquement sur un changement réel.
-        // `refresh()` est appelé à chaque écriture de cookie par WebKit, et une
-        // réaffectation de même valeur émet quand même `objectWillChange` :
-        // toutes les vues observant l'objet se redessinaient pour rien.
+        // Les propriétés observées sont réaffectées uniquement sur un
+        // changement réel : `refresh()` est appelé à chaque écriture de cookie
+        // par WebKit, et une réaffectation inutile aurait invalidé les vues
+        // pour rien.
         if revoked {
             if apiAccepted { apiAccepted = false }
             if apiRejected { apiRejected = false }
@@ -139,7 +140,7 @@ import MediaCore
 struct XLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject private var session = XSession.shared
+    private var session = XSession.shared
     @State private var errorMessage: String?
     @State private var webRevision = 0
 

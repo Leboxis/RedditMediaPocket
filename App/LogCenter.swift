@@ -31,10 +31,11 @@ struct LogEntry: Identifiable, Equatable {
     let message: String
 }
 
-@MainActor final class LogCenter: ObservableObject {
+@MainActor @Observable
+final class LogCenter {
     static let shared = LogCenter()
-    @Published private(set) var entries: [LogEntry] = []
-    @Published private(set) var errorCount = 0
+    private(set) var entries: [LogEntry] = []
+    private(set) var errorCount = 0
 
     private static let maxMemory = 10_000
     private static let maxFileBytes = 2 * 1024 * 1024
@@ -256,7 +257,7 @@ struct LogEntry: Identifiable, Equatable {
 }
 
 struct LogsButton: View {
-    @ObservedObject private var logs = LogCenter.shared
+    private var logs = LogCenter.shared
     @State private var presented = false
     var body: some View {
         Button { presented = true } label: {
@@ -276,7 +277,7 @@ struct LogsButton: View {
 }
 
 struct LogsView: View {
-    @ObservedObject private var logs = LogCenter.shared
+    private var logs = LogCenter.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var level: LogLevel?
