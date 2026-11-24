@@ -741,7 +741,7 @@ private struct SavedMediaCard: View {
                     .font(.caption).foregroundStyle(DS.onSurfaceMuted)
             }
             if opening {
-                ProgressView().padding(DS.space(3)).glassEffect(in: Circle())
+                ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.largeTitle)
                     .foregroundStyle(DS.onScrim)

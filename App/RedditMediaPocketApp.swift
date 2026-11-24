@@ -35,7 +35,6 @@ struct ContentView: View {
                 .tag(3)
         }
         .tint(DS.accentEmphasis)
-        .tabBarMinimizeBehavior(.onScrollDown)
         .task {
             IdleTimerGuard.shared.surveiller(model)
             await SyncService.shared.demarrer()

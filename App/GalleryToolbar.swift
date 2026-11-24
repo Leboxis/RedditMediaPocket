@@ -114,7 +114,7 @@ struct GalleryToolbar: View {
             .font(.footnote.weight(.semibold))
             .foregroundStyle(active ? DS.accentEmphasis : DS.onSurface)
             .frame(width: 44, height: 44)
-            .glassEffect(in: RoundedRectangle(cornerRadius: DS.radiusM))
+            .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
             .contentShape(Rectangle())
     }
 }

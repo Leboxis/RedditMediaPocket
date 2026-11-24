@@ -1409,8 +1409,9 @@ struct KDriveUploadBanner: View {
                 }
             }
             .padding(.horizontal, DS.space(3))
-            .glassEffect(in: Capsule())
+            .background(DS.surfaceElevated, in: Capsule())
             .overlay(Capsule().strokeBorder(bannerColor.opacity(0.4)))
+            .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
             .sheet(isPresented: $presented) {
                 KDriveContinuousUploadSheet(lot: lot, token: kDriveToken, driveId: kDriveId)
             }
