@@ -15,7 +15,9 @@ struct SettingsRow: View {
     }
 
     let symbol: String
-    var customIcon: AnyView? = nil
+    /// Ic\u00f4ne personnalis\u00e9e rempla\u00e7ant le symbole ; construite au rendu
+    /// seule, \u00e9vitant l'effacement de type du reste des lignes.
+    var customIcon: (() -> AnyView)? = nil
     let tint: Color
     let title: String
     let status: String
@@ -62,7 +64,7 @@ struct SettingsRow: View {
         let info = HStack(spacing: DS.space(3)) {
             Group {
                 if let customIcon {
-                    customIcon
+                    customIcon()
                 } else {
                     Image(systemName: symbol)
                         .font(.subheadline.weight(.semibold))

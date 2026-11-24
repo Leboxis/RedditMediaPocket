@@ -46,7 +46,7 @@ struct UploadConsoleCard: View {
             if let counter, let progress {
                 VStack(alignment: .leading, spacing: DS.space(1)) {
                     Text(counter)
-                        .font(.system(.title3, design: .monospaced, weight: .semibold))
+                        .font(DS.monoTitle)
                         .foregroundStyle(DS.onSurface)
                         .accessibilityLabel(counter)
                     ProgressView(value: progress)

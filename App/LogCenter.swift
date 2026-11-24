@@ -315,7 +315,7 @@ struct LogsView: View {
                         .id(entry.id)
                     }
                     .listStyle(.plain)
-                    .onChange(of: logs.entries.count) { _ in
+                    .onChange(of: logs.entries.count) { _, _ in
                         if let last = logs.filtered(level: level, search: search).last {
                             if reduceMotion {
                                 proxy.scrollTo(last.id, anchor: .bottom)
@@ -361,7 +361,7 @@ struct LogsView: View {
                     } label: {
                         Image(systemName: copied ? "checkmark" : "square.and.arrow.up")
                     }
-                    .onChange(of: copied) { _ in
+                    .onChange(of: copied) { _, _ in
                         guard copied else { return }
                         Task {
                             try? await Task.sleep(nanoseconds: 1_500_000_000)

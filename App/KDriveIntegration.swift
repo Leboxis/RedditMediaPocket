@@ -1132,8 +1132,8 @@ struct KDriveSettingsDetailView: View {
                 now = Date()
             }
         }
-        .onChange(of: token) { _ in connectionStatus = nil }
-        .onChange(of: driveId) { _ in connectionStatus = nil }
+        .onChange(of: token) { _, _ in connectionStatus = nil }
+        .onChange(of: driveId) { _, _ in connectionStatus = nil }
     }
 
     private func testConnection() {

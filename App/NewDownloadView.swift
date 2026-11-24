@@ -364,7 +364,7 @@ struct NewDownloadView: View {
     private func consoleMetric(_ value: String, label: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.system(.title3, design: .monospaced, weight: .semibold))
+                .font(DS.monoTitle)
                 .foregroundStyle(DS.onSurface)
                 .lineLimit(1).minimumScaleFactor(0.65)
             Text(label)
@@ -478,7 +478,7 @@ private struct SourceKindButton: View {
             open()
         } label: {
             Text(SourceSelection.face(kind))
-                .font(.system(.headline, design: .monospaced, weight: .semibold))
+                .font(DS.monoHeadline)
                 .padding(.horizontal, DS.space(2))
                 .frame(minWidth: 52, minHeight: 48)
                 .foregroundStyle(DS.accentEmphasis)

@@ -260,12 +260,12 @@ private struct MediaPager: View {
         .background(DS.background)
         .coordinateSpace(name: "mediaPager")
         .clipped()
-        .onChange(of: isZoomed) { _ in dragOffset = 0 }
-        .onChange(of: index) { _ in
+        .onChange(of: isZoomed) { _, _ in dragOffset = 0 }
+        .onChange(of: index) { _, _ in
             isZoomed = false
             dragOffset = 0
         }
-        .onChange(of: urls.count) { _ in
+        .onChange(of: urls.count) { _, _ in
             if index >= urls.count { index = max(urls.count - 1, 0) }
         }
         .onAppear {

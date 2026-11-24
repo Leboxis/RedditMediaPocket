@@ -25,7 +25,7 @@ struct ActivityView: View {
                 Section {
                     SettingsRow(
                         symbol: "arrow.clockwise.icloud",
-                        customIcon: AnyView(KDriveStatusIcon(baseSize: 18)),
+                        customIcon: { AnyView(KDriveStatusIcon(baseSize: 18)) },
                         tint: DS.accentEmphasis,
                         title: L("État kDrive des collections", "kDrive collections status"),
                         status: kDriveFreshness.summaryLine,

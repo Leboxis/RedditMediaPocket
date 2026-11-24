@@ -1001,9 +1001,9 @@ private struct FollowingMediaCard: View {
                 ProgressView().padding(DS.space(3)).background(.regularMaterial, in: Circle())
             } else if video {
                 Image(systemName: "play.circle.fill").font(.largeTitle)
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(DS.onScrim)
                     .padding(DS.space(1))
-                    .background(Color.black.opacity(0.45), in: Circle())
+                    .background(DS.scrim, in: Circle())
             }
         }
         .frame(maxWidth: .infinity).frame(height: 240)

@@ -733,7 +733,7 @@ struct KDriveCollectionsStatusView: View {
                         .foregroundStyle(symbolColor ?? valueColor)
                 }
                 Text("\(count)")
-                    .font(.system(.title3, design: .monospaced, weight: .semibold))
+                    .font(DS.monoTitle)
                     .foregroundStyle(valueColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)

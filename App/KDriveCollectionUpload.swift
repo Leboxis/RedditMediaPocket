@@ -1414,7 +1414,7 @@ struct KDriveUploadBanner: View {
             .sheet(isPresented: $presented) {
                 KDriveContinuousUploadSheet(lot: lot, token: kDriveToken, driveId: kDriveId)
             }
-            .onChange(of: uploader.activeLot?.id) { _ in
+            .onChange(of: uploader.activeLot?.id) { _, _ in
                 dismissed = false
             }
         }

@@ -48,7 +48,7 @@ struct ContentView: View {
             KDriveUploadBanner()
                 .padding(.top, DS.space(1))
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             IdleTimerGuard.shared.scenePhaseDidChange(phase)
             if phase == .active { model.reloadIfFolderChanged() }
             if phase == .background { model.stop() }

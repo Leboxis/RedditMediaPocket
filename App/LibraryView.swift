@@ -93,7 +93,7 @@ struct LibraryView: View {
                     .accessibilityLabel(L("État kDrive des collections", "kDrive collections status"))
                 }
             }
-            .onChange(of: model.activeUser) { _ in exitSelection() }
+            .onChange(of: model.activeUser) { _, _ in exitSelection() }
             .sheet(isPresented: $savedPostsPresented) {
                 SavedPostsView(model: model) { _ in
                     savedPostsPresented = false

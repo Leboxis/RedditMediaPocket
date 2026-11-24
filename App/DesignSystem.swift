@@ -85,7 +85,14 @@ enum DS {
     static let callout = Font.system(.callout, weight: .medium)
     static let caption = Font.system(.caption, weight: .medium)
     static let caption2 = Font.system(.caption2)
+    static let monoTitle = Font.system(.title3, design: .monospaced, weight: .semibold)
+    static let monoHeadline = Font.system(.headline, design: .monospaced, weight: .semibold)
     static let monoCaption = Font.system(.caption, design: .monospaced, weight: .medium)
+
+    /// Voile sombre derri\u00e8re les compteurs pos\u00e9s sur les vignettes.
+    static let scrim = Color.black.opacity(0.45)
+    /// Texte lisible pos\u00e9 sur `scrim`.
+    static let onScrim = Color.white
 
     // MARK: - Animation (ressorts cohérents, interruptibles)
 
