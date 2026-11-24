@@ -64,45 +64,79 @@ enum SuiviStore {
         }
     }
 
-    /// Cache mémoire des lectures UserDefaults : la feuille « État kDrive »
-    /// relit ces valeurs plusieurs fois par image (compteurs, filtres, lignes),
-    /// et un re-décodage JSON par appel provoquait des saccades au défilement.
-    /// Invalide à chaque écriture pour ne jamais servir de donnée périmée.
-    private static var cacheLock = NSLock()
-    private static var listeCache: [ObjectIdentifier: [PlateformeSuivi: [String]]] = [:]
-    private static var etatsCache: [ObjectIdentifier: [PlateformeSuivi: [String: CompteSuiviEtat]]] = [:]
-    private static var marquesCache: [ObjectIdentifier: [PlateformeSuivi: Set<String>]] = [:]
+    /// Cache mémoire des lectures `UserDefaults.standard` : la feuille
+    /// « État kDrive » relit ces valeurs à chaque évaluation sans re-décoder le
+    /// JSON à chaque fois. Invalidé sur chaque écriture `SuiviStore` et sur
+    /// `UserDefaults.didChangeNotification` (ex. écriture directe `@AppStorage`).
+    private static let cacheLock = NSLock()
+    private static var cacheGeneration: UInt64 = 0
+    private static var cacheObserverInstalled = false
+    private static var listeCache: [PlateformeSuivi: [String]] = [:]
+    private static var etatsCache: [PlateformeSuivi: [String: CompteSuiviEtat]] = [:]
+    private static var marquesCache: [PlateformeSuivi: Set<String>] = [:]
+
+    private static func installerObservateurSiBesoin() {
+        cacheLock.lock()
+        let dejaInstalle = cacheObserverInstalled
+        if !dejaInstalle { cacheObserverInstalled = true }
+        cacheLock.unlock()
+        guard !dejaInstalle else { return }
+        NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
+            queue: nil
+        ) { _ in
+            viderCache()
+        }
+    }
+
+    static func invaliderCache() {
+        viderCache()
+    }
 
     private static func viderCache() {
         cacheLock.lock()
         defer { cacheLock.unlock() }
+        cacheGeneration &+= 1
         listeCache.removeAll()
         etatsCache.removeAll()
         marquesCache.removeAll()
     }
 
     static func charger(plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard) -> [String: CompteSuiviEtat] {
-        let identite = ObjectIdentifier(defaults)
-        cacheLock.lock()
-        if let misEnCache = etatsCache[identite]?[plateforme] {
+        let estStandard = (defaults === UserDefaults.standard)
+        var generationDepart: UInt64 = 0
+        if estStandard {
+            installerObservateurSiBesoin()
+            cacheLock.lock()
+            if let misEnCache = etatsCache[plateforme] {
+                cacheLock.unlock()
+                return misEnCache
+            }
+            generationDepart = cacheGeneration
             cacheLock.unlock()
-            return misEnCache
         }
-        cacheLock.unlock()
-        guard let donnees = defaults.data(forKey: cleEtats(pour: plateforme)),
-              let etats = try? JSONDecoder().decode([String: CompteSuiviEtat].self, from: donnees) else {
-            return [:]
+        let etats: [String: CompteSuiviEtat]
+        if let donnees = defaults.data(forKey: cleEtats(pour: plateforme)),
+           let decodes = try? JSONDecoder().decode([String: CompteSuiviEtat].self, from: donnees) {
+            etats = decodes
+        } else {
+            etats = [:]
         }
-        cacheLock.lock()
-        etatsCache[identite, default: [:]][plateforme] = etats
-        cacheLock.unlock()
+        if estStandard {
+            cacheLock.lock()
+            if cacheGeneration == generationDepart {
+                etatsCache[plateforme] = etats
+            }
+            cacheLock.unlock()
+        }
         return etats
     }
 
     static func enregistrer(_ etats: [String: CompteSuiviEtat], plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard, notifier: Bool = true) {
         guard let donnees = try? JSONEncoder().encode(etats) else { return }
         defaults.set(donnees, forKey: cleEtats(pour: plateforme))
-        viderCache()
+        if defaults === UserDefaults.standard { viderCache() }
         if notifier {
             NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
         }
@@ -123,21 +157,32 @@ enum SuiviStore {
 
     /// Liste synchronisée des comptes suivis (casse d'origine conservée).
     static func chargerListe(plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard) -> [String] {
-        let identite = ObjectIdentifier(defaults)
-        cacheLock.lock()
-        if let misEnCache = listeCache[identite]?[plateforme] {
+        let estStandard = (defaults === UserDefaults.standard)
+        var generationDepart: UInt64 = 0
+        if estStandard {
+            installerObservateurSiBesoin()
+            cacheLock.lock()
+            if let misEnCache = listeCache[plateforme] {
+                cacheLock.unlock()
+                return misEnCache
+            }
+            generationDepart = cacheGeneration
             cacheLock.unlock()
-            return misEnCache
         }
-        cacheLock.unlock()
-        guard let donnees = defaults.data(forKey: cleListe(pour: plateforme)),
-              let pseudos = try? JSONDecoder().decode([String].self, from: donnees) else {
-            return []
+        let resultat: [String]
+        if let donnees = defaults.data(forKey: cleListe(pour: plateforme)),
+           let pseudos = try? JSONDecoder().decode([String].self, from: donnees) {
+            resultat = normaliserListe(pseudos)
+        } else {
+            resultat = []
         }
-        let resultat = normaliserListe(pseudos)
-        cacheLock.lock()
-        listeCache[identite, default: [:]][plateforme] = resultat
-        cacheLock.unlock()
+        if estStandard {
+            cacheLock.lock()
+            if cacheGeneration == generationDepart {
+                listeCache[plateforme] = resultat
+            }
+            cacheLock.unlock()
+        }
         return resultat
     }
 
@@ -147,7 +192,7 @@ enum SuiviStore {
         guard propre != chargerListe(plateforme: plateforme, defaults: defaults) else { return }
         guard let donnees = try? JSONEncoder().encode(propre) else { return }
         defaults.set(donnees, forKey: cleListe(pour: plateforme))
-        viderCache()
+        if defaults === UserDefaults.standard { viderCache() }
         if notifier {
             NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
         }
@@ -269,25 +314,34 @@ enum SuiviStore {
     }
 
     static func chargerMarques(plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard) -> Set<String> {
-        let identite = ObjectIdentifier(defaults)
-        cacheLock.lock()
-        if let misEnCache = marquesCache[identite]?[plateforme] {
+        let estStandard = (defaults === UserDefaults.standard)
+        var generationDepart: UInt64 = 0
+        if estStandard {
+            installerObservateurSiBesoin()
+            cacheLock.lock()
+            if let misEnCache = marquesCache[plateforme] {
+                cacheLock.unlock()
+                return misEnCache
+            }
+            generationDepart = cacheGeneration
             cacheLock.unlock()
-            return misEnCache
         }
-        cacheLock.unlock()
         let donnees = defaults.data(forKey: cleMarques(pour: plateforme)) ?? Data()
         let marques = Set((try? JSONDecoder().decode([String].self, from: donnees)) ?? [])
-        cacheLock.lock()
-        marquesCache[identite, default: [:]][plateforme] = marques
-        cacheLock.unlock()
+        if estStandard {
+            cacheLock.lock()
+            if cacheGeneration == generationDepart {
+                marquesCache[plateforme] = marques
+            }
+            cacheLock.unlock()
+        }
         return marques
     }
 
     static func enregistrerMarques(_ marques: Set<String>, plateforme: PlateformeSuivi = .reddit, defaults: UserDefaults = .standard, notifier: Bool = true) {
         guard let donnees = try? JSONEncoder().encode(marques.sorted()) else { return }
         defaults.set(donnees, forKey: cleMarques(pour: plateforme))
-        viderCache()
+        if defaults === UserDefaults.standard { viderCache() }
         if notifier {
             NotificationCenter.default.post(name: .pocketDonneesDidChange, object: nil)
         }

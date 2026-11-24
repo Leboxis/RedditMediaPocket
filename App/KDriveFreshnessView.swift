@@ -1,5 +1,6 @@
 import Foundation
 import MediaCore
+import Observation
 import SwiftUI
 
 extension KDriveFreshnessStatus {
@@ -28,25 +29,31 @@ extension KDriveFreshnessStatus {
 final class KDriveFreshnessCenter {
     static let shared = KDriveFreshnessCenter()
 
+    private enum CachedFolder {
+        case found(KDriveFolderItem)
+        case missing
+    }
+
     /// État de fraîcheur par identifiant canonique de collection (`u/pseudo`, `tw/pseudo`, etc.).
     private(set) var statuses: [String: KDriveFreshnessStatus] = [:]
     /// Horodatage de dernière vérification par identifiant canonique.
     private(set) var checkedDates: [String: Date] = [:]
     /// Index des sous-dossiers présents dans le répertoire kDrive cible (clé = nom normalisé).
     private(set) var remoteFolders: [String: KDriveFolderItem] = [:]
-    /// Statuts indexés par identifiant canonique minuscule : recherche O(1)
-    /// au lieu d'un scan de tout `statuses` pour chaque ligne de la feuille.
-    private var statusIndex: [String: KDriveFreshnessStatus] = [:]
-    /// Dossier distant déjà résolu, par identifiant canonique minuscule de
-    /// collection : évite de re-normaliser les noms candidats à chaque rendu.
-    private var folderCache: [String: KDriveFolderItem] = [:]
+    /// Index et caches internes non observés : leurs lectures/écritures
+    /// paresseuses ne doivent jamais déclencher d'invalidation SwiftUI pendant
+    /// l'évaluation des vues ou le défilement.
+    @ObservationIgnored private var statusIndex: [String: KDriveFreshnessStatus] = [:]
+    @ObservationIgnored private var canonicalKeysByLower: [String: String] = [:]
+    @ObservationIgnored private var folderCache: [String: CachedFolder] = [:]
+    @ObservationIgnored private var inferredRemoteCollections: [UserCollection] = []
     private(set) var isCheckingAll = false
     private(set) var checkedCount = 0
     private(set) var totalToCheck = 0
     private(set) var lastGlobalError: String?
 
-    private var checkAllTask: Task<Void, Never>?
-    private var singleTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var checkAllTask: Task<Void, Never>?
+    @ObservationIgnored private var singleTasks: [String: Task<Void, Never>] = [:]
 
     private init() {}
 
@@ -61,32 +68,46 @@ final class KDriveFreshnessCenter {
     }
 
     func status(for collectionID: String) -> KDriveFreshnessStatus? {
+        guard !statuses.isEmpty else { return nil }
         let canonical = Self.canonicalID(collectionID)
         if let exact = statuses[canonical] { return exact }
         return statusIndex[canonical.lowercased()]
     }
 
     func remoteFolder(for collectionID: String) -> KDriveFolderItem? {
+        guard !remoteFolders.isEmpty else { return nil }
         let cacheKey = Self.canonicalID(collectionID).lowercased()
-        if let cached = folderCache[cacheKey] { return cached }
+        if let cached = folderCache[cacheKey] {
+            switch cached {
+            case .found(let folder): return folder
+            case .missing: return nil
+            }
+        }
         for candidate in KDriveFreshness.candidateFolderNames(for: collectionID) {
             let key = FilenamePolicy.kDriveNormalizedName(candidate)
             if let folder = remoteFolders[key] {
-                folderCache[cacheKey] = folder
+                folderCache[cacheKey] = .found(folder)
                 return folder
             }
         }
+        folderCache[cacheKey] = .missing
         return nil
     }
 
     /// Écrit (ou supprime) un statut en tenant l'index secondaire à jour.
     private func setStatus(_ status: KDriveFreshnessStatus?, forCanonical canonical: String) {
+        let lower = canonical.lowercased()
+        if let existingKey = canonicalKeysByLower[lower], existingKey != canonical {
+            statuses.removeValue(forKey: existingKey)
+        }
         if let status {
+            canonicalKeysByLower[lower] = canonical
             statuses[canonical] = status
-            statusIndex[canonical.lowercased()] = status
+            statusIndex[lower] = status
         } else {
+            canonicalKeysByLower.removeValue(forKey: lower)
             statuses.removeValue(forKey: canonical)
-            statusIndex.removeValue(forKey: canonical.lowercased())
+            statusIndex.removeValue(forKey: lower)
         }
     }
 
@@ -115,6 +136,10 @@ final class KDriveFreshnessCenter {
             append(collection)
         }
 
+        guard !remoteFolders.isEmpty else {
+            return result
+        }
+
         for name in SuiviStore.pseudosConnus(plateforme: .reddit) {
             let candidate = UserCollection(name: name)
             if remoteFolder(for: candidate.id) != nil {
@@ -134,16 +159,30 @@ final class KDriveFreshnessCenter {
             }
         }
 
-        let sortedRemote = remoteFolders.values.sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }
-        for folder in sortedRemote {
-            if let source = KDriveFreshness.inferredSource(fromFolderName: folder.name) {
-                append(UserCollection(source: source))
-            }
+        for collection in inferredRemoteCollections {
+            append(collection)
         }
 
         return result
+    }
+
+    /// Indexe et pré-trie les sous-dossiers distants en une passe.
+    func applyDirectoryIndex(_ existing: [KDriveFolderItem]) {
+        var index: [String: KDriveFolderItem] = [:]
+        for item in existing {
+            let key = FilenamePolicy.kDriveNormalizedName(item.name)
+            if index[key] == nil {
+                index[key] = item
+            }
+        }
+        let inferred: [UserCollection] = index.values
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .compactMap { folder in
+                KDriveFreshness.inferredSource(fromFolderName: folder.name).map { UserCollection(source: $0) }
+            }
+        folderCache.removeAll()
+        inferredRemoteCollections = inferred
+        remoteFolders = index
     }
 
     /// Recharge l'index des sous-dossiers du dossier parent kDrive configuré.
@@ -156,15 +195,7 @@ final class KDriveFreshnessCenter {
             driveId: driveId,
             directoryId: parentId
         )
-        var index: [String: KDriveFolderItem] = [:]
-        for item in existing {
-            let key = FilenamePolicy.kDriveNormalizedName(item.name)
-            if index[key] == nil {
-                index[key] = item
-            }
-        }
-        remoteFolders = index
-        folderCache.removeAll()
+        applyDirectoryIndex(existing)
     }
 
     /// Vérifie une seule collection en comparant son dossier kDrive au site source.
@@ -322,46 +353,55 @@ final class KDriveFreshnessCenter {
 
     // MARK: - Compteurs synthétiques
 
+    var statusCounts: (upToDate: Int, outdated: Int, pendingUpload: Int, notOnDrive: Int, unavailable: Int) {
+        var upToDate = 0
+        var outdated = 0
+        var pendingUpload = 0
+        var notOnDrive = 0
+        var unavailable = 0
+        for status in statuses.values {
+            switch status {
+            case .checking: break
+            case .upToDate: upToDate += 1
+            case .outdated: outdated += 1
+            case .pendingUpload: pendingUpload += 1
+            case .notOnDrive: notOnDrive += 1
+            case .unavailable: unavailable += 1
+            }
+        }
+        return (upToDate, outdated, pendingUpload, notOnDrive, unavailable)
+    }
+
     var upToDateCount: Int {
-        statuses.values.filter(\.isUpToDate).count
+        statusCounts.upToDate
     }
 
     var outdatedCount: Int {
-        statuses.values.filter {
-            if case .outdated = $0 { return true }
-            return false
-        }.count
+        statusCounts.outdated
     }
 
     var pendingUploadCount: Int {
-        statuses.values.filter {
-            if case .pendingUpload = $0 { return true }
-            return false
-        }.count
+        statusCounts.pendingUpload
     }
 
     var notOnDriveCount: Int {
-        statuses.values.filter {
-            if case .notOnDrive = $0 { return true }
-            return false
-        }.count
+        statusCounts.notOnDrive
     }
 
     var unavailableCount: Int {
-        statuses.values.filter {
-            if case .unavailable = $0 { return true }
-            return false
-        }.count
+        statusCounts.unavailable
     }
 
     /// Compteur Orange (collections avec nouveautés sur la source ou fichiers locaux à envoyer).
     var orangeCount: Int {
-        outdatedCount + pendingUploadCount
+        let counts = statusCounts
+        return counts.outdated + counts.pendingUpload
     }
 
     /// Compteur Rouge (collections absentes de kDrive ou en erreur de vérification).
     var redCount: Int {
-        notOnDriveCount + unavailableCount
+        let counts = statusCounts
+        return counts.notOnDrive + counts.unavailable
     }
 
     /// Résumé court pour la ligne de l'onglet Activité ou l'en-tête.
@@ -373,16 +413,20 @@ final class KDriveFreshnessCenter {
         guard !statuses.isEmpty else {
             return L("Non vérifié", "Not checked")
         }
-        if redCount > 0 {
-            return L("\(upToDateCount) à jour · \(orangeCount) en retard · \(redCount) absent/err.",
-                     "\(upToDateCount) up to date · \(orangeCount) behind · \(redCount) missing/err.")
+        let counts = statusCounts
+        let up = counts.upToDate
+        let orange = counts.outdated + counts.pendingUpload
+        let red = counts.notOnDrive + counts.unavailable
+        if red > 0 {
+            return L("\(up) à jour · \(orange) en retard · \(red) absent/err.",
+                     "\(up) up to date · \(orange) behind · \(red) missing/err.")
         }
-        if orangeCount > 0 {
-            return L("\(orangeCount) en retard · \(upToDateCount) à jour",
-                     "\(orangeCount) behind · \(upToDateCount) up to date")
+        if orange > 0 {
+            return L("\(orange) en retard · \(up) à jour",
+                     "\(orange) behind · \(up) up to date")
         }
-        return L("\(upToDateCount) à jour sur kDrive",
-                 "\(upToDateCount) up to date on kDrive")
+        return L("\(up) à jour sur kDrive",
+                 "\(up) up to date on kDrive")
     }
 }
 
@@ -481,7 +525,6 @@ struct KDriveCollectionsStatusView: View {
 
     @State private var center = KDriveFreshnessCenter.shared
     @State private var batch = KDriveBatchController.shared
-    @State private var uploader = KDriveContinuousUploadController.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -497,15 +540,11 @@ struct KDriveCollectionsStatusView: View {
             && !driveId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var allCollections: [UserCollection] {
-        center.allCheckableCollections(model: model)
-    }
-
     /// Collections à télécharger en lot : uniquement celles déjà présentes sur
     /// kDrive, dans la liste filtrée, qui ne sont ni déjà à jour ni uniquement
     /// en attente d'envoi local.
-    private var downloadableCollections: [UserCollection] {
-        filteredCollections.filter { collection in
+    private func downloadableCollections(from filtered: [UserCollection]) -> [UserCollection] {
+        filtered.filter { collection in
             guard center.remoteFolder(for: collection.id) != nil else { return false }
             switch center.status(for: collection.id) {
             case .upToDate, .pendingUpload, .notOnDrive:
@@ -516,22 +555,6 @@ struct KDriveCollectionsStatusView: View {
         }
     }
 
-    private var localCollections: [UserCollection] {
-        model.collections
-    }
-
-    private var selectedCollections: [UserCollection] {
-        allCollections.filter { selectedIds.contains($0.id) }
-    }
-
-    private var targetDownloadCollections: [UserCollection] {
-        selectedCollections.isEmpty ? downloadableCollections : selectedCollections
-    }
-
-    private var allFilteredSelected: Bool {
-        !filteredCollections.isEmpty && filteredCollections.allSatisfy { selectedIds.contains($0.id) }
-    }
-
     private func toggleSelection(for id: String) {
         if selectedIds.contains(id) {
             selectedIds.remove(id)
@@ -540,8 +563,9 @@ struct KDriveCollectionsStatusView: View {
         }
     }
 
-    private var filteredCollections: [UserCollection] {
-        allCollections.filter { collection in
+    private func filteredCollections(from all: [UserCollection]) -> [UserCollection] {
+        if filter == .all { return all }
+        return all.filter { collection in
             let status = center.status(for: collection.id)
             switch filter {
             case .all:
@@ -567,9 +591,24 @@ struct KDriveCollectionsStatusView: View {
     }
 
     var body: some View {
+        let configured = kDriveConfigured
+        let all = configured ? center.allCheckableCollections(model: model) : []
+        let filtered = configured ? filteredCollections(from: all) : []
+        let selected = (configured && !selectedIds.isEmpty)
+            ? all.filter { selectedIds.contains($0.id) }
+            : []
+        let targets = selected.isEmpty
+            ? (configured ? downloadableCollections(from: filtered) : [])
+            : selected
+        let local = model.collections
+        let allFilteredSelected = !filtered.isEmpty && filtered.allSatisfy { selectedIds.contains($0.id) }
+        let remoteEmpty = center.remoteFolders.isEmpty
+        let batchRunning = batch.isRunning
+        let modelRunning = model.running
+
         NavigationStack {
             Group {
-                if !kDriveConfigured {
+                if !configured {
                     ContentUnavailableView {
                         Label(L("kDrive non configuré", "kDrive not configured"), systemImage: "icloud.slash")
                     } description: {
@@ -579,7 +618,15 @@ struct KDriveCollectionsStatusView: View {
                 } else {
                     List {
                         Section {
-                            summaryHeader
+                            KDriveStatusHeaderCard(
+                                downloadTargetsCount: targets.count,
+                                hasSelection: !selected.isEmpty,
+                                canUploadLocal: !local.isEmpty,
+                                modelRunning: modelRunning,
+                                onStopBatch: { batch.stop(model: model) },
+                                onConfirmDownload: { confirmDownloadSync = true },
+                                onConfirmUpload: { confirmUploadAndDelete = true }
+                            )
                         }
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
@@ -595,7 +642,7 @@ struct KDriveCollectionsStatusView: View {
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: DS.space(2), trailing: 0))
 
-                        if filteredCollections.isEmpty {
+                        if filtered.isEmpty {
                             Section {
                                 Text(L("Aucune collection dans cette catégorie.", "No collection in this category."))
                                     .font(.footnote)
@@ -605,38 +652,45 @@ struct KDriveCollectionsStatusView: View {
                             }
                         } else {
                             Section {
-                                ForEach(filteredCollections, id: \.id) { collection in
-                                    collectionRow(collection)
+                                ForEach(filtered, id: \.id) { collection in
+                                    collectionRow(
+                                        collection,
+                                        remoteIndexEmpty: remoteEmpty,
+                                        batchRunning: batchRunning,
+                                        modelRunning: modelRunning
+                                    )
                                 }
                             } header: {
                                 HStack(spacing: DS.space(2)) {
-                                    if !selectedCollections.isEmpty {
-                                        Text(L("\(selectedCollections.count) sélectionnée(s)", "\(selectedCollections.count) selected"))
+                                    if !selected.isEmpty {
+                                        Text(L("\(selected.count) sélectionnée(s)", "\(selected.count) selected"))
                                             .foregroundStyle(DS.accentEmphasis)
                                     } else {
-                                        Text(L("\(filteredCollections.count) collection(s)", "\(filteredCollections.count) collection(s)"))
+                                        Text(L("\(filtered.count) collection(s)", "\(filtered.count) collection(s)"))
                                     }
                                     Spacer(minLength: 4)
                                     if !allFilteredSelected {
-                                        Button(selectedCollections.isEmpty
+                                        Button(selected.isEmpty
                                             ? L("Tout sélectionner", "Select all")
                                             : L("Tout", "All")) {
-                                            for item in filteredCollections {
-                                                selectedIds.insert(item.id)
+                                            var updated = selectedIds
+                                            for item in filtered {
+                                                updated.insert(item.id)
                                             }
+                                            selectedIds = updated
                                         }
                                         .font(.caption.weight(.semibold))
                                         .textCase(nil)
-                                        .disabled(batch.isRunning)
+                                        .disabled(batchRunning)
                                     }
-                                    if !selectedCollections.isEmpty {
+                                    if !selected.isEmpty {
                                         Button(L("Effacer", "Clear")) {
                                             selectedIds.removeAll()
                                         }
                                         .font(.caption.weight(.semibold))
                                         .textCase(nil)
                                         .foregroundStyle(DS.onSurfaceMuted)
-                                        .disabled(batch.isRunning)
+                                        .disabled(batchRunning)
                                     }
                                 }
                             }
@@ -648,31 +702,16 @@ struct KDriveCollectionsStatusView: View {
             .navigationTitle(L("État kDrive", "kDrive Status"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if kDriveConfigured {
+                if configured {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            if center.isCheckingAll {
-                                center.stopChecking()
-                            } else {
-                                center.checkAll(
-                                    model: model,
-                                    token: token,
-                                    driveId: driveId,
-                                    directoryId: directoryId
-                                )
-                            }
-                        } label: {
-                            if center.isCheckingAll {
-                                HStack(spacing: 4) {
-                                    ProgressView().controlSize(.small)
-                                    Text("\(center.checkedCount)/\(max(1, center.totalToCheck))")
-                                        .font(.caption.monospacedDigit())
-                                }
-                            } else {
-                                Text(L("Vérifier", "Check"))
-                            }
+                        KDriveCheckAllToolbarButton(isDisabledWhenIdle: all.isEmpty) {
+                            center.checkAll(
+                                model: model,
+                                token: token,
+                                driveId: driveId,
+                                directoryId: directoryId
+                            )
                         }
-                        .disabled(allCollections.isEmpty && !center.isCheckingAll)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -680,7 +719,7 @@ struct KDriveCollectionsStatusView: View {
                 }
             }
             .task {
-                if kDriveConfigured, center.remoteFolders.isEmpty {
+                if configured, center.remoteFolders.isEmpty {
                     try? await center.refreshDirectoryIndex(
                         token: token,
                         driveId: driveId,
@@ -691,14 +730,13 @@ struct KDriveCollectionsStatusView: View {
         }
         .tint(DS.accentEmphasis)
         .confirmationDialog(
-            selectedCollections.isEmpty
+            selected.isEmpty
                 ? L("Télécharger, envoyer sur kDrive et nettoyer ?", "Download, upload to kDrive and clean up?")
-                : L("Télécharger, envoyer et nettoyer (\(selectedCollections.count)) ?", "Download, upload and clean up (\(selectedCollections.count))?"),
+                : L("Télécharger, envoyer et nettoyer (\(selected.count)) ?", "Download, upload and clean up (\(selected.count))?"),
             isPresented: $confirmDownloadSync,
             titleVisibility: .visible
         ) {
             Button(L("Lancer", "Start"), role: .destructive) {
-                let targets = targetDownloadCollections
                 selectedIds.removeAll()
                 batch.startDownloadUploadAndDelete(
                     collections: targets,
@@ -710,12 +748,12 @@ struct KDriveCollectionsStatusView: View {
             }
             Button(L("Annuler", "Cancel"), role: .cancel) { }
         } message: {
-            if selectedCollections.isEmpty {
+            if selected.isEmpty {
                 Text(L("Pour chaque collection déjà présente sur kDrive, seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés de l'app (médias et collection) avant de passer à la suivante.",
                        "For each collection already on kDrive, only missing media will be downloaded, uploaded to kDrive, then removed from the app (media and collection) before moving to the next."))
             } else {
-                Text(L("Pour chacune des \(selectedCollections.count) collection(s) sélectionnée(s), seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés automatiquement de l'app (médias et collection) avant de passer à la suivante.",
-                       "For each of the \(selectedCollections.count) selected collection(s), only missing media will be downloaded, uploaded to kDrive, then automatically removed from the app (media and collection) before moving to the next."))
+                Text(L("Pour chacune des \(selected.count) collection(s) sélectionnée(s), seuls les médias manquants seront téléchargés, envoyés sur kDrive puis supprimés automatiquement de l'app (médias et collection) avant de passer à la suivante.",
+                       "For each of the \(selected.count) selected collection(s), only missing media will be downloaded, uploaded to kDrive, then automatically removed from the app (media and collection) before moving to the next."))
             }
         }
         .confirmationDialog(
@@ -725,7 +763,7 @@ struct KDriveCollectionsStatusView: View {
         ) {
             Button(L("Envoyer et supprimer", "Upload & delete"), role: .destructive) {
                 batch.startUploadAllAndDelete(
-                    collections: localCollections,
+                    collections: local,
                     model: model,
                     token: token,
                     driveId: driveId,
@@ -739,87 +777,100 @@ struct KDriveCollectionsStatusView: View {
         }
     }
 
-    private func consoleMetric(
-        count: Int,
-        label: String,
-        valueColor: Color,
-        leadingSymbol: String? = nil,
-        symbolColor: Color? = nil
+    private func collectionRow(
+        _ collection: UserCollection,
+        remoteIndexEmpty: Bool,
+        batchRunning: Bool,
+        modelRunning: Bool
     ) -> some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 5) {
-                if let leadingSymbol {
-                    Image(systemName: leadingSymbol)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(symbolColor ?? valueColor)
-                }
-                Text("\(count)")
-                    .font(DS.monoTitle)
-                    .foregroundStyle(valueColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+        let status = center.status(for: collection.id)
+        return KDriveCollectionRowView(
+            collection: collection,
+            status: status,
+            folder: center.remoteFolder(for: collection.id),
+            remoteIndexEmpty: remoteIndexEmpty,
+            isSelected: selectedIds.contains(collection.id),
+            batchRunning: batchRunning,
+            modelRunning: modelRunning,
+            showsDownload: shouldOfferDownload(for: status) && onDownloadCollection != nil,
+            onToggle: { toggleSelection(for: collection.id) },
+            onDownload: onDownloadCollection.map { handler in {
+                dismiss()
+                handler(collection)
+            } },
+            onSingleCheck: {
+                center.startSingleCheck(
+                    collection: collection,
+                    model: model,
+                    token: token,
+                    driveId: driveId,
+                    directoryId: directoryId
+                )
             }
-            Text(label)
-                .font(DS.caption2)
-                .foregroundStyle(DS.onSurfaceMuted)
-                .lineLimit(1)
+        )
+        .equatable()
+    }
+
+    private func shouldOfferDownload(for status: KDriveFreshnessStatus?) -> Bool {
+        if case .outdated = status {
+            return true
         }
-        .frame(maxWidth: .infinity)
+        return false
     }
+}
 
-    private var metricDivider: some View {
-        DS.separator
-            .frame(width: 1, height: 30)
-            .padding(.vertical, DS.space(1))
-    }
+private struct KDriveCheckAllToolbarButton: View {
+    @State private var center = KDriveFreshnessCenter.shared
+    let isDisabledWhenIdle: Bool
+    let onStart: () -> Void
 
-    /// Fine jauge de répartition 3 pt (Sauge / Ambre / Rose-Corail) placée
-    /// sous les 3 compteurs de la console (« Apple Calm Tech »).
-    private var calmTricolorGauge: some View {
-        let up = max(0, center.upToDateCount)
-        let orange = max(0, center.orangeCount)
-        let red = max(0, center.redCount)
-        let total = up + orange + red
-
-        return GeometryReader { geo in
-            let width = geo.size.width
-            if total == 0 {
-                Capsule()
-                    .fill(DS.separator)
-                    .frame(width: width, height: 3)
+    var body: some View {
+        Button {
+            if center.isCheckingAll {
+                center.stopChecking()
             } else {
-                HStack(spacing: 3) {
-                    if up > 0 {
-                        Capsule()
-                            .fill(DS.calmSage.opacity(0.8))
-                            .frame(maxWidth: .infinity)
-                            .layoutPriority(Double(up))
-                    }
-                    if orange > 0 {
-                        Capsule()
-                            .fill(DS.calmAmber)
-                            .frame(maxWidth: .infinity)
-                            .layoutPriority(Double(orange))
-                    }
-                    if red > 0 {
-                        Capsule()
-                            .fill(DS.calmRose)
-                            .frame(maxWidth: .infinity)
-                            .layoutPriority(Double(red))
-                    }
+                onStart()
+            }
+        } label: {
+            if center.isCheckingAll {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small)
+                    Text("\(center.checkedCount)/\(max(1, center.totalToCheck))")
+                        .font(.caption.monospacedDigit())
                 }
-                .frame(width: width, height: 3)
+            } else {
+                Text(L("Vérifier", "Check"))
             }
         }
-        .frame(height: 3)
-        .accessibilityHidden(true)
+        .disabled(isDisabledWhenIdle && !center.isCheckingAll)
     }
+}
 
-    private var summaryHeader: some View {
+/// Carte d'en-tête isolée de la liste : les progressions de vérification ou
+/// d'envoi en lot ne réévaluent que cette carte et jamais les lignes `ForEach`.
+private struct KDriveStatusHeaderCard: View {
+    @State private var center = KDriveFreshnessCenter.shared
+    @State private var batch = KDriveBatchController.shared
+    @State private var uploader = KDriveContinuousUploadController.shared
+
+    let downloadTargetsCount: Int
+    let hasSelection: Bool
+    let canUploadLocal: Bool
+    let modelRunning: Bool
+    let onStopBatch: () -> Void
+    let onConfirmDownload: () -> Void
+    let onConfirmUpload: () -> Void
+
+    var body: some View {
+        let counts = center.statusCounts
+        let upCount = counts.upToDate
+        let orangeCount = counts.outdated + counts.pendingUpload
+        let redCount = counts.notOnDrive + counts.unavailable
+
         VStack(alignment: .leading, spacing: DS.space(3)) {
             HStack(spacing: 0) {
                 consoleMetric(
-                    count: center.upToDateCount,
+                    count: upCount,
                     label: L("à jour", "up to date"),
                     valueColor: DS.onSurface,
                     leadingSymbol: "checkmark",
@@ -827,13 +878,13 @@ struct KDriveCollectionsStatusView: View {
                 )
                 metricDivider
                 consoleMetric(
-                    count: center.orangeCount,
+                    count: orangeCount,
                     label: L("en retard", "behind"),
                     valueColor: DS.calmAmber
                 )
                 metricDivider
                 consoleMetric(
-                    count: center.redCount,
+                    count: redCount,
                     label: L("absents", "missing"),
                     valueColor: DS.calmRose
                 )
@@ -845,7 +896,7 @@ struct KDriveCollectionsStatusView: View {
                     .progressViewStyle(.linear)
                     .tint(DS.calmAmber)
             } else {
-                calmTricolorGauge
+                calmTricolorGauge(up: upCount, orange: orangeCount, red: redCount)
             }
 
             if let error = center.lastGlobalError {
@@ -885,20 +936,88 @@ struct KDriveCollectionsStatusView: View {
         .shadow(color: DS.shadowColor.opacity(DS.shadowOpacity), radius: DS.shadowRadius, y: DS.shadowY)
     }
 
+    private func consoleMetric(
+        count: Int,
+        label: String,
+        valueColor: Color,
+        leadingSymbol: String? = nil,
+        symbolColor: Color? = nil
+    ) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 5) {
+                if let leadingSymbol {
+                    Image(systemName: leadingSymbol)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(symbolColor ?? valueColor)
+                }
+                Text("\(count)")
+                    .font(DS.monoTitle)
+                    .foregroundStyle(valueColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+            }
+            Text(label)
+                .font(DS.caption2)
+                .foregroundStyle(DS.onSurfaceMuted)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var metricDivider: some View {
+        DS.separator
+            .frame(width: 1, height: 30)
+            .padding(.vertical, DS.space(1))
+    }
+
+    private func calmTricolorGauge(up: Int, orange: Int, red: Int) -> some View {
+        let total = up + orange + red
+        return GeometryReader { geo in
+            let width = geo.size.width
+            if total == 0 {
+                Capsule()
+                    .fill(DS.separator)
+                    .frame(width: width, height: 3)
+            } else {
+                HStack(spacing: 3) {
+                    if up > 0 {
+                        Capsule()
+                            .fill(DS.calmSage.opacity(0.8))
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(up))
+                    }
+                    if orange > 0 {
+                        Capsule()
+                            .fill(DS.calmAmber)
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(orange))
+                    }
+                    if red > 0 {
+                        Capsule()
+                            .fill(DS.calmRose)
+                            .frame(maxWidth: .infinity)
+                            .layoutPriority(Double(red))
+                    }
+                }
+                .frame(width: width, height: 3)
+            }
+        }
+        .frame(height: 3)
+        .accessibilityHidden(true)
+    }
+
     private var batchActionBar: some View {
-        let targets = targetDownloadCollections
-        let hasSelection = !selectedCollections.isEmpty
         let downloadRunning = batch.mode == .downloadAll && batch.isRunning
         let uploadRunning = batch.mode == .uploadAndDelete && batch.isRunning
-        let canStartDownload = !targets.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
-        let canStartUpload = !localCollections.isEmpty && !model.running && !batch.isRunning && !uploader.isUploading
+        let canStartDownload = downloadTargetsCount > 0 && !modelRunning && !batch.isRunning && !uploader.isUploading
+        let canStartUpload = canUploadLocal && !modelRunning && !batch.isRunning && !uploader.isUploading
 
         return HStack(spacing: DS.space(2)) {
             Button {
                 if downloadRunning {
-                    batch.stop(model: model)
+                    onStopBatch()
                 } else {
-                    confirmDownloadSync = true
+                    onConfirmDownload()
                 }
             } label: {
                 HStack(spacing: DS.space(1)) {
@@ -907,7 +1026,7 @@ struct KDriveCollectionsStatusView: View {
                     Text(downloadRunning
                         ? L("Arrêter", "Stop")
                         : (hasSelection
-                            ? L("Télécharger (\(targets.count))", "Download (\(targets.count))")
+                            ? L("Télécharger (\(downloadTargetsCount))", "Download (\(downloadTargetsCount))")
                             : L("Tout télécharger", "Download all")))
                         .font(.footnote.weight(.semibold))
                         .lineLimit(1)
@@ -927,14 +1046,14 @@ struct KDriveCollectionsStatusView: View {
             .accessibilityLabel(downloadRunning
                 ? L("Arrêter le téléchargement groupé", "Stop batch download")
                 : (hasSelection
-                    ? L("Télécharger, envoyer et nettoyer la sélection (\(targets.count) collections)", "Download, upload and clean up selection (\(targets.count) collections)")
-                    : L("Tout télécharger (\(targets.count) collections)", "Download all (\(targets.count) collections)")))
+                    ? L("Télécharger, envoyer et nettoyer la sélection (\(downloadTargetsCount) collections)", "Download, upload and clean up selection (\(downloadTargetsCount) collections)")
+                    : L("Tout télécharger (\(downloadTargetsCount) collections)", "Download all (\(downloadTargetsCount) collections)")))
 
             Button {
                 if uploadRunning {
-                    batch.stop(model: model)
+                    onStopBatch()
                 } else {
-                    confirmUploadAndDelete = true
+                    onConfirmUpload()
                 }
             } label: {
                 HStack(spacing: DS.space(1)) {
@@ -964,42 +1083,6 @@ struct KDriveCollectionsStatusView: View {
                 ? L("Arrêter l'envoi kDrive groupé", "Stop batch kDrive upload")
                 : L("Tout envoyer sur kDrive puis supprimer localement", "Upload all to kDrive then delete locally"))
         }
-    }
-
-    private func collectionRow(_ collection: UserCollection) -> some View {
-        let status = center.status(for: collection.id)
-        return KDriveCollectionRowView(
-            collection: collection,
-            status: status,
-            folder: center.remoteFolder(for: collection.id),
-            remoteIndexEmpty: center.remoteFolders.isEmpty,
-            isSelected: selectedIds.contains(collection.id),
-            batchRunning: batch.isRunning,
-            modelRunning: model.running,
-            showsDownload: shouldOfferDownload(for: status) && onDownloadCollection != nil,
-            onToggle: { toggleSelection(for: collection.id) },
-            onDownload: onDownloadCollection.map { handler in {
-                dismiss()
-                handler(collection)
-            } },
-            onSingleCheck: {
-                center.startSingleCheck(
-                    collection: collection,
-                    model: model,
-                    token: token,
-                    driveId: driveId,
-                    directoryId: directoryId
-                )
-            }
-        )
-        .equatable()
-    }
-
-    private func shouldOfferDownload(for status: KDriveFreshnessStatus?) -> Bool {
-        if case .outdated = status {
-            return true
-        }
-        return false
     }
 }
 
@@ -1190,18 +1273,22 @@ private struct KDriveCollectionRowView: View, Equatable {
         .padding(.vertical, 1)
     }
 
-    /// Style de date partagé entre les lignes : un `Date.FormatStyle` statique
-    /// réutilise son formateur ICU en interne, contrairement à `formatted()`
-    /// qui en reconstruit un à chaque appel (coût par cellule au défilement).
-    private static let dateStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)
+    /// Formateur de date partagé entre les lignes : évite de reconstruire un
+    /// formateur ICU par cellule au défilement et n'est appelé qu'une fois.
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     private func folderDetailRow(_ folder: KDriveFolderItem) -> some View {
         let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
         return Group {
             if ts > 0 {
-                let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                Text(L("Sur kDrive \u{00B7} \(Self.dateStyle.format(date))",
-                       "On kDrive \u{00B7} \(Self.dateStyle.format(date))"))
+                let dateText = Self.dateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(ts)))
+                Text(L("Sur kDrive \u{00B7} \(dateText)",
+                       "On kDrive \u{00B7} \(dateText)"))
             } else {
                 Text(L("Sur kDrive \u{00B7} \(expectedFolderName)",
                        "On kDrive \u{00B7} \(expectedFolderName)"))
@@ -1214,7 +1301,6 @@ private struct KDriveCollectionRowView: View, Equatable {
 
     @ViewBuilder
     private var leadingTile: some View {
-        let isCalmUpToDate = isCalmUpToDate
         if isCalmUpToDate {
             Image(systemName: "checkmark")
                 .font(.caption.weight(.bold))
@@ -1273,7 +1359,7 @@ final class KDriveBatchController {
     private(set) var lastSummary: String?
     private(set) var lastHadError = false
 
-    private var batchTask: Task<Void, Never>?
+    @ObservationIgnored private var batchTask: Task<Void, Never>?
 
     private init() {}
 

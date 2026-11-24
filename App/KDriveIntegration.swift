@@ -1,5 +1,6 @@
 import Foundation
 import MediaCore
+import Observation
 import SwiftUI
 import UIKit
 
@@ -118,7 +119,7 @@ final class KDriveRateLimitCenter {
     private(set) var requestsLastMinute: Int = 0
     private(set) var nextSlotDelay: TimeInterval = 0
 
-    private var pacer: SlidingWindowPacer
+    @ObservationIgnored private var pacer: SlidingWindowPacer
     private let defaults: UserDefaults
     /// Limite officielle Infomaniak : 60 requêtes/minute, non augmentable,
     /// quel que soit l'abonnement (kDrive 6 To inclus).

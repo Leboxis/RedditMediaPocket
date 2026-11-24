@@ -18,6 +18,7 @@ final class IdleTimerGuard {
     private var envoiContinuActif = false
     private var envoiLotActif = false
     private var premierPlan = true
+    private var observationGeneration = 0
 
     private init() {}
 
@@ -26,9 +27,13 @@ final class IdleTimerGuard {
     /// suivies relance la boucle et réévalue la veille. À appeler une fois
     /// avec le téléchargeur possédé par l'écran principal.
     func surveiller(_ downloader: Downloader) {
+        observationGeneration &+= 1
+        let generation = observationGeneration
         telechargementActif = downloader.running
+        envoiContinuActif = KDriveContinuousUploadController.shared.isUploading
+        envoiLotActif = KDriveService.shared.isUploading
         appliquer()
-        observerSuivant(downloader)
+        observerSuivant(downloader, generation: generation)
     }
 
     func scenePhaseDidChange(_ phase: ScenePhase) {
@@ -36,24 +41,25 @@ final class IdleTimerGuard {
         appliquer()
     }
 
-    private func observerSuivant(_ downloader: Downloader) {
+    private func observerSuivant(_ downloader: Downloader, generation: Int) {
         withObservationTracking {
             _ = downloader.running
             _ = KDriveContinuousUploadController.shared.isUploading
             _ = KDriveService.shared.isUploading
         } onChange: {
             Task { @MainActor in
-                self.reevaluer(downloader)
+                self.reevaluer(downloader, generation: generation)
             }
         }
     }
 
-    private func reevaluer(_ downloader: Downloader) {
+    private func reevaluer(_ downloader: Downloader, generation: Int) {
+        guard observationGeneration == generation else { return }
         telechargementActif = downloader.running
         envoiContinuActif = KDriveContinuousUploadController.shared.isUploading
         envoiLotActif = KDriveService.shared.isUploading
         appliquer()
-        observerSuivant(downloader)
+        observerSuivant(downloader, generation: generation)
     }
 
     private func appliquer() {

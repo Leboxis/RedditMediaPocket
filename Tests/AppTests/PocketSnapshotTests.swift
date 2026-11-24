@@ -268,4 +268,26 @@ final class PocketSnapshotTests: XCTestCase {
         SuiviStore.supprimerSuiviTikTok("bob_tt", defaults: cible, notifier: false)
         XCTAssertEqual(SuiviStore.chargerListe(plateforme: .tiktok, defaults: cible), ["Alice.TT"])
     }
+
+    @MainActor
+    func testSuiviStoreCacheInvalidatesOnDirectStandardDefaultsWrite() throws {
+        let defaults = UserDefaults.standard
+        let previousData = defaults.data(forKey: SuiviStore.cleMarquesX)
+        defer {
+            if let previousData {
+                defaults.set(previousData, forKey: SuiviStore.cleMarquesX)
+            } else {
+                defaults.removeObject(forKey: SuiviStore.cleMarquesX)
+            }
+            SuiviStore.invaliderCache()
+        }
+
+        defaults.removeObject(forKey: SuiviStore.cleMarquesX)
+        SuiviStore.invaliderCache()
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .x), [])
+
+        let directData = try JSONEncoder().encode(["direct_user"])
+        defaults.set(directData, forKey: SuiviStore.cleMarquesX)
+        XCTAssertEqual(SuiviStore.chargerMarques(plateforme: .x), ["direct_user"])
+    }
 }

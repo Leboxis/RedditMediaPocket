@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 import MediaCore
 import UIKit
 import ImageIO
@@ -64,10 +65,10 @@ private func feedThumbURL(for entry: SavedFeedEntry) -> URL? {
 /// sont dédupliquées : préchargement et carte attendent la même tâche.
 @MainActor @Observable
 final class FeedPreloadStore {
-    private var cache: [String: [URL]] = [:]
-    private var tasks: [String: Task<[URL], Error>] = [:]
-    private var model: Downloader?
-    private var bin: FeedTempBin?
+    @ObservationIgnored private var cache: [String: [URL]] = [:]
+    @ObservationIgnored private var tasks: [String: Task<[URL], Error>] = [:]
+    @ObservationIgnored private var model: Downloader?
+    @ObservationIgnored private var bin: FeedTempBin?
 
     /// Le store porte model/bin pour que PagedFeed/FeedCard n'aient plus
     /// à observer Downloader (zéro re-rendu lié aux transferts réseau).

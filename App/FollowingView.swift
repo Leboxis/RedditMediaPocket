@@ -64,12 +64,15 @@ struct FollowingView: View {
         switch plateforme {
         case .reddit:
             downloadedUsernamesData = data
+            SuiviStore.invaliderCache()
             etats = SuiviStore.charger(plateforme: .reddit)
         case .x:
             xDownloadedUsernamesData = data
+            SuiviStore.invaliderCache()
             xEtats = SuiviStore.charger(plateforme: .x)
         case .tiktok:
             tikTokDownloadedUsernamesData = data
+            SuiviStore.invaliderCache()
             tikTokEtats = SuiviStore.charger(plateforme: .tiktok)
         }
         // La coche fait partie de l'état synchronisé : on pousse vers Cloudflare.

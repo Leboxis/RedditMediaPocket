@@ -1,4 +1,5 @@
 import XCTest
+import Observation
 import MediaCore
 @testable import RedditMediaPocket
 
@@ -49,5 +50,56 @@ final class KDriveFreshnessAppTests: XCTestCase {
             KDriveFreshnessStatus.unavailable(reason: "HTTP 429").tintColor,
             DS.calmRose
         )
+    }
+
+    @MainActor
+    func testRemoteFolderLookupDoesNotTriggerObservationMutationAndCachesMisses() {
+        final class Flag: @unchecked Sendable { var value = false }
+        let center = KDriveFreshnessCenter.shared
+        center.stopChecking()
+        center.applyDirectoryIndex([
+            KDriveFolderItem(id: 101, name: "Ualpha_test", type: "dir")
+        ])
+        defer { center.applyDirectoryIndex([]) }
+
+        let invalidated = Flag()
+        let found: KDriveFolderItem? = withObservationTracking {
+            let hit = center.remoteFolder(for: "u/alpha_test")
+            _ = center.remoteFolder(for: "u/absent_test")
+            return hit
+        } onChange: {
+            invalidated.value = true
+        }
+
+        XCTAssertEqual(found?.id, 101)
+        XCTAssertFalse(invalidated.value, "Reading remoteFolder must not mutate tracked @Observable state")
+
+        let cachedHit = center.remoteFolder(for: "u/alpha_test")
+        let cachedMiss = center.remoteFolder(for: "u/absent_test")
+        XCTAssertEqual(cachedHit?.id, 101)
+        XCTAssertNil(cachedMiss)
+        XCTAssertFalse(invalidated.value)
+
+        center.applyDirectoryIndex([
+            KDriveFolderItem(id: 202, name: "Uabsent_test", type: "dir")
+        ])
+        XCTAssertTrue(invalidated.value, "Updating remoteFolders must invalidate observers of remoteFolder")
+        XCTAssertNil(center.remoteFolder(for: "u/alpha_test"))
+        XCTAssertEqual(center.remoteFolder(for: "u/absent_test")?.id, 202)
+    }
+
+    @MainActor
+    func testMixedCaseMarkUploadedDoesNotDuplicateStatusEntry() {
+        let center = KDriveFreshnessCenter.shared
+        center.stopChecking()
+        let before = center.statusCounts.upToDate
+        center.markUploaded(collectionLabel: "u/CaseTestUser", remoteFileCount: 5)
+        let afterFirst = center.statusCounts.upToDate
+        center.markUploaded(collectionLabel: "u/casetestuser", remoteFileCount: 6)
+        let afterSecond = center.statusCounts.upToDate
+
+        XCTAssertEqual(afterFirst, before + 1)
+        XCTAssertEqual(afterSecond, afterFirst)
+        XCTAssertEqual(center.status(for: "u/CASETESTUSER"), .upToDate(remoteCount: 6, checkedSourceCount: 0))
     }
 }
