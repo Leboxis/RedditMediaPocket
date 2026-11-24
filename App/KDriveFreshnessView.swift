@@ -459,9 +459,9 @@ struct KDriveCollectionsStatusView: View {
     var model: Downloader
     var onDownloadCollection: ((UserCollection) -> Void)? = nil
 
-    private var center = KDriveFreshnessCenter.shared
-    private var batch = KDriveBatchController.shared
-    private var uploader = KDriveContinuousUploadController.shared
+    @State private var center = KDriveFreshnessCenter.shared
+    @State private var batch = KDriveBatchController.shared
+    @State private var uploader = KDriveContinuousUploadController.shared
     @Environment(\.dismiss) private var dismiss
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""

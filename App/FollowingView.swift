@@ -8,8 +8,8 @@ struct FollowingView: View {
     var model: Downloader
     let onDownloadAll: (String) -> Void
 
-    private var session = RedditSession.shared
-    private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @State private var session = RedditSession.shared
+    @State private var kDriveFreshness = KDriveFreshnessCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var plateforme: PlateformeSuivi = .reddit
     @State private var friends: [String]?

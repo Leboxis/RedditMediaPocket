@@ -114,7 +114,7 @@ import MediaCore
 struct TikTokLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    private var session = TikTokSession.shared
+    @State private var session = TikTokSession.shared
     @State private var errorMessage: String?
     @State private var webRevision = 0
 

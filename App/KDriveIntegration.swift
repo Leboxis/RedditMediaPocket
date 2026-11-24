@@ -949,7 +949,7 @@ struct KDriveConcurrentUploadsPicker: View {
 struct KDriveSettingsDetailView: View {
     private enum Field: Hashable { case token, driveId }
 
-    private var rateLimit = KDriveRateLimitCenter.shared
+    @State private var rateLimit = KDriveRateLimitCenter.shared
     @State private var now = Date()
     @AppStorage("kDriveApiToken") private var token = ""
     @AppStorage("kDriveId") private var driveId = ""
@@ -1416,8 +1416,8 @@ struct KDriveUploadSheet: View {
     let directoryId: String
     let directoryName: String
 
-    private var service = KDriveService.shared
-    private var rateLimit = KDriveRateLimitCenter.shared
+    @State private var service = KDriveService.shared
+    @State private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var started = false
     @State private var finished = false

@@ -6,9 +6,9 @@ import MediaCore
 /// `SettingsRow`), ouvertes en feuille.
 struct ActivityView: View {
     var model: Downloader
-    private var logs = LogCenter.shared
-    private var journal = FailureJournal.shared
-    private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @State private var logs = LogCenter.shared
+    @State private var journal = FailureJournal.shared
+    @State private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var logsPresented = false
     @State private var failuresPresented = false
     @State private var kDriveStatusPresented = false

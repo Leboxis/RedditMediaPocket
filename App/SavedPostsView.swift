@@ -136,7 +136,7 @@ struct SavedPostsView: View {
     var model: Downloader
     let onDownloadAll: (String) -> Void
 
-    private var session = RedditSession.shared
+    @State private var session = RedditSession.shared
     @Environment(\.dismiss) private var dismiss
     @State private var posts: [Post]?
     @State private var errorMessage: String?
