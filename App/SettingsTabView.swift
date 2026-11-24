@@ -14,17 +14,17 @@ struct SettingsTabView: View {
 private struct DownloadSettings: View {
     @Bindable var model: Downloader
     /// État de la synchronisation Cloudflare, partagé avec toute l'app.
-    private var synchronisation = SyncService.shared
+    @State private var synchronisation = SyncService.shared
     /// État de la synchronisation des cookies de session.
-    private var sessions = SessionCookieSyncService.shared
+    @State private var sessions = SessionCookieSyncService.shared
     @State private var clePresentee = false
     /// Vrai quand la vue est embarquée dans un onglet (pas de bouton « OK »).
     let embedded: Bool
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
-    private var reddit = RedditSession.shared
-    private var xSession = XSession.shared
-    private var tikTokSession = TikTokSession.shared
-    private var instagramSession = InstagramSession.shared
+    @State private var reddit = RedditSession.shared
+    @State private var xSession = XSession.shared
+    @State private var tikTokSession = TikTokSession.shared
+    @State private var instagramSession = InstagramSession.shared
     @State private var loginPresented = false
     @State private var xLoginPresented = false
     @State private var tikTokLoginPresented = false

@@ -111,7 +111,7 @@ final class FailureJournal {
 /// Bouton de la barre : ouvre le journal des échecs. Le badge montre le
 /// nombre d'échecs en attente — invisible, un échec restait muet.
 struct FailureJournalButton: View {
-    private var journal = FailureJournal.shared
+    @State private var journal = FailureJournal.shared
     private var model: Downloader
     @State private var presented = false
 
@@ -142,7 +142,7 @@ struct FailureJournalButton: View {
 
 /// Liste des échecs en attente, avec nouveau essai immédiat.
 struct FailureJournalView: View {
-    private var journal = FailureJournal.shared
+    @State private var journal = FailureJournal.shared
     private var model: Downloader
     @Environment(\.dismiss) private var dismiss
     @State private var confirmClear = false

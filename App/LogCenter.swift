@@ -257,7 +257,7 @@ final class LogCenter {
 }
 
 struct LogsButton: View {
-    private var logs = LogCenter.shared
+    @State private var logs = LogCenter.shared
     @State private var presented = false
     var body: some View {
         Button { presented = true } label: {
@@ -277,7 +277,7 @@ struct LogsButton: View {
 }
 
 struct LogsView: View {
-    private var logs = LogCenter.shared
+    @State private var logs = LogCenter.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var level: LogLevel?

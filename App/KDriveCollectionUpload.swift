@@ -1127,8 +1127,8 @@ private struct KDriveContinuousUploadSheet: View {
     let token: String
     let driveId: String
 
-    private var uploader = KDriveContinuousUploadController.shared
-    private var rateLimit = KDriveRateLimitCenter.shared
+    @State private var uploader = KDriveContinuousUploadController.shared
+    @State private var rateLimit = KDriveRateLimitCenter.shared
     @Environment(\.dismiss) private var dismiss
     @State private var showDeleteConfirm = false
     @State private var deletedCount = 0
@@ -1363,7 +1363,7 @@ private struct KDriveContinuousUploadSheet: View {
 /// Bandeau d'état : visible tant qu'un envoi kDrive tourne ou jusqu'à fermeture
 /// après complétion. Tap = réaffiche la feuille de progression.
 struct KDriveUploadBanner: View {
-    private var uploader = KDriveContinuousUploadController.shared
+    @State private var uploader = KDriveContinuousUploadController.shared
     @State private var presented = false
     @State private var dismissed = false
 

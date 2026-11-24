@@ -15,7 +15,7 @@ struct LibraryView: View {
     /// Bascule vers l'onglet Nouveau pour lancer un téléchargement depuis
     /// les sauvegardés ou les comptes suivis.
     let goToDownload: () -> Void
-    private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @State private var kDriveFreshness = KDriveFreshnessCenter.shared
     @AppStorage("kDriveApiToken") private var kDriveToken = ""
     @AppStorage("kDriveId") private var kDriveId = ""
     @AppStorage("kDriveDirectoryId") private var kDriveDirectoryId = "1"
@@ -68,7 +68,8 @@ struct LibraryView: View {
                     Button {
                         if selectingMedia { exitSelection() } else { selectingMedia = true }
                     } label: {
-                        Image(systemName: selectingMedia ? "checkmark.circle.fill" : "checkmark.circle")
+                        let selectionIcon = selectingMedia ? "checkmark.circle.fill" : "checkmark.circle"
+                        Image(systemName: selectionIcon)
                     }
                     .disabled(model.displayedFiles.isEmpty && !selectingMedia)
                     .accessibilityLabel(selectingMedia ? L("Quitter la sélection", "Exit selection") : L("Sélectionner des médias", "Select media"))

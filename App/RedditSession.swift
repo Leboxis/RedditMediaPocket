@@ -49,7 +49,7 @@ import MediaCore
 struct RedditLogin: View {
     @AppStorage(AppLanguage.defaultsKey) private var language = AppLanguage.current
     @Environment(\.dismiss) private var dismiss
-    private var session = RedditSession.shared
+    @State private var session = RedditSession.shared
     @State private var message = ""
     @State private var errorMessage: String?
     @State private var showsFeedPreferences = false

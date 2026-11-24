@@ -11,10 +11,10 @@ import UIKit
 /// par les tokens `DS`.
 struct NewDownloadView: View {
     @Bindable var model: Downloader
-    private var redditSession = RedditSession.shared
-    private var xSession = XSession.shared
-    private var tikTokSession = TikTokSession.shared
-    private var kDriveFreshness = KDriveFreshnessCenter.shared
+    @State private var redditSession = RedditSession.shared
+    @State private var xSession = XSession.shared
+    @State private var tikTokSession = TikTokSession.shared
+    @State private var kDriveFreshness = KDriveFreshnessCenter.shared
     @State private var sourceGridPresented = false
     @State private var filtersPresented = false
     @State private var tikTokSavedPresented = false
@@ -495,9 +495,9 @@ private struct SourceKindButton: View {
 /// (`tt` compte public, `ts` sauvegardés du compte connecté).
 private struct SourceGridSheet: View {
     @Bindable var model: Downloader
-    private var reddit = RedditSession.shared
-    private var xSession = XSession.shared
-    private var tikTokSession = TikTokSession.shared
+    @State private var reddit = RedditSession.shared
+    @State private var xSession = XSession.shared
+    @State private var tikTokSession = TikTokSession.shared
     let onPick: () -> Void
     @Environment(\.dismiss) private var dismiss
 
