@@ -34,6 +34,12 @@ final class KDriveFreshnessCenter {
     private(set) var checkedDates: [String: Date] = [:]
     /// Index des sous-dossiers présents dans le répertoire kDrive cible (clé = nom normalisé).
     private(set) var remoteFolders: [String: KDriveFolderItem] = [:]
+    /// Statuts indexés par identifiant canonique minuscule : recherche O(1)
+    /// au lieu d'un scan de tout `statuses` pour chaque ligne de la feuille.
+    private var statusIndex: [String: KDriveFreshnessStatus] = [:]
+    /// Dossier distant déjà résolu, par identifiant canonique minuscule de
+    /// collection : évite de re-normaliser les noms candidats à chaque rendu.
+    private var folderCache: [String: KDriveFolderItem] = [:]
     private(set) var isCheckingAll = false
     private(set) var checkedCount = 0
     private(set) var totalToCheck = 0
@@ -57,24 +63,37 @@ final class KDriveFreshnessCenter {
     func status(for collectionID: String) -> KDriveFreshnessStatus? {
         let canonical = Self.canonicalID(collectionID)
         if let exact = statuses[canonical] { return exact }
-        let lower = canonical.lowercased()
-        return statuses.first { $0.key.lowercased() == lower }?.value
+        return statusIndex[canonical.lowercased()]
     }
 
     func remoteFolder(for collectionID: String) -> KDriveFolderItem? {
+        let cacheKey = Self.canonicalID(collectionID).lowercased()
+        if let cached = folderCache[cacheKey] { return cached }
         for candidate in KDriveFreshness.candidateFolderNames(for: collectionID) {
             let key = FilenamePolicy.kDriveNormalizedName(candidate)
             if let folder = remoteFolders[key] {
+                folderCache[cacheKey] = folder
                 return folder
             }
         }
         return nil
     }
 
+    /// Écrit (ou supprime) un statut en tenant l'index secondaire à jour.
+    private func setStatus(_ status: KDriveFreshnessStatus?, forCanonical canonical: String) {
+        if let status {
+            statuses[canonical] = status
+            statusIndex[canonical.lowercased()] = status
+        } else {
+            statuses.removeValue(forKey: canonical)
+            statusIndex.removeValue(forKey: canonical.lowercased())
+        }
+    }
+
     /// Marque une collection comme fraîchement envoyée sur kDrive après un upload réussi.
     func markUploaded(collectionLabel: String, remoteFileCount: Int) {
         let canonical = Self.canonicalID(collectionLabel)
-        statuses[canonical] = .upToDate(remoteCount: remoteFileCount, checkedSourceCount: 0)
+        setStatus(.upToDate(remoteCount: remoteFileCount, checkedSourceCount: 0), forCanonical: canonical)
         checkedDates[canonical] = Date()
     }
 
@@ -145,6 +164,7 @@ final class KDriveFreshnessCenter {
             }
         }
         remoteFolders = index
+        folderCache.removeAll()
     }
 
     /// Vérifie une seule collection en comparant son dossier kDrive au site source.
@@ -157,7 +177,7 @@ final class KDriveFreshnessCenter {
         refreshFoldersFirst: Bool = true
     ) async {
         let canonical = collection.id
-        statuses[canonical] = .checking
+        setStatus(.checking, forCanonical: canonical)
         lastGlobalError = nil
 
         do {
@@ -195,17 +215,17 @@ final class KDriveFreshnessCenter {
                 sourceItems: sourceItems,
                 localFileNames: localNames
             )
-            statuses[canonical] = evaluation
+            setStatus(evaluation, forCanonical: canonical)
             checkedDates[canonical] = Date()
             LogCenter.kdrive(L("kDrive : vérification de \(collection.displayName) — \(evaluation.summaryText).",
                                "kDrive: checked \(collection.displayName) — \(evaluation.summaryText)."))
         } catch is CancellationError {
             if statuses[canonical]?.isChecking == true {
-                statuses.removeValue(forKey: canonical)
+                setStatus(nil, forCanonical: canonical)
             }
         } catch {
             let message = error.localizedDescription
-            statuses[canonical] = .unavailable(reason: message)
+            setStatus(.unavailable(reason: message), forCanonical: canonical)
             checkedDates[canonical] = Date()
             LogCenter.err(L("kDrive : vérification impossible pour \(collection.displayName) : \(message)",
                             "kDrive: could not check \(collection.displayName): \(message)"))
@@ -296,7 +316,7 @@ final class KDriveFreshnessCenter {
         singleTasks.removeAll()
         isCheckingAll = false
         for (key, value) in statuses where value.isChecking {
-            statuses.removeValue(forKey: key)
+            setStatus(nil, forCanonical: key)
         }
     }
 
@@ -946,141 +966,23 @@ struct KDriveCollectionsStatusView: View {
         }
     }
 
-    @ViewBuilder
-    private func calmLeadingTile(status: KDriveFreshnessStatus?, folder: KDriveFolderItem?) -> some View {
-        let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
-        if isCalmUpToDate {
-            Image(systemName: "checkmark")
-                .font(.caption.weight(.bold))
-                .foregroundStyle(DS.calmSage)
-                .frame(width: 30, height: 30)
-                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                .accessibilityHidden(true)
-        } else if let status, !status.isChecking {
-            Image(systemName: "icloud.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(status.tintColor)
-                .frame(width: 30, height: 30)
-                .background(status.tintColor.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                .accessibilityHidden(true)
-        } else if !center.remoteFolders.isEmpty, status == nil {
-            Image(systemName: "icloud.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(DS.calmRose)
-                .frame(width: 30, height: 30)
-                .background(DS.calmRose.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                .accessibilityHidden(true)
-        } else {
-            Image(systemName: "icloud")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(DS.onSurfaceMuted)
-                .frame(width: 30, height: 30)
-                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
-                .accessibilityHidden(true)
-        }
-    }
-
-    private func rowDetailColor(status: KDriveFreshnessStatus?, folder: KDriveFolderItem?) -> Color {
-        if let status { return status.tintColor }
-        if folder != nil { return DS.calmSage }
-        if !center.remoteFolders.isEmpty { return DS.calmRose }
-        return DS.onSurfaceMuted
-    }
-
-    @ViewBuilder
     private func collectionRow(_ collection: UserCollection) -> some View {
         let status = center.status(for: collection.id)
-        let folder = center.remoteFolder(for: collection.id)
-        let expectedFolderName = folder?.name ?? FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
-        let detailColor = rowDetailColor(status: status, folder: folder)
-        let isCalmUpToDate = (status?.isUpToDate == true) || (status == nil && folder != nil)
-        let isSelected = selectedIds.contains(collection.id)
-
-        HStack(spacing: DS.space(2)) {
-            Button {
-                toggleSelection(for: collection.id)
-            } label: {
-                HStack(spacing: DS.space(3)) {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
-                        .foregroundStyle(isSelected ? DS.accent : DS.onSurfaceMuted.opacity(0.45))
-                        .accessibilityHidden(true)
-
-                    calmLeadingTile(status: status, folder: folder)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(collection.displayName)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(isCalmUpToDate ? DS.onSurface.opacity(0.84) : DS.onSurface)
-                            .lineLimit(1)
-
-                        if let status {
-                            KDriveBicolorDetail(status: status, font: .caption)
-                        } else if let folder {
-                            let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
-                            if ts > 0 {
-                                let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                                Text(L("Sur kDrive · \(date.formatted(date: .abbreviated, time: .omitted))",
-                                       "On kDrive · \(date.formatted(date: .abbreviated, time: .omitted))"))
-                                    .font(.caption)
-                                    .foregroundStyle(DS.onSurfaceMuted)
-                                    .lineLimit(1)
-                            } else {
-                                Text(L("Sur kDrive · \(expectedFolderName)",
-                                       "On kDrive · \(expectedFolderName)"))
-                                    .font(.caption)
-                                    .foregroundStyle(DS.onSurfaceMuted)
-                                    .lineLimit(1)
-                            }
-                        } else if !center.remoteFolders.isEmpty {
-                            HStack(spacing: 0) {
-                                Text(L("Absent de kDrive", "Not on kDrive"))
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(DS.calmRose)
-                                Text(" · \(expectedFolderName)")
-                                    .font(.caption)
-                                    .foregroundStyle(DS.onSurfaceMuted)
-                            }
-                            .lineLimit(1)
-                        } else {
-                            Text(L("Non vérifié · \(expectedFolderName)", "Not checked · \(expectedFolderName)"))
-                                .font(.caption)
-                                .foregroundStyle(DS.onSurfaceMuted)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(batch.isRunning)
-            .accessibilityLabel(collection.displayName)
-            .accessibilityAddTraits(isSelected ? .isSelected : [])
-            .accessibilityHint(isSelected
-                ? L("Appuyer pour désélectionner", "Tap to deselect")
-                : L("Appuyer pour sélectionner pour téléchargement, envoi kDrive et nettoyage",
-                    "Tap to select for download, kDrive upload and cleanup"))
-
-            if let onDownloadCollection, shouldOfferDownload(for: status) {
-                Button {
-                    dismiss()
-                    onDownloadCollection(collection)
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.body)
-                        .foregroundStyle(detailColor)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .disabled(model.running)
-                .accessibilityLabel(L("Télécharger les nouveautés de \(collection.displayName)",
-                                      "Download new media from \(collection.displayName)"))
-            }
-
-            Button {
+        return KDriveCollectionRowView(
+            collection: collection,
+            status: status,
+            folder: center.remoteFolder(for: collection.id),
+            remoteIndexEmpty: center.remoteFolders.isEmpty,
+            isSelected: selectedIds.contains(collection.id),
+            batchRunning: batch.isRunning,
+            modelRunning: model.running,
+            showsDownload: shouldOfferDownload(for: status) && onDownloadCollection != nil,
+            onToggle: { toggleSelection(for: collection.id) },
+            onDownload: onDownloadCollection.map { handler in {
+                dismiss()
+                handler(collection)
+            } },
+            onSingleCheck: {
                 center.startSingleCheck(
                     collection: collection,
                     model: model,
@@ -1088,24 +990,9 @@ struct KDriveCollectionsStatusView: View {
                     driveId: driveId,
                     directoryId: directoryId
                 )
-            } label: {
-                if status?.isChecking == true {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(minWidth: 44, minHeight: 44)
-                } else {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.body)
-                        .foregroundStyle(DS.onSurfaceMuted)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
-                }
             }
-            .buttonStyle(.borderless)
-            .disabled(status?.isChecking == true)
-            .accessibilityLabel(L("Vérifier \(collection.displayName)", "Check \(collection.displayName)"))
-        }
-        .padding(.vertical, 1)
+        )
+        .equatable()
     }
 
     private func shouldOfferDownload(for status: KDriveFreshnessStatus?) -> Bool {
@@ -1175,6 +1062,183 @@ private struct KDriveCloudCheckShape: Shape {
         path.addLine(to: pt(11.2, 15.5))
         path.addLine(to: pt(15.4, 11.1))
         return path
+    }
+}
+
+private struct KDriveCollectionRowView: View, Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.collection == rhs.collection
+            && lhs.status == rhs.status
+            && lhs.folder == rhs.folder
+            && lhs.remoteIndexEmpty == rhs.remoteIndexEmpty
+            && lhs.isSelected == rhs.isSelected
+            && lhs.batchRunning == rhs.batchRunning
+            && lhs.modelRunning == rhs.modelRunning
+            && lhs.showsDownload == rhs.showsDownload
+    }
+
+    let collection: UserCollection
+    let status: KDriveFreshnessStatus?
+    let folder: KDriveFolderItem?
+    let remoteIndexEmpty: Bool
+    let isSelected: Bool
+    let batchRunning: Bool
+    let modelRunning: Bool
+    let showsDownload: Bool
+    let onToggle: () -> Void
+    let onDownload: (() -> Void)?
+    let onSingleCheck: () -> Void
+
+    private var detailColor: Color {
+        if let status { return status.tintColor }
+        if folder != nil { return DS.calmSage }
+        if !remoteIndexEmpty { return DS.calmRose }
+        return DS.onSurfaceMuted
+    }
+
+    private var expectedFolderName: String {
+        folder?.name ?? FilenamePolicy.kDriveFolderName(collection.kDriveLabel)
+    }
+
+    private var isCalmUpToDate: Bool {
+        (status?.isUpToDate == true) || (status == nil && folder != nil)
+    }
+
+    var body: some View {
+        HStack(spacing: DS.space(2)) {
+            Button(action: onToggle) {
+                HStack(spacing: DS.space(3)) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(isSelected ? DS.accent : DS.onSurfaceMuted.opacity(0.45))
+                        .accessibilityHidden(true)
+
+                    leadingTile
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(collection.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(isCalmUpToDate ? DS.onSurface.opacity(0.84) : DS.onSurface)
+                            .lineLimit(1)
+
+                        if let status {
+                            KDriveBicolorDetail(status: status, font: .caption)
+                        } else if let folder {
+                            folderDetailRow(folder)
+                        } else if !remoteIndexEmpty {
+                            HStack(spacing: 0) {
+                                Text(L("Absent de kDrive", "Not on kDrive"))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(DS.calmRose)
+                                Text(" \u{00B7} \(expectedFolderName)")
+                                    .font(.caption)
+                                    .foregroundStyle(DS.onSurfaceMuted)
+                            }
+                            .lineLimit(1)
+                        } else {
+                            Text(L("Non vérifié \u{00B7} \(expectedFolderName)", "Not checked \u{00B7} \(expectedFolderName)"))
+                                .font(.caption)
+                                .foregroundStyle(DS.onSurfaceMuted)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(batchRunning)
+            .accessibilityLabel(collection.displayName)
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+            .accessibilityHint(isSelected
+                ? L("Appuyer pour désélectionner", "Tap to deselect")
+                : L("Appuyer pour sélectionner pour téléchargement, envoi kDrive et nettoyage",
+                    "Tap to select for download, kDrive upload and cleanup"))
+
+            if showsDownload {
+                Button(action: { onDownload?() }) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.body)
+                        .foregroundStyle(detailColor)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(modelRunning)
+                .accessibilityLabel(L("Télécharger les nouveautés de \(collection.displayName)",
+                                      "Download new media from \(collection.displayName)"))
+            }
+
+            Button(action: onSingleCheck) {
+                if status?.isChecking == true {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(minWidth: 44, minHeight: 44)
+                } else {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.body)
+                        .foregroundStyle(DS.onSurfaceMuted)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(status?.isChecking == true)
+            .accessibilityLabel(L("Vérifier \(collection.displayName)", "Check \(collection.displayName)"))
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func folderDetailRow(_ folder: KDriveFolderItem) -> some View {
+        let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
+        return Group {
+            if ts > 0 {
+                let date = Date(timeIntervalSince1970: TimeInterval(ts))
+                Text(L("Sur kDrive \u{00B7} \(date.formatted(date: .abbreviated, time: .omitted))",
+                       "On kDrive \u{00B7} \(date.formatted(date: .abbreviated, time: .omitted))"))
+            } else {
+                Text(L("Sur kDrive \u{00B7} \(expectedFolderName)",
+                       "On kDrive \u{00B7} \(expectedFolderName)"))
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(DS.onSurfaceMuted)
+        .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var leadingTile: some View {
+        let isCalmUpToDate = isCalmUpToDate
+        if isCalmUpToDate {
+            Image(systemName: "checkmark")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(DS.calmSage)
+                .frame(width: 30, height: 30)
+                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else if let status, !status.isChecking {
+            Image(systemName: "icloud.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(status.tintColor)
+                .frame(width: 30, height: 30)
+                .background(status.tintColor.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else if !remoteIndexEmpty, status == nil {
+            Image(systemName: "icloud.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(DS.calmRose)
+                .frame(width: 30, height: 30)
+                .background(DS.calmRose.opacity(0.13), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: "icloud")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(DS.onSurfaceMuted)
+                .frame(width: 30, height: 30)
+                .background(DS.onSurface.opacity(0.05), in: RoundedRectangle(cornerRadius: DS.radiusS))
+                .accessibilityHidden(true)
+        }
     }
 }
 
