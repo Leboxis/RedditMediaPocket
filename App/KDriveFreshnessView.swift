@@ -1190,13 +1190,18 @@ private struct KDriveCollectionRowView: View, Equatable {
         .padding(.vertical, 1)
     }
 
+    /// Style de date partagé entre les lignes : un `Date.FormatStyle` statique
+    /// réutilise son formateur ICU en interne, contrairement à `formatted()`
+    /// qui en reconstruit un à chaque appel (coût par cellule au défilement).
+    private static let dateStyle = Date.FormatStyle(date: .abbreviated, time: .omitted)
+
     private func folderDetailRow(_ folder: KDriveFolderItem) -> some View {
         let ts = folder.lastModifiedAt ?? folder.updatedAt ?? 0
         return Group {
             if ts > 0 {
                 let date = Date(timeIntervalSince1970: TimeInterval(ts))
-                Text(L("Sur kDrive \u{00B7} \(date.formatted(date: .abbreviated, time: .omitted))",
-                       "On kDrive \u{00B7} \(date.formatted(date: .abbreviated, time: .omitted))"))
+                Text(L("Sur kDrive \u{00B7} \(Self.dateStyle.format(date))",
+                       "On kDrive \u{00B7} \(Self.dateStyle.format(date))"))
             } else {
                 Text(L("Sur kDrive \u{00B7} \(expectedFolderName)",
                        "On kDrive \u{00B7} \(expectedFolderName)"))
