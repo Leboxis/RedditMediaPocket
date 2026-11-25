@@ -1,3 +1,10 @@
+Tri de l'écran Suivis, cadence kDrive élargie, réglages Cloudflare compacts et centre de logs repensé.
+
+- **Tri des suivis.** Deux ordres d'affichage mémorisés : « Présents sur kDrive d'abord » (défaut) place en tête les comptes dont le dossier existe déjà sur kDrive, chaque groupe étant trié par ordre alphabétique insensible à la casse ; « Ordre alphabétique (A–Z) » trie tous les comptes de A à Z. Le choix s'applique aux amis comme aux listes par plateforme.
+- **Cadence kDrive : plafond réglable de 60 à 600 req/min** (60 par défaut, pas de 10), avec les bornes affichées sous le curseur. Le dépassement se mesure désormais par rapport au plafond choisi et non plus seulement à la limite officielle Infomaniak (60/min) : le message de pause cite le plafond effectif, et le compteur « API kDrive » affiche `x/y req/min` contre ce plafond, mis en couleur dès 75 %.
+- **Réglages Cloudflare compacts.** Une seule ligne « Cloudflare » rassemble l'état de la clé API (« Clé API » renseignée ou « Ajouter clé API ») et les deux synchronisations (suivis, cookies de session) avec leur date courte et leurs actions, au lieu de sections séparées.
+- **Centre de logs repensé.** Quatre niveaux colorés avec icônes et compteurs par niveau (Infos, Réseau, kDrive, Erreurs), recherche plein texte, filtre par niveau, ordre « plus récent d'abord » (mémorisé), mode compact (mémorisé), suivi automatique et écritures tamponnées en mémoire et sur disque. Le filtrage et les compteurs sont couverts par des tests unitaires.
+
 Vérification de fraîcheur des collections kDrive par rapport aux sites sources.
 
 - **Comparaison kDrive / site source.** Pour chaque collection (Reddit `u/`, `r/`, `♥`, RedGifs `rg/` et `#tag`, X-Fetish `x/`, X `tw/`, TikTok `tt/` et `ts/`, Instagram `ig/`), l'app interroge le dossier correspondant sur kDrive et la première page du site source (sans rien télécharger) pour déterminer si le Drive est à jour (`À jour`, `+N nouveaux sur la source`, `N à envoyer vers kDrive`, `Hors kDrive`).
