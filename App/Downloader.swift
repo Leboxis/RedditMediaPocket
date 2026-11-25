@@ -270,6 +270,51 @@ final class Downloader {
         didSet { applyGalleryOrdering() }
     }
 
+    var galleryFavoritesOnly: Bool = UserDefaults.standard.bool(forKey: Self.galleryFavoritesOnlyKey) {
+        didSet {
+            UserDefaults.standard.set(galleryFavoritesOnly, forKey: Self.galleryFavoritesOnlyKey)
+            applyGalleryOrdering()
+        }
+    }
+
+    private(set) var favoriteKeys: Set<String> = [] {
+        didSet { applyGalleryOrdering() }
+    }
+
+    static let galleryFavoritesOnlyKey = "galleryFavoritesOnly"
+    static let favoritesFileName = "favorites.json"
+
+    private var favoritesFileURL: URL { root.appendingPathComponent(Self.favoritesFileName) }
+
+    func isFavorite(_ url: URL) -> Bool {
+        GalleryFavorites.isFavorite(favoriteKeys, url)
+    }
+
+    func toggleFavorite(_ url: URL) {
+        GalleryFavorites.toggle(&favoriteKeys, url)
+        saveFavorites()
+    }
+
+    func setFavorite(_ urls: [URL], _ favorite: Bool) {
+        let keys = Set(urls.map { GalleryFavorites.key(for: $0) })
+        if favorite { favoriteKeys.formUnion(keys) } else { favoriteKeys.subtract(keys) }
+        saveFavorites()
+    }
+
+    private func loadFavorites() {
+        guard let data = try? Data(contentsOf: favoritesFileURL) else { return }
+        favoriteKeys = (try? GalleryFavorites.decode(data)) ?? []
+    }
+
+    private func saveFavorites() {
+        let keys = favoriteKeys
+        let file = favoritesFileURL
+        Task.detached(priority: .utility) {
+            guard let data = try? GalleryFavorites.encode(keys) else { return }
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
     /// Fichiers affichés par la galerie : `files` filtré et trié.
     ///
     /// C'est une valeur **stockée**, recalculée par `applyGalleryOrdering()`
@@ -291,6 +336,7 @@ final class Downloader {
             if url.lastPathComponent.localizedStandardContains(query) { return true }
             return searchIndex[url]?.localizedStandardContains(query) == true
         }
+        result = GalleryFavorites.filter(result, favorites: favoriteKeys, onlyFavorites: galleryFavoritesOnly)
         result = gallerySort.sorted(result, dates: fileDates, sizes: fileSizes)
         if result != displayedFiles { displayedFiles = result }
     }
@@ -592,6 +638,7 @@ final class Downloader {
 
     init() {
         loadCachedCollections()
+        loadFavorites()
         // Fichiers supprimés du téléphone (envoi kDrive) : le compte de
         // médias de la collection active et la galerie sont relus aussitôt ;
         // une collection devenue vide est retirée.
@@ -923,6 +970,10 @@ final class Downloader {
         let folder = root.appendingPathComponent(collection.folderName, isDirectory: true)
         let rootURL = root
         let isTikTokVideo = collection.isTikTokVideo
+        let folderPath = folder.standardizedFileURL.path + "/"
+        let favoriteCountBefore = favoriteKeys.count
+        favoriteKeys = Set(favoriteKeys.filter { !$0.hasPrefix(folderPath) })
+        if favoriteKeys.count != favoriteCountBefore { saveFavorites() }
         Task.detached(priority: .utility) {
             try? FileManager.default.removeItem(at: folder)
             if isTikTokVideo {
@@ -998,6 +1049,11 @@ final class Downloader {
         }
         guard !removable.isEmpty else { return }
 
+        let removedKeys = Set(removable.map { GalleryFavorites.key(for: $0) })
+        let favoriteCountBefore = favoriteKeys.count
+        favoriteKeys.subtract(removedKeys)
+        if favoriteKeys.count != favoriteCountBefore { saveFavorites() }
+
         loadingFiles = true
         Task { @MainActor [weak self] in
             let failures = await Task.detached(priority: .userInitiated) { () -> Int in
@@ -1040,6 +1096,8 @@ final class Downloader {
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(collection.id))
         }
         UserDefaults.standard.removeObject(forKey: Self.tikTokVideoSelectionKey)
+        favoriteKeys.removeAll()
+        saveFavorites()
         collections = []
         saveCollections()
         activeUser = nil

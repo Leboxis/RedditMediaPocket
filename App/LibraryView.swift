@@ -285,7 +285,16 @@ struct LibraryView: View {
                 selectionBar
             }
             if model.displayedFiles.isEmpty {
-                if model.gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.galleryKindFilter != .all {
+                if model.galleryFavoritesOnly {
+                    ContentUnavailableView {
+                        Label(L("Aucun favori", "No favorites"), systemImage: "heart")
+                    } description: {
+                        Text(L("Coche le cœur d'un média pour le retrouver ici.", "Tap the heart on a media to find it here."))
+                    } actions: {
+                        Button(L("Tout afficher", "Show all")) { model.galleryFavoritesOnly = false }
+                            .buttonStyle(DSPrimaryButtonStyle())
+                    }
+                } else if model.gallerySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.galleryKindFilter != .all {
                     ContentUnavailableView {
                         Label(L("Aucun résultat pour ce filtre", "No media for this filter"), systemImage: "line.3.horizontal.decrease.circle")
                     } description: {
@@ -306,6 +315,7 @@ struct LibraryView: View {
                     }
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .refreshable { await refreshGallery() }
             }
         }
     }
@@ -322,6 +332,15 @@ struct LibraryView: View {
             }
         } label: {
             MediaThumbnail(url: url)
+                .overlay(alignment: .topLeading) {
+                    if model.isFavorite(url) {
+                        Image(systemName: "heart.fill")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(DS.accent)
+                            .shadow(color: DS.shadowColor.opacity(0.5), radius: 2)
+                            .padding(DS.space(2))
+                    }
+                }
                 .overlay(alignment: .topTrailing) {
                     if selectingMedia {
                         Image(systemName: picked ? "checkmark.circle.fill" : "circle")
@@ -340,6 +359,12 @@ struct LibraryView: View {
                             : (isVideo(url) ? L("Ouvrir la vidéo", "Open video") : L("Ouvrir l'image", "Open image")))
         .accessibilityAddTraits(picked && selectingMedia ? .isSelected : [])
         .contextMenu {
+            Button {
+                model.toggleFavorite(url)
+            } label: {
+                Label(model.isFavorite(url) ? L("Retirer des favoris", "Remove from favorites") : L("Ajouter aux favoris", "Add to favorites"),
+                      systemImage: model.isFavorite(url) ? "heart.slash" : "heart")
+            }
             if !selectingMedia {
                 Button {
                     selectingMedia = true
@@ -363,6 +388,7 @@ struct LibraryView: View {
     private var selectionBar: some View {
         let selectedVisible = visibleSelection
         let allPicked = !model.displayedFiles.isEmpty && selectedVisible.count == model.displayedFiles.count
+        let allSelectedFavorite = !selectedVisible.isEmpty && selectedVisible.allSatisfy { model.isFavorite($0) }
         return HStack(spacing: DS.space(1)) {
             Button {
                 if allPicked {
@@ -384,6 +410,16 @@ struct LibraryView: View {
                 .monospacedDigit()
                 .foregroundStyle(selectedVisible.isEmpty ? DS.onSurfaceMuted : DS.onSurface)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                model.setFavorite(selectedVisible, !allSelectedFavorite)
+            } label: {
+                Image(systemName: allSelectedFavorite ? "heart.slash" : "heart.fill")
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .disabled(selectedVisible.isEmpty)
+            .accessibilityLabel(allSelectedFavorite ? L("Retirer la sélection des favoris", "Remove selection from favorites") : L("Ajouter la sélection aux favoris", "Add selection to favorites"))
 
             Button { saveSelectionToGallery() } label: {
                 Group {
@@ -434,6 +470,13 @@ struct LibraryView: View {
     /// qui est visible au moment du geste.
     private func orderedSelection() -> [URL] {
         model.displayedFiles.filter { selectedMedia.contains($0) }
+    }
+
+    private func refreshGallery() async {
+        model.reload()
+        if !model.running, let id = model.activeUser {
+            model.download(user: id)
+        }
     }
 
     private func toggleMediaSelection(_ url: URL) {
