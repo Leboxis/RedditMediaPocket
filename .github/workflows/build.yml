@@ -79,8 +79,11 @@ jobs:
 
   build-ipa:
     name: Build unsigned iPhone app
+    needs: [test-core, test-ios, backend]
     runs-on: macos-26
     timeout-minutes: 25
+    permissions:
+      contents: write
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
       HOMEBREW_NO_INSTALL_CLEANUP: '1'
@@ -131,13 +134,33 @@ jobs:
           python3 scripts/make_source.py --repo "$REPOSITORY" --version "0.2.${BUILD_NUMBER}" \
             --ipa dist/RedditMediaPocket.ipa --output dist/apps.json
           cp icon.png dist/icon.png
-      - uses: actions/upload-artifact@v7
+      - name: Conserver le build pour les pull requests uniquement
+        # Sur main, les mêmes fichiers sont publiés comme release : les assets
+        # de release ne comptent pas dans le stockage d'artifacts. Les uploader
+        # en plus dupliquait l'IPA à chaque commit et remplissait le quota.
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
         with:
           name: RedditMediaPocket
+          retention-days: 2
           path: |
             dist/RedditMediaPocket.ipa
             dist/apps.json
             dist/icon.png
+      - name: Publish release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          TAG="v0.2.${BUILD_NUMBER}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
+          else
+            gh release create "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png \
+              --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
+              --notes-file RELEASE_NOTES.md --latest
+          fi
 
   backend:
     name: Vérifier le backend Cloudflare
@@ -157,31 +180,3 @@ jobs:
         run: npm ci
       - name: Vérifier le typage du Worker
         run: npm run typecheck
-
-  publish-release:
-    name: Publier la release
-    needs: [test-core, test-ios, build-ipa, backend]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v7
-        with:
-          name: RedditMediaPocket
-          path: dist
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_NUMBER: ${{ github.run_number }}
-        run: |
-          TAG="v0.2.${BUILD_NUMBER}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png --clobber
-          else
-            gh release create "$TAG" dist/RedditMediaPocket.ipa dist/apps.json dist/icon.png \
-              --target "$GITHUB_SHA" --title "Reddit Media Pocket $TAG" \
-              --notes-file RELEASE_NOTES.md --latest
-          fi
