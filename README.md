@@ -34,6 +34,10 @@ Au-dessus de la grille, la recherche porte sur le nom des fichiers, l'auteur et 
 
 Chaque pastille de collection affiche `+N` lorsque le dernier parcours y a ajouté N médias.
 
+**Favoris** : un cœur par média (menu contextuel de la vignette), un filtre « favoris » (cœur) dans la barre de la galerie, et ajout/retrait du lot entier depuis la barre de sélection multiple. Les favoris sont conservés entre les lancements et supprimés avec le média concerné.
+
+**Rafraîchir par glissement** : tirer la galerie vers le bas relit les fichiers du disque et relance le parcours de la collection active si aucun téléchargement n'est en cours.
+
 ## État réel
 
 Le code et le workflow sont disponibles dans ce dépôt. GitHub Actions compile et publie une IPA à chaque push sur main. Consulter le résultat du dernier workflow avant de télécharger une release. Les essais dans LiveContainer sur iPhone restent à effectuer. Un appel public au RSS de `u/reddit` répondait HTTP 200 le 5 septembre 2026 ; depuis le 13 novembre 2026, tous les `.rss` répondent 404 et les `.json` anonymes répondent 403. Les sources Reddit (`u/`, `r/`, `♥`, liens de posts) exigent donc une session dans Réglages → Connexions → Reddit.
