@@ -1,3 +1,9 @@
+Favoris locaux et rafraîchissement de la galerie par glissement.
+
+- **Favoris locaux.** Un cœur par média (menu contextuel de la vignette, cœur plein affiché sur la vignette), indépendant de la source et du téléchargement. Les favoris survivent aux relances (JSON à la racine des collections) et sont nettoyés quand un média, une collection ou toute la bibliothèque est supprimé. Depuis la barre de sélection multiple, ajouter ou retirer tout le lot d'un geste.
+- **Filtre « favoris »** dans la barre de la galerie (cœur plein quand actif), combinable avec la recherche, le tri et le filtre de type ; état vide dédié avec « Tout afficher ».
+- **Tirer pour rafraîchir** la galerie : relit les fichiers du disque et relance le parcours de la collection active quand aucun téléchargement n'est en cours.
+
 Tri de l'écran Suivis, cadence kDrive élargie, réglages Cloudflare compacts et centre de logs repensé.
 
 - **Tri des suivis.** Deux ordres d'affichage mémorisés : « Présents sur kDrive d'abord » (défaut) place en tête les comptes dont le dossier existe déjà sur kDrive, chaque groupe étant trié par ordre alphabétique insensible à la casse ; « Ordre alphabétique (A–Z) » trie tous les comptes de A à Z. Le choix s'applique aux amis comme aux listes par plateforme.

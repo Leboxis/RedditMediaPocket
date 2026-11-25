@@ -20,6 +20,7 @@ struct GalleryToolbar: View {
                 searchField
                 sortMenu
                 kindMenu
+                favoritesToggle
             }
             if model.displayedFiles.count != model.files.count {
                 Text(L("\(model.displayedFiles.count) sur \(model.files.count) médias",
@@ -63,6 +64,16 @@ struct GalleryToolbar: View {
         .padding(.trailing, model.gallerySearch.isEmpty ? DS.space(3) : 0)
         .frame(minHeight: 44)
         .background(DS.surface, in: RoundedRectangle(cornerRadius: DS.radiusM))
+    }
+
+    private var favoritesToggle: some View {
+        Button {
+            model.galleryFavoritesOnly.toggle()
+        } label: {
+            toolbarIcon(model.galleryFavoritesOnly ? "heart.fill" : "heart", active: model.galleryFavoritesOnly)
+        }
+        .accessibilityLabel(L("Afficher uniquement les favoris", "Show favorites only"))
+        .accessibilityValue(model.galleryFavoritesOnly ? L("activé", "on") : L("désactivé", "off"))
     }
 
     private var sortMenu: some View {
