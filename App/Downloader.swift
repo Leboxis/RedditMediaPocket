@@ -270,9 +270,9 @@ final class Downloader {
         didSet { applyGalleryOrdering() }
     }
 
-    var galleryFavoritesOnly: Bool = UserDefaults.standard.bool(forKey: Self.galleryFavoritesOnlyKey) {
+    var galleryFavoritesOnly: Bool = UserDefaults.standard.bool(forKey: "galleryFavoritesOnly") {
         didSet {
-            UserDefaults.standard.set(galleryFavoritesOnly, forKey: Self.galleryFavoritesOnlyKey)
+            UserDefaults.standard.set(galleryFavoritesOnly, forKey: "galleryFavoritesOnly")
             applyGalleryOrdering()
         }
     }
@@ -281,7 +281,6 @@ final class Downloader {
         didSet { applyGalleryOrdering() }
     }
 
-    static let galleryFavoritesOnlyKey = "galleryFavoritesOnly"
     static let favoritesFileName = "favorites.json"
 
     private var favoritesFileURL: URL { root.appendingPathComponent(Self.favoritesFileName) }
