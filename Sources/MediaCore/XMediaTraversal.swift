@@ -13,12 +13,17 @@ import Foundation
 /// stopping there would silently skip everything underneath. A page that still
 /// has media missing from disk counts as new, so failed downloads keep being
 /// retried.
+///
+/// `stopAfterIdlePages` vaut `false` pour les signets : une page de posts
+/// texte seul n'y prouve pas que les médias plus anciens sont déjà archivés,
+/// contrairement au fil `/media`, qui ne contient que des posts à média.
 public enum XMediaTraversal {
     /// Pages sans nouveauté tolérées avant de conclure qu'on est à jour.
     static let idlePagesBeforeCaughtUp = 2
 
     @MainActor public static func run(
         cursor initialCursor: String?, maximumPages: Int = 100,
+        stopAfterIdlePages: Bool = true,
         fetch: (String?) async throws -> XMediaPage,
         process: ([XPost]) async throws -> Bool,
         persist: (String?) -> Void
@@ -43,7 +48,7 @@ public enum XMediaTraversal {
             try Task.checkCancellation()
             idle = produced ? 0 : idle + 1
 
-            if idle >= idlePagesBeforeCaughtUp {
+            if stopAfterIdlePages, idle >= idlePagesBeforeCaughtUp {
                 // Rattrapé : plus rien à faire de ce curseur. Le conserver
                 // ferait repartir le prochain lancement au milieu du fil au
                 // lieu de vérifier les nouveautés depuis le début.

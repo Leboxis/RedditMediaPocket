@@ -14,6 +14,9 @@ struct UserCollection: Codable, Identifiable, Equatable {
     var isXFetish = false
     var isRedGifs = false
     var isTwitter = false
+    /// Signets X du compte connecté (`tws/<identifiant>`) : session WebKit
+    /// exigée, route GraphQL `Bookmarks`, aucun profil à parcourir.
+    var isTwitterSaved = false
     /// Compte TikTok (`tt/pseudo`) : session WebKit distincte, parcours paginé
     /// de l'API interne `api/post/item_list`.
     var isTikTok = false
@@ -44,6 +47,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isTikTok { return "tt/\(name)" }
         if isInstagram { return "ig/\(name)" }
         if isTwitter { return "tw/\(name)" }
+        if isTwitterSaved { return "tws/\(name)" }
         if isRedGifsTag { return "rg/#\(name)" }
         if isRedGifsGif { return "rg/gif/\(name)" }
         if isRedGifs { return "rg/\(name)" }
@@ -52,13 +56,17 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isRedditPosts { return "reddit/posts" }
         return (isSubreddit ? "r/" : "u/") + name
     }
-    var displayName: String { isTikTokVideo ? "Tiktok - Videos" : (isSaved ? "Saved" : id) }
-    /// Icône SF Symbol unifiée pour les 13 types de collection.
+    var displayName: String {
+        if isTwitterSaved { return L("Sauvegardés X", "X saved") }
+        return isTikTokVideo ? "Tiktok - Videos" : (isSaved ? "Saved" : id)
+    }
+    /// Icône SF Symbol unifiée pour les 14 types de collection.
     var icon: String {
         if isSaved { return "heart.fill" }
         if isXFetish { return "flame" }
         if isRedGifs || isRedGifsTag || isRedGifsGif { return "film" }
         if isTwitter { return "at" }
+        if isTwitterSaved { return "bookmark.fill" }
         if isTikTokSaved { return "bookmark.fill" }
         if isTikTok || isTikTokVideo { return "music.note" }
         if isInstagram { return "camera" }
@@ -78,6 +86,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isTikTok { return "tk.\(name)" }
         if isInstagram { return "ig.\(name)" }
         if isTwitter { return "tw.\(name)" }
+        if isTwitterSaved { return "tws.\(name)" }
         if isRedGifsTag { return "redgifs.tag.\(name)" }
         if isRedGifsGif { return "redgifs.gif.\(name)" }
         if isRedGifs { return "redgifs.\(name)" }
@@ -95,6 +104,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         if isTikTok { return .tiktokUser(name) }
         if isInstagram { return .instagramUser(name) }
         if isTwitter { return .twitterUser(name) }
+        if isTwitterSaved { return .twitterSaved(name) }
         if isRedGifsTag { return .redgifsTag(name) }
         if isRedGifsGif { return .redgifsGif(name) }
         if isRedGifs { return .redgifsUser(name) }
@@ -108,15 +118,16 @@ struct UserCollection: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTikTok, isTikTokVideo, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
+        case name, isSubreddit, isSaved, isXFetish, isRedGifs, isTwitter, isTwitterSaved, isTikTok, isTikTokVideo, isTikTokSaved, isInstagram, isRedGifsTag, isRedGifsGif, isRedditPosts, archived, lastRun
     }
-    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTikTok: Bool = false, isTikTokVideo: Bool = false, isTikTokSaved: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
+    init(name: String, isSubreddit: Bool = false, isSaved: Bool = false, isXFetish: Bool = false, isRedGifs: Bool = false, isTwitter: Bool = false, isTwitterSaved: Bool = false, isTikTok: Bool = false, isTikTokVideo: Bool = false, isTikTokSaved: Bool = false, isInstagram: Bool = false, isRedGifsTag: Bool = false, isRedGifsGif: Bool = false, isRedditPosts: Bool = false, archived: Bool = false, lastRun: Date? = nil) {
         self.name = name
         self.isSubreddit = isSubreddit
         self.isSaved = isSaved
         self.isXFetish = isXFetish
         self.isRedGifs = isRedGifs
         self.isTwitter = isTwitter
+        self.isTwitterSaved = isTwitterSaved
         self.isTikTok = isTikTok
         self.isTikTokVideo = isTikTokVideo
         self.isTikTokSaved = isTikTokSaved
@@ -135,6 +146,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         isXFetish = try container.decodeIfPresent(Bool.self, forKey: .isXFetish) ?? false
         isRedGifs = try container.decodeIfPresent(Bool.self, forKey: .isRedGifs) ?? false
         isTwitter = try container.decodeIfPresent(Bool.self, forKey: .isTwitter) ?? false
+        isTwitterSaved = try container.decodeIfPresent(Bool.self, forKey: .isTwitterSaved) ?? false
         isTikTok = try container.decodeIfPresent(Bool.self, forKey: .isTikTok) ?? false
         isTikTokVideo = try container.decodeIfPresent(Bool.self, forKey: .isTikTokVideo) ?? false
         isTikTokSaved = try container.decodeIfPresent(Bool.self, forKey: .isTikTokSaved) ?? false
@@ -160,6 +172,7 @@ struct UserCollection: Codable, Identifiable, Equatable {
         case .redgifsTag(let tag): self.init(name: tag, isRedGifsTag: true)
         case .redgifsGif(let id): self.init(name: id, isRedGifsGif: true)
         case .twitterUser(let name): self.init(name: name, isTwitter: true)
+        case .twitterSaved(let name): self.init(name: name, isTwitterSaved: true)
         case .tiktokUser(let name): self.init(name: name, isTikTok: true)
         case .tiktokVideo: self.init(name: "videos", isTikTokVideo: true)
         case .tiktokSaved(let name): self.init(name: name, isTikTokSaved: true)
@@ -187,6 +200,9 @@ final class Downloader {
     private(set) var tikTokSavedLoading = false
     var tikTokSavedListError: String?
     var tikTokSavedAccount: String?
+    /// Identifiant du compte X dont les signets sont parcourus (`twid`).
+    /// Résolu au lancement : le mode n'a pas de champ de saisie.
+    var twitterSavedAccount: String?
     var username = UserDefaults.standard.string(forKey: "lastUsername") ?? ""
     var collections: [UserCollection] = []
     var activeUser: String?
@@ -455,6 +471,7 @@ final class Downloader {
     /// `saved` éléments sauvegardés du compte connecté,
     /// `x` albums publics d'un profil X-Fetish,
     /// `tw` médias publics d'un compte X,
+    /// `tws` signets du compte X connecté,
     /// `tt` médias publics d'un compte TikTok,
     /// `ig` médias publics d'un compte Instagram.
     /// Le cœur ignore la saisie ; pour u/, r/ et rg/, un texte contenant
@@ -471,7 +488,7 @@ final class Downloader {
     }
     /// Source effective : le sélecteur complète les noms nus, le texte explicite gagne sinon.
     var resolvedSource: FeedSource? {
-        if sourceKind == "saved" || sourceKind == "ts" { return nil }
+        if sourceKind == "saved" || sourceKind == "ts" || sourceKind == "tws" { return nil }
         // `tw` accepte `@pseudo` et une adresse `x.com/pseudo` collée telle
         // quelle ; le préfixe ne doit pas être ajouté dans ces cas.
         if sourceKind == "tw" {
@@ -510,11 +527,12 @@ final class Downloader {
     var needsSession: Bool {
         if sourceKind == "saved" { return true }
         if sourceKind == "ts" { return true }
+        if sourceKind == "tws" { return true }
         if let source = resolvedSource {
             switch source {
             // Depuis le 13/11/2026, Reddit ne sert plus aucun flux sans
             // session (RSS coupé, `.json` anonyme en HTTP 403).
-            case .saved, .user, .subreddit, .redditPosts, .twitterUser, .tiktokUser: return true
+            case .saved, .user, .subreddit, .redditPosts, .twitterUser, .twitterSaved, .tiktokUser: return true
             // Une vidéo TikTok isolée est une page publique : aucune session
             // n'est exigée pour la lire et télécharger son média.
             default: return false
@@ -696,6 +714,7 @@ final class Downloader {
     private func display(_ collection: UserCollection) {
         if collection.isSaved { sourceKind = "saved" }
         else if collection.isTwitter { sourceKind = "tw" }
+        else if collection.isTwitterSaved { sourceKind = "tws" }
         else if collection.isTikTokSaved { sourceKind = "ts" }
         else if collection.isTikTok || collection.isTikTokVideo { sourceKind = "tt" }
         else if collection.isInstagram { sourceKind = "ig" }
@@ -711,6 +730,9 @@ final class Downloader {
             username = ""
         } else if collection.isTikTokSaved {
             tikTokSavedAccount = collection.name
+            username = collection.name
+        } else if collection.isTwitterSaved {
+            twitterSavedAccount = collection.name
             username = collection.name
         } else if collection.isRedGifsTag {
             username = "#\(collection.name)"
@@ -744,7 +766,7 @@ final class Downloader {
         }
         if let last = UserDefaults.standard.string(forKey: "lastUsername") {
             // Anciennes versions : pseudo nu sans préfixe ; versions récentes :
-            // `u/…`, `r/…`, `rg/…`, `x/…`, `tw/…` ou URL d'hébergeur.
+            // `u/…`, `r/…`, `rg/…`, `x/…`, `tw/…`, `tws/…` ou URL d'hébergeur.
             if let source = try? FeedSource.parse(last.contains("/") || last.lowercased().contains("redgifs.com") ? last : "u/\(last)") {
                 switch source {
                 case .user(let name): sourceKind = "u"; username = name
@@ -755,6 +777,7 @@ final class Downloader {
                 case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
                 case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
                 case .twitterUser(let name): sourceKind = "tw"; username = name
+                case .twitterSaved(let name): sourceKind = "tws"; twitterSavedAccount = name; username = name
                 case .tiktokUser(let name): sourceKind = "tt"; username = name
                 case .tiktokVideo(let ref): sourceKind = "tt"; username = ref.url.absoluteString
                 case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
@@ -807,6 +830,8 @@ final class Downloader {
                 discovered.append(UserCollection(name: model, isXFetish: true))
             } else if folder.hasPrefix("tw."), let handle = try? XTwitterAPI.username(String(folder.dropFirst(3))) {
                 discovered.append(UserCollection(name: handle, isTwitter: true))
+            } else if folder.hasPrefix("tws."), !folder.dropFirst(4).isEmpty {
+                discovered.append(UserCollection(name: String(folder.dropFirst(4)), isTwitterSaved: true))
             } else if folder == "ttv.videos" {
                 if !discovered.contains(where: { $0.id == "ttv/videos" }) {
                     discovered.append(UserCollection(name: "videos", isTikTokVideo: true))
@@ -867,6 +892,7 @@ final class Downloader {
             case .redgifsTag(let tag): sourceKind = "rg"; username = "#\(tag)"
             case .redgifsGif(let id): sourceKind = "rg"; username = "redgifs.com/watch/\(id)"
             case .twitterUser(let name): sourceKind = "tw"; username = name
+            case .twitterSaved(let name): sourceKind = "tws"; twitterSavedAccount = name; username = name
             case .tiktokUser(let name): sourceKind = "tt"; username = name
             case .tiktokVideo(let ref): sourceKind = "tt"; username = ref.url.absoluteString
             case .tiktokSaved(let name): sourceKind = "ts"; tikTokSavedAccount = name
@@ -939,6 +965,7 @@ final class Downloader {
         UserDefaults.standard.removeObject(forKey: Self.frontierKey(id))
         Self.clearSavedMediaCount(for: id)
         UserDefaults.standard.removeObject(forKey: "xMediaResume.\(id)")
+        UserDefaults.standard.removeObject(forKey: "xBookmarkResume.\(id)")
         UserDefaults.standard.removeObject(forKey: "tikTokResume.\(id)")
         UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(id))
         UserDefaults.standard.removeObject(forKey: Self.xFetishSelectionKey(id))
@@ -953,6 +980,7 @@ final class Downloader {
         } else {
             activeUser = nil
             username = ""
+            twitterSavedAccount = nil
             UserDefaults.standard.removeObject(forKey: "lastUsername")
         }
         status = ""
@@ -1036,6 +1064,7 @@ final class Downloader {
         for collection in collections {
             Self.clearSavedMediaCount(for: collection.id)
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(collection.id)")
+            UserDefaults.standard.removeObject(forKey: "xBookmarkResume.\(collection.id)")
             UserDefaults.standard.removeObject(forKey: "tikTokResume.\(collection.id)")
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(collection.id))
         }
@@ -1044,6 +1073,7 @@ final class Downloader {
         saveCollections()
         activeUser = nil
         username = ""
+        twitterSavedAccount = nil
         UserDefaults.standard.removeObject(forKey: "lastUsername")
         status = ""
         reload()
@@ -1165,6 +1195,7 @@ final class Downloader {
         errorMessage = nil
         let target = sourceKind == "saved" ? "saved/"
             : sourceKind == "ts" ? "ts/\(tikTokSavedAccount ?? "")"
+            : sourceKind == "tws" ? "tws/\(twitterSavedAccount ?? "")"
             : "\(sourceKind)/\(username)"
         let started = Date()
         // Compte suivi visé (Reddit, X ou TikTok) : figé au démarrage, l'utilisateur
@@ -1559,6 +1590,17 @@ final class Downloader {
             let account = (tikTokSavedAccount ?? "").isEmpty ? "saved" : tikTokSavedAccount!
             source = .tiktokSaved(account)
             privateFeed = nil
+        } else if sourceKind == "tws" {
+            status = L("Ouverture des signets du compte X connecté…", "Opening the signed-in X account's bookmarks…")
+            guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
+            let account = await XSession.shared.userID() ?? "account"
+            if account == "account" {
+                LogCenter.info(L("X signets : cookie twid absent, collection générique utilisée.",
+                                 "X bookmarks: twid cookie missing, using the generic collection."))
+            }
+            twitterSavedAccount = account
+            source = .twitterSaved(account)
+            privateFeed = nil
         } else if sourceKind == "saved" {
             status = L("Recherche des sauvegardés du compte connecté…", "Finding saved posts for the signed-in account…")
             let feed = try await network.savedFeed()
@@ -1605,6 +1647,7 @@ final class Downloader {
         defer { currentCanonical = nil; currentFolder = nil }
         if !fm.fileExists(atPath: folder.path) {
             UserDefaults.standard.removeObject(forKey: "xMediaResume.\(canonical)")
+            UserDefaults.standard.removeObject(forKey: "xBookmarkResume.\(canonical)")
             UserDefaults.standard.removeObject(forKey: "tikTokResume.\(canonical)")
             UserDefaults.standard.removeObject(forKey: Self.xFetishVideoResumeKey(canonical))
         }
@@ -1631,20 +1674,28 @@ final class Downloader {
             try await runXFetish(target: target, canonical: canonical, folder: folder)
             return
         }
-        // Comptes X : fil `/media` authentifié, reprise au dernier lot terminé,
-        // dédoublonnage par noms de fichiers. Le chemin est séparé avant
-        // la reprise RSS, dont la migration v2 est sans objet ici.
-        if case .twitterUser(let handle) = source {
+        // Comptes X : fil `/media` ou signets du compte connecté, reprise au
+        // dernier lot terminé, dédoublonnage par noms de fichiers. Le chemin
+        // est séparé avant la reprise RSS, dont la migration v2 est sans objet.
+        let xFeed: XTimelineFeed?
+        switch source {
+        case .twitterUser(let handle): xFeed = .profile(username: handle)
+        case .twitterSaved(let account): xFeed = .bookmarks(account: account)
+        default: xFeed = nil
+        }
+        if let xFeed {
             var seenMedia = Set<Media>()
             var usedFilenames = Set<String>()
             var preparedCount = 0
-            let completed = try await runTwitter(username: handle, canonical: canonical,
-                                                 folder: folder, seenMedia: &seenMedia,
-                                                 usedFilenames: &usedFilenames,
-                                                 preparedCount: &preparedCount)
+            let completed = try await runXTimeline(feed: xFeed, canonical: canonical,
+                                                   folder: folder, seenMedia: &seenMedia,
+                                                   usedFilenames: &usedFilenames,
+                                                   preparedCount: &preparedCount)
             if !completed {
                 scanIncomplete = true
-                status = L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
+                status = xFeed.isBookmarks
+                    ? L("Parcours des signets X incomplet : relance pour reprendre après la dernière page terminée.", "X bookmarks scan incomplete: relaunch to resume after the last completed page.")
+                    : L("Parcours X incomplet : relance pour reprendre après la dernière page terminée.", "X scan incomplete: relaunch to resume after the last completed page.")
             }
             return
         }
@@ -2170,18 +2221,43 @@ final class Downloader {
         if !completed { throw XFetishError.tooManyPages }
     }
 
-    /// Parcours du fil `/media` d'un compte X.
+    /// Les deux timelines X partagent le même pipeline de transfert : seul le
+    /// point d'entrée GraphQL et le libellé changent.
+    private enum XTimelineFeed {
+        case profile(username: String)
+        case bookmarks(account: String)
+
+        var isBookmarks: Bool {
+            if case .bookmarks = self { return true }
+            return false
+        }
+    }
+
+    /// Parcours du fil `/media` d'un compte X ou des signets du compte connecté.
     ///
     /// Le curseur est conservé uniquement pendant un parcours incomplet.
     /// Après la fin, le parcours suivant revient aux publications récentes.
     /// Les clés `xm-…` / `xmv-…` évitent de retélécharger les fichiers présents.
-    private func runTwitter(username: String, canonical: String, folder: URL,
-                            seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
-                            preparedCount: inout Int) async throws -> Bool {
+    private func runXTimeline(feed: XTimelineFeed, canonical: String, folder: URL,
+                              seenMedia: inout Set<Media>, usedFilenames: inout Set<String>,
+                              preparedCount: inout Int) async throws -> Bool {
         guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
-        status = L("Résolution du compte X…", "Resolving X account…")
-        let userID = try await fetchXUserID(username: username)
-        LogCenter.info(L("X : compte \(username) résolu.", "X: account \(username) resolved."))
+        let isBookmarks = feed.isBookmarks
+        let identity: String
+        let resumeKey: String
+        switch feed {
+        case .profile(let username):
+            status = L("Résolution du compte X…", "Resolving X account…")
+            identity = try await fetchXUserID(username: username)
+            resumeKey = "xMediaResume.\(canonical)"
+            LogCenter.info(L("X : compte \(username) résolu.", "X: account \(username) resolved."))
+        case .bookmarks(let account):
+            // L'identifiant vient du cookie `twid` : aucun compte à résoudre,
+            // les signets sont scopés par la session elle-même.
+            status = L("Lecture des signets X…", "Reading X bookmarks…")
+            identity = account
+            resumeKey = "xBookmarkResume.\(canonical)"
+        }
 
         // Clés déjà sur disque : une clé média suffit, sans dépendre du titre
         // ni du post qui l'a publié.
@@ -2191,11 +2267,14 @@ final class Downloader {
         if let remote = activeRemoteIndex {
             savedIDs.formUnion(remote.xMediaIDs)
         }
-        let resumeKey = "xMediaResume.\(canonical)"
         let stored = UserDefaults.standard.dictionary(forKey: resumeKey) as? [String: String]
-        let resumeCursor = stored?["userID"] == userID ? stored?["cursor"] : nil
+        // Les anciens points de reprise du fil média utilisent `userID` : le
+        // lire encore évite de relire un profil déjà archivé après mise à jour.
+        let storedIdentity = stored?["identity"] ?? stored?["userID"]
+        let resumeCursor = storedIdentity == identity ? stored?["cursor"] : nil
         var scanned = Set<String>()
         var scannedPages = 0
+        var xAPIAcceptedThisRun = false
         // Pipeline continu : les médias préparés rejoignent un canal que
         // `sessionLimit` consommateurs vident sans arrêt. Plus de lots
         // discrets : une vidéo lente n'immobilise plus les suivantes, la
@@ -2219,7 +2298,7 @@ final class Downloader {
                 pageRemaining.removeValue(forKey: head)
                 guard let storedCursor = pageCheckpoints.removeValue(forKey: head) else { continue }
                 if let cursor = storedCursor {
-                    UserDefaults.standard.set(["userID": userID, "cursor": cursor], forKey: resumeKey)
+                    UserDefaults.standard.set(["identity": identity, "cursor": cursor], forKey: resumeKey)
                 } else {
                     UserDefaults.standard.removeObject(forKey: resumeKey)
                 }
@@ -2254,7 +2333,13 @@ final class Downloader {
             channel.finish()
             for worker in workers { worker.cancel() }
         }
-        let completed = try await XMediaTraversal.run(cursor: resumeCursor, fetch: { cursor in
+        let completed = try await XMediaTraversal.run(
+            cursor: resumeCursor,
+            maximumPages: 100,
+            // Les signets contiennent des posts texte seul : deux pages sans
+            // média nouveau ne prouvent pas que les plus anciens sont archivés.
+            stopAfterIdlePages: !isBookmarks,
+            fetch: { cursor in
             // Une erreur fatale survenue chez un consommateur arrête aussi la
             // pagination : inutile de lire des pages que personne ne videra.
             if let pipelineError { throw pipelineError }
@@ -2263,10 +2348,24 @@ final class Downloader {
             nextPageIndex += 1
             pageOrder.append(activePageIndex)
             scannedPages += 1
-            self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
-            let data = try await self.fetchXMediaPage(userID: userID, cursor: cursor)
-            let page = try XTwitterMedia.parseMediaPage(data)
-            LogCenter.info(L("X : page \(scannedPages), \(page.posts.count) posts avec média.", "X: page \(scannedPages), \(page.posts.count) posts with media."))
+            let page: XMediaPage
+            switch feed {
+            case .profile:
+                self.status = L("Recherche des médias X… page \(scannedPages)", "Searching X media… page \(scannedPages)")
+                let data = try await self.fetchXMediaPage(userID: identity, cursor: cursor)
+                page = try XTwitterMedia.parseMediaPage(data)
+                LogCenter.info(L("X : page \(scannedPages), \(page.posts.count) posts avec média.", "X: page \(scannedPages), \(page.posts.count) posts with media."))
+            case .bookmarks:
+                self.status = L("Recherche dans les signets X… page \(scannedPages)", "Searching X bookmarks… page \(scannedPages)")
+                page = try await self.fetchXBookmarksPage(cursor: cursor)
+                LogCenter.info(L("X signets : page \(scannedPages), \(page.posts.count) posts avec média.", "X bookmarks: page \(scannedPages), \(page.posts.count) posts with media."))
+                // Même preuve que la résolution d'un profil pour `tw` : une
+                // page lue confirme que la session X est acceptée par l'API.
+                if !xAPIAcceptedThisRun {
+                    xAPIAcceptedThisRun = true
+                    XSession.shared.recordAPIAcceptance(true)
+                }
+            }
             return page
         }, process: { pagePosts -> Bool in
             var fresh: [XPost] = []
@@ -2334,16 +2433,24 @@ final class Downloader {
             saveCollections()
         }
         recordLastRunCount(canonical)
-        LogCenter.info(L("X : \(scannedPages) pages, \(preparedCount) médias préparés.", "X: \(scannedPages) pages, \(preparedCount) media prepared."))
+        LogCenter.info(isBookmarks
+            ? L("X signets : \(scannedPages) pages, \(preparedCount) médias préparés.", "X bookmarks: \(scannedPages) pages, \(preparedCount) media prepared.")
+            : L("X : \(scannedPages) pages, \(preparedCount) médias préparés.", "X: \(scannedPages) pages, \(preparedCount) media prepared."))
         if failed > 0 {
             status = ""
             let kept = (try? CollectionFiles.scan(folder).files.count) ?? files.count
-            errorMessage = L("\(failed) médias X inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
-                             "\(failed) X media unavailable or unsaved.\n\(kept) media files kept.")
+            errorMessage = isBookmarks
+                ? L("\(failed) médias des signets X inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                    "\(failed) X bookmark media unavailable or unsaved.\n\(kept) media files kept.")
+                : L("\(failed) médias X inaccessibles ou non enregistrés.\n\(kept) médias conservés.",
+                    "\(failed) X media unavailable or unsaved.\n\(kept) media files kept.")
             return true
         }
-        status = count == 0 ? L("Aucun nouveau média X accessible", "No new accessible X media")
-                            : L("\(count) médias X téléchargés", "\(count) X media downloaded")
+        status = isBookmarks
+            ? (count == 0 ? L("Aucun nouveau média dans les signets X", "No new media in X bookmarks")
+                          : L("\(count) médias des signets X téléchargés", "\(count) X bookmark media downloaded"))
+            : (count == 0 ? L("Aucun nouveau média X accessible", "No new accessible X media")
+                          : L("\(count) médias X téléchargés", "\(count) X media downloaded"))
         return true
     }
 
@@ -2359,6 +2466,29 @@ final class Downloader {
 
     private func fetchXMediaPage(userID: String, cursor: String?) async throws -> Data {
         try await fetchX(XTwitterAPI.userMedia(userID: userID, cursor: cursor))
+    }
+
+    /// Page des signets. Le `queryId` change quand X met à jour son front :
+    /// après un 404 (ou une réponse illisible qui trahit un identifiant
+    /// périmé), l'ancien identifiant connu est essayé une fois.
+    private func fetchXBookmarksPage(cursor: String?) async throws -> XMediaPage {
+        func load(legacy: Bool) async throws -> XMediaPage {
+            let data = try await fetchX(XTwitterAPI.bookmarks(cursor: cursor, legacy: legacy))
+            return try XTwitterMedia.parseBookmarkPage(data)
+        }
+        do {
+            return try await load(legacy: false)
+        } catch XTwitterError.unavailableAPI {
+            LogCenter.info(L("X signets : route Bookmarks introuvable, essai de l'ancien identifiant.",
+                             "X bookmarks: Bookmarks route missing, trying the previous query ID."))
+        } catch XTwitterError.invalidBookmarks {
+            LogCenter.info(L("X signets : réponse illisible, essai de l'ancien identifiant.",
+                             "X bookmarks: unreadable response, trying the previous query ID."))
+        } catch NetworkError.refused(let code) where code == 400 {
+            LogCenter.info(L("X signets : route Bookmarks refusée (HTTP 400), essai de l'ancien identifiant.",
+                             "X bookmarks: Bookmarks route refused (HTTP 400), trying the previous query ID."))
+        }
+        return try await load(legacy: true)
     }
 
     /// Un appel GraphQL authentifié.
@@ -4552,6 +4682,14 @@ final class Downloader {
             let userID = try await fetchXUserID(username: username)
             let data = try await fetchXMediaPage(userID: userID, cursor: nil)
             let page = try XTwitterMedia.parseMediaPage(data)
+            return KDriveSourceItem.fromXPosts(page.posts)
+
+        case .twitterSaved(let account):
+            guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
+            // Les signets appartiennent à la session courante : ne pas comparer
+            // le dossier d'un ancien compte avec les signets du nouveau.
+            if let current = await XSession.shared.userID(), current != account { return [] }
+            let page = try await fetchXBookmarksPage(cursor: nil)
             return KDriveSourceItem.fromXPosts(page.posts)
 
         case .tiktokUser(let username):

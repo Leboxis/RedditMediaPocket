@@ -13,6 +13,7 @@ final class KDriveFreshnessTests: XCTestCase {
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "r/pics"), ["Rpics"])
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "saved/leboxis"), ["Sleboxis"])
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "tw/nasa"), ["Nasa - X"])
+        XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "tws/123456789012345678"), ["123456789012345678 - X Saved"])
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "tt/nasa"), ["Nasa - TikTok"])
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "ts/nasa"), ["Nasa - TikTok Saved"])
         XCTAssertEqual(KDriveFreshness.candidateFolderNames(for: "ig/nasa"), ["Nasa - Instagram"])
@@ -25,6 +26,7 @@ final class KDriveFreshnessTests: XCTestCase {
 
     func testInferredSourceFromKDriveFolderNames() {
         XCTAssertEqual(KDriveFreshness.inferredSource(fromFolderName: "Nasa - X"), .twitterUser("Nasa"))
+        XCTAssertEqual(KDriveFreshness.inferredSource(fromFolderName: "123456789012345678 - X Saved"), .twitterSaved("123456789012345678"))
         XCTAssertEqual(KDriveFreshness.inferredSource(fromFolderName: "Nasa - TikTok"), .tiktokUser("nasa"))
         XCTAssertEqual(KDriveFreshness.inferredSource(fromFolderName: "Nasa - TikTok Saved"), .tiktokSaved("nasa"))
         XCTAssertEqual(KDriveFreshness.inferredSource(fromFolderName: "Nasa - Instagram"), .instagramUser("nasa"))

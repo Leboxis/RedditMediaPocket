@@ -137,6 +137,22 @@ final class XMediaTraversalTests: XCTestCase {
         XCTAssertEqual(fetched, 6, "p3 et p5 vides ne suffisent pas : le compteur repart à chaque pending")
     }
 
+    /// Les signets ne doivent pas s'arrêter après deux pages sans média
+    /// nouveau : ces pages peuvent n'être que du texte, et les médias plus
+    /// anciens seraient sautés. Le parcours va jusqu'à la fin réelle.
+    @MainActor func testBookmarkScanIgnoresIdlePages() async throws {
+        var fetched = 0
+        let completed = try await XMediaTraversal.run(cursor: nil, stopAfterIdlePages: false,
+            fetch: { _ in
+                fetched += 1
+                return XMediaPage(posts: [], nextCursor: fetched < 5 ? "p\(fetched)" : nil)
+            },
+            process: { _ in false }, persist: { _ in })
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fetched, 5)
+    }
+
     /// Le budget de pages reste prioritaire sur la détection de nouveauté : un
     /// fil jamais rattrapé doit continuer à s'arrêter à 100 pages et à conserver
     /// son curseur, pour reprendre au bon endroit au lancement suivant.

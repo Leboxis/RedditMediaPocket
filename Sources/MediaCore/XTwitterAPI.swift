@@ -1,14 +1,14 @@
 import Foundation
 
 public enum XTwitterError: LocalizedError {
-    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, tooManyPages, invalidPageLimit, postUnsupported
+    case invalidUsername, loginRequired, unknownAccount, deniedAccess, unavailableAPI, invalidTimeline, invalidBookmarks, invalidSavedAccount, tooManyPages, invalidPageLimit, postUnsupported
 
     public var errorDescription: String? {
         switch self {
         case .invalidUsername:
             return L("Pseudo X invalide (1 à 15 lettres, chiffres ou underscores, ex. tw/pseudo).", "Invalid X username (1 to 15 letters, digits or underscores, e.g. tw/username).")
         case .loginRequired:
-            return L("Connecte-toi à X dans les Réglages : les médias d'un profil exigent une session.", "Sign in to X in Settings: a profile's media requires a session.")
+            return L("Connecte-toi à X dans les Réglages : cette source exige une session X.", "Sign in to X in Settings: this source requires an X session.")
         case .unknownAccount:
             return L("Compte X introuvable ou protégé : les médias publics de ce profil sont inaccessibles.", "X account not found or protected: this profile's public media is inaccessible.")
         case .deniedAccess:
@@ -17,6 +17,10 @@ public enum XTwitterError: LocalizedError {
             return L("La route API X est indisponible (HTTP 404). Cela ne signifie pas que le compte est introuvable.", "The X API route is unavailable (HTTP 404). This does not mean the account is missing.")
         case .invalidTimeline:
             return L("Fil des médias X illisible ou tronqué.", "X media timeline is unreadable or truncated.")
+        case .invalidBookmarks:
+            return L("Signets X illisibles ou tronqués. Vérifie la connexion X ou réessaie plus tard.", "X bookmarks are unreadable or truncated. Check the X session or try again later.")
+        case .invalidSavedAccount:
+            return L("Identifiant de compte X invalide pour les signets.", "Invalid X account identifier for bookmarks.")
         case .tooManyPages:
             return L("Trop de pages de médias X à parcourir.", "Too many X media pages to scan.")
         case .invalidPageLimit:
@@ -38,14 +42,21 @@ public enum XTwitterAPI {
     /// remplace pas la session : sans `auth_token`, x.com répond HTTP 403.
     public static let bearer = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 
-    /// Routes et paramètres alignés sur twikit/client/gql.py et constants.py.
-    /// Une route périmée peut renvoyer HTTP 404, distinct d’un compte absent.
+    /// Routes et paramètres alignés sur twikit/client/gql.py, twikit/constants.py
+    /// et twscrape/api.py. Une route périmée peut renvoyer HTTP 404, distinct
+    /// d’un compte absent.
     public enum Query {
         /// Résout un `@pseudo` en identifiant numérique, nécessaire aux pages
         /// suivantes.
         public static let userByScreenName = "NimuplG1OB7Fd2btCLdBOw"
         /// Fil `/media` d'un compte : uniquement les posts qui portent un média.
         public static let userMedia = "2tLOJWwGuCTytDrGBg8VwQ"
+        /// Signets (posts enregistrés) du compte connecté. L'identifiant
+        /// provient de twscrape, dont la table est régénérée à chaque mise à
+        /// jour du front X ; celui de twikit reste en repli, car X conserve
+        /// parfois l'ancienne route quelque temps.
+        public static let bookmarks = "fjf5b5Lu82lYMSBRhppK2g"
+        public static let bookmarksLegacy = "qToeLeMs43Q8cr7tRYXmaQ"
     }
 
     /// Drapeaux de fonctionnalités que x.com valide sur chaque appel. Ils
@@ -79,6 +90,24 @@ public enum XTwitterAPI {
         }
         variables += "}"
         return graphqlURL(queryID: Query.userMedia, operation: "UserMedia", variables: variables, features: mediaFeatures)
+    }
+
+    /// `Bookmarks` : une page des signets du compte connecté. Aucun
+    /// identifiant de compte n'est envoyé : X scope la liste par la session
+    /// (`auth_token` + `ct0`). `legacy` essaie l'ancien `queryId` quand la
+    /// route courante répond 404 après une mise à jour du front.
+    public static func bookmarks(cursor: String?, legacy: Bool = false) -> URL {
+        // Mêmes drapeaux que le fil média, plus celui qui active la timeline
+        // des signets. X refuse la requête si ce dernier manque.
+        var variables = #"{"count":100,"includePromotedContent":false,"withClientEventToken":false,"withBirdwatchNotes":false,"withVoice":true,"withV2Timeline":true"#
+        if let cursor, !cursor.isEmpty {
+            variables += #","cursor":"\#(jsonEscape(cursor))""#
+        }
+        variables += "}"
+        let features = String(mediaFeatures.dropLast()) +
+            #","graphql_timeline_v2_bookmark_timeline":true}"#
+        return graphqlURL(queryID: legacy ? Query.bookmarksLegacy : Query.bookmarks,
+                          operation: "Bookmarks", variables: variables, features: features)
     }
 
     private static func graphqlURL(queryID: String, operation: String, variables: String, features: String, fieldToggles: String? = nil) -> URL {
@@ -182,6 +211,24 @@ public enum XTwitterCookiePolicy {
         return ["auth_token", "ct0"].allSatisfy { name in
             matching.contains { $0.name == name && !$0.value.isEmpty }
         }
+    }
+
+    /// Identifiant numérique du compte connecté, lu dans le cookie `twid`
+    /// (`u=1234567890`, souvent percent-encodé). Il sert de nom de collection
+    /// aux signets : deux comptes X successifs ne partagent donc pas le même
+    /// dossier, sans exiger un appel API supplémentaire.
+    public static func userID(cookies: [HTTPCookie], now: Date = Date()) -> String? {
+        let matching = matchingCookies(cookies, for: XTwitterAPI.userByScreenName(username: "x"), now: now)
+        // Préférer le cookie posé sur x.com : un ancien `.twitter.com` peut
+        // subsister après un changement de compte.
+        let raw = (matching.first { $0.name == "twid" && !$0.value.isEmpty
+            && $0.domain.lowercased().hasSuffix("x.com") }
+            ?? matching.first { $0.name == "twid" && !$0.value.isEmpty })?.value
+        guard let raw else { return nil }
+        let decoded = (raw.removingPercentEncoding ?? raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let marker = decoded.range(of: "u=") else { return nil }
+        let id = decoded[marker.upperBound...].prefix { $0.isNumber }
+        return id.isEmpty ? nil : String(id)
     }
 
     public static func header(cookies: [HTTPCookie], for url: URL, now: Date = Date()) -> String? {

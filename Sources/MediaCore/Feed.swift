@@ -44,7 +44,8 @@ public enum FeedError: LocalizedError {
 
 /// Identité d'une collection. Les trois sources Reddit exposent Atom et
 /// utilisent `FeedParser`. X-Fetish passe par `XFetishAlbums` et son parcours
-/// séparé. Pour `saved`, résoudre le lien privé avec `SavedFeed`.
+/// séparé. Pour `saved`, résoudre le lien privé avec `SavedFeed`. Pour
+/// `twitterSaved`, le nom est l'identifiant du compte X connecté (`twid`).
 public enum FeedSource: Hashable, Sendable {
     case user(String)
     case subreddit(String)
@@ -54,6 +55,10 @@ public enum FeedSource: Hashable, Sendable {
     case redgifsTag(String)
     case redgifsGif(String)
     case twitterUser(String)
+    /// Signets (posts enregistrés) du compte X connecté. Le nom est
+    /// l'identifiant numérique du compte (`twid`), pas un pseudo : les
+    /// signets appartiennent à la session et ne sont pas un profil public.
+    case twitterSaved(String)
     case tiktokUser(String)
     /// Vidéo TikTok isolée, désignée par son adresse (page `/video/<id>`,
     /// diaporama `/photo/<id>` ou lien court partagé) : cette seule vidéo est
@@ -73,7 +78,8 @@ public enum FeedSource: Hashable, Sendable {
 
     /// Accepte `u/pseudo`, `r/sub`, `saved/pseudo`, `x/profil`,
     /// `rg/pseudo` (ou `g/`), `rg/#tag` et une adresse `redgifs.com/watch/<id>`,
-    /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`), `tt/pseudo`
+    /// `tw/pseudo` (`@pseudo` ou `x.com/pseudo`), `tws/<identifiant>`
+    /// (signets X du compte connecté), `tt/pseudo`
     /// (`@pseudo` ou `tiktok.com/@pseudo`) et une adresse de vidéo TikTok
     /// isolée (`tiktok.com/@pseudo/video/<id>` ou lien court `vm.tiktok.com`),
     /// `ig/pseudo`
@@ -84,6 +90,15 @@ public enum FeedSource: Hashable, Sendable {
     public static func parse(_ text: String) throws -> FeedSource {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
+        // Signets X : l'identifiant numérique est plus long que les 15
+        // caractères d'un pseudo, il ne passe donc pas par `XTwitterAPI.username`.
+        if lower.hasPrefix("tws/") {
+            let raw = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty, raw.range(of: "^[A-Za-z0-9_]{1,64}$", options: .regularExpression) != nil else {
+                throw XTwitterError.invalidSavedAccount
+            }
+            return .twitterSaved(raw)
+        }
         // Formes X testées en premier : `x.com/pseudo` contient « / » et serait
         // sinon lu comme un subreddit `x` nommé `com/pseudo`.
         if lower.hasPrefix("tw/") || lower.hasPrefix("@") || lower.contains("x.com/") || lower.contains("twitter.com/") {
@@ -201,9 +216,9 @@ public enum FeedSource: Hashable, Sendable {
 
     /// Identifiant canonique stable (`u/pseudo`, `r/sub`, `saved/pseudo`,
     /// `x/profil`, `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`,
-    /// `tt/pseudo`, `ttv/videos` ou `reddit/posts`), utilisé comme clé de
-    /// collection. Les vidéos TikTok isolées partagent toutes `ttv/videos` :
-    /// un seul dossier, quel que soit le lien collé.
+    /// `tws/<identifiant>`, `tt/pseudo`, `ttv/videos` ou `reddit/posts`),
+    /// utilisé comme clé de collection. Les vidéos TikTok isolées partagent
+    /// toutes `ttv/videos` : un seul dossier, quel que soit le lien collé.
     public var id: String {
         switch self {
         case .user(let name): return "u/\(name)"
@@ -214,6 +229,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsTag(let tag): return "rg/#\(tag)"
         case .redgifsGif(let id): return "rg/gif/\(id)"
         case .twitterUser(let name): return "tw/\(name)"
+        case .twitterSaved(let name): return "tws/\(name)"
         case .tiktokUser(let name): return "tt/\(name)"
         // Vidéos isolées : un dossier global unique, quel que soit le lien
         // collé — l'identifiant de la vidéo reste dans le nom du fichier.
@@ -229,14 +245,16 @@ public enum FeedSource: Hashable, Sendable {
     public var displayName: String {
         switch self {
         case .saved: return "Saved"
+        case .twitterSaved: return L("Sauvegardés X", "X saved")
         case .tiktokVideo: return "Tiktok - Videos"
         default: return id
         }
     }
 
     /// Dossier de stockage. Les préfixes `r.`, `saved.`, `x.`, `redgifs.`,
-    /// `tw.` et `tk.` (point interdit dans les pseudos) évitent les collisions
-    /// entre sources. `tw.` et `tk.` se distinguent sans ambiguïté.
+    /// `tw.`, `tws.` et `tk.` (point interdit dans les pseudos) évitent les
+    /// collisions entre sources. `tw.`, `tws.` et `tk.` se distinguent sans
+    /// ambiguïté.
     public var folderName: String {
         switch self {
         case .user(let name): return name
@@ -247,6 +265,7 @@ public enum FeedSource: Hashable, Sendable {
         case .redgifsTag(let tag): return "redgifs.tag.\(tag)"
         case .redgifsGif(let id): return "redgifs.gif.\(id)"
         case .twitterUser(let name): return "tw.\(name)"
+        case .twitterSaved(let name): return "tws.\(name)"
         case .tiktokUser(let name): return "tk.\(name)"
         // `ttv.` est son propre préfixe : il ne peut pas recouvrir un dossier
         // `tk.<pseudo>` (« tkv. » n'a pas le préfixe « tk. »). Toutes les
@@ -314,6 +333,10 @@ public enum FeedSource: Hashable, Sendable {
             // compte. Le parcours réel passe par `XTwitterAPI.userMedia` avec
             // les cookies de session, jamais par cette URL.
             return XTwitterAPI.userByScreenName(username: name)
+        case .twitterSaved:
+            // Point d'entrée des signets : le parcours réel ajoute le curseur
+            // et les features via `XTwitterAPI.bookmarks`.
+            return XTwitterAPI.bookmarks(cursor: nil)
         case .tiktokUser(let name):
             // Point d'entrée sans session : sert à résoudre le `secUid`. Le
             // parcours réel pagine par la WebView de `TikTokWebPaginator`

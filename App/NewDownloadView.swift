@@ -105,6 +105,13 @@ struct NewDownloadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, DS.space(3))
                     .frame(minHeight: 44)
+            } else if model.sourceKind == "tws" {
+                Text(L("Compte X connecté", "Signed-in X account"))
+                    .font(.callout)
+                    .foregroundStyle(DS.onSurfaceMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DS.space(3))
+                    .frame(minHeight: 44)
             } else {
                 HStack(spacing: DS.space(1)) {
                     TextField(placeholder, text: $model.username)
@@ -174,6 +181,7 @@ struct NewDownloadView: View {
     private var cannotStart: Bool {
         guard !model.running else { return false }
         if model.sourceKind == "ts" { return !tikTokSession.hasSession || tikTokSession.clearing }
+        if model.sourceKind == "tws" { return !xSession.hasSession || xSession.clearing }
         if model.sourceKind == "saved" { return !redditSession.hasSession || redditSession.clearing }
         if model.username.trimmingCharacters(in: .whitespaces).isEmpty { return true }
         // Les trois sessions sont distinctes : X et TikTok ne se connectent
@@ -219,6 +227,11 @@ struct NewDownloadView: View {
                   systemImage: "folder.badge.clock")
                 .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
+        } else if model.sourceKind == "tws" {
+            Label(L("Les signets (posts enregistrés) du compte X connecté seront parcourus.", "The signed-in X account's bookmarks (saved posts) will be scanned."),
+                  systemImage: "bookmark")
+                .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -241,7 +254,9 @@ struct NewDownloadView: View {
             sessionHint(L("Compte TikTok : connecte-toi à TikTok dans les Réglages. Sans session, TikTok ne publie aucun média.", "TikTok account: sign in to TikTok in Settings. Without a session, TikTok publishes no media."))
         } else if model.sourceKind == "ts" && !tikTokSession.hasSession {
             sessionHint(L("Sauvegardés TikTok : connecte-toi à TikTok dans les Réglages. Sans session, impossible de lire les publications enregistrées du compte.", "TikTok saved: sign in to TikTok in Settings. Without a session, the account's saved posts cannot be read."))
-        } else if !isTwitterInput && !isTikTokInput && model.sourceKind != "ts" && model.needsSession && !redditSession.hasSession {
+        } else if model.sourceKind == "tws" && !xSession.hasSession {
+            sessionHint(L("Sauvegardés X : connecte-toi à X dans les Réglages. Sans session, les signets du compte ne peuvent pas être lus.", "X saved: sign in to X in Settings. Without a session, the account's bookmarks cannot be read."))
+        } else if !isTwitterInput && !isTikTokInput && model.sourceKind != "ts" && model.sourceKind != "tws" && model.needsSession && !redditSession.hasSession {
             if model.sourceKind == "saved" {
                 sessionHint(L("Sauvegardés : connecte-toi à Reddit dans les Réglages. Le compte sera sélectionné automatiquement.", "Saved: sign in to Reddit in Settings. Your account will be selected automatically."))
             } else {
@@ -396,11 +411,13 @@ struct NewDownloadView: View {
 // MARK: - Sélection de la source
 
 /// Source : face, libellé parlé et session requise — partagés par la
-/// pastille et la feuille-grille. Les deux entrées TikTok partagent la marque
-/// du service et ne se distinguent que par leur micro-libellé.
+/// pastille et la feuille-grille. Les entrées `tw`/`tw♥` et `tt`/`ts`
+/// partagent la marque de leur service et ne se distinguent que par leur
+/// micro-libellé.
 enum SourceSelection {
     static let order: [SourceKind] = [.user, .subreddit, .redGifs, .saved,
-                                      .xFetish, .twitter, .tiktok, .tiktokSaved, .instagram]
+                                      .xFetish, .twitter, .twitterSaved,
+                                      .tiktok, .tiktokSaved, .instagram]
 
     static func face(_ kind: SourceKind) -> String {
         switch kind {
@@ -410,6 +427,7 @@ enum SourceSelection {
         case .saved: return "♥"
         case .xFetish: return "x/"
         case .twitter: return "tw"
+        case .twitterSaved: return "tw♥"
         case .tiktok: return "tt"
         case .tiktokSaved: return "ts"
         case .instagram: return "ig"
@@ -424,6 +442,7 @@ enum SourceSelection {
         case .saved: return "heart.fill"
         case .xFetish: return "flame"
         case .twitter: return "at"
+        case .twitterSaved: return "bookmark.fill"
         case .tiktok: return "music.note"
         case .tiktokSaved: return "bookmark.fill"
         case .instagram: return "camera"
@@ -435,11 +454,11 @@ enum SourceSelection {
     /// `nil` pour RedGifs et X-Fetish : aucun logo public exploitable, la carte
     /// garde alors son symbole système. Les sauvegardés Reddit (`♥`) gardent
     /// aussi leur cœur : trois fois la même tête de Reddit dans une grille de
-    /// neuf se lirait comme un défaut d'affichage.
+    /// dix se lirait comme un défaut d'affichage.
     static func mark(_ kind: SourceKind) -> SourceMark? {
         switch kind {
         case .user, .subreddit: return .reddit
-        case .twitter: return .x
+        case .twitter, .twitterSaved: return .x
         case .tiktok, .tiktokSaved: return .tiktok
         case .instagram: return .instagram
         case .redGifs, .saved, .xFetish: return nil
@@ -454,6 +473,7 @@ enum SourceSelection {
         case .saved: return L("Sauvegardés Reddit", "Reddit saved")
         case .xFetish: return L("Profil X-Fetish", "X-Fetish profile")
         case .twitter: return L("Compte X", "X account")
+        case .twitterSaved: return L("Sauvegardés X", "X saved")
         case .tiktok: return L("Compte TikTok", "TikTok account")
         case .tiktokSaved: return L("Sauvegardés TikTok", "TikTok saved")
         case .instagram: return L("Compte Instagram", "Instagram account")
@@ -489,10 +509,10 @@ private struct SourceKindButton: View {
     }
 }
 
-/// Feuille-grille des sources : neuf choix découvrables d'un coup d'œil, un
+/// Feuille-grille des sources : dix choix découvrables d'un coup d'œil, un
 /// appui pour choisir. Le point accent signale une session manquante pour la
-/// source ; les deux entrées TikTok y sont visuellement différenciées
-/// (`tt` compte public, `ts` sauvegardés du compte connecté).
+/// source ; les entrées `tw♥` et `ts` désignent les sauvegardés des comptes
+/// connectés.
 private struct SourceGridSheet: View {
     @Bindable var model: Downloader
     @State private var reddit = RedditSession.shared
@@ -504,7 +524,7 @@ private struct SourceGridSheet: View {
     private func sessionMissing(_ kind: SourceKind) -> Bool {
         switch kind {
         case .user, .subreddit, .saved: return !reddit.hasSession
-        case .twitter: return !xSession.hasSession
+        case .twitter, .twitterSaved: return !xSession.hasSession
         case .tiktok, .tiktokSaved: return !tikTokSession.hasSession
         default: return false
         }

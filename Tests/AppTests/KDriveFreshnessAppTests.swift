@@ -9,6 +9,7 @@ final class KDriveFreshnessAppTests: XCTestCase {
         XCTAssertEqual(UserCollection(name: "pics", isSubreddit: true).feedSource, .subreddit("pics"))
         XCTAssertEqual(UserCollection(name: "alice", isSaved: true).feedSource, .saved("alice"))
         XCTAssertEqual(UserCollection(name: "nasa", isTwitter: true).feedSource, .twitterUser("nasa"))
+        XCTAssertEqual(UserCollection(name: "123456789012345678", isTwitterSaved: true).feedSource, .twitterSaved("123456789012345678"))
         XCTAssertEqual(UserCollection(name: "nasa", isTikTok: true).feedSource, .tiktokUser("nasa"))
         XCTAssertEqual(UserCollection(name: "nasa", isTikTokSaved: true).feedSource, .tiktokSaved("nasa"))
         XCTAssertEqual(UserCollection(name: "nasa", isInstagram: true).feedSource, .instagramUser("nasa"))

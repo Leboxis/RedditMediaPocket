@@ -39,6 +39,27 @@ final class XTwitterTests: XCTestCase {
         XCTAssertEqual(source.displayName, "tw/nasa")
     }
 
+    /// Les signets ne sont pas un profil : l'identifiant numérique dépasse la
+    /// limite de 15 caractères d'un pseudo et son dossier doit rester distinct
+    /// de `tw.<pseudo>`.
+    func testTwitterSavedMapping() throws {
+        let source = FeedSource.twitterSaved("123456789012345678")
+        XCTAssertEqual(source.id, "tws/123456789012345678")
+        XCTAssertEqual(source.folderName, "tws.123456789012345678")
+        XCTAssertEqual(try FeedSource.parse("tws/123456789012345678"), source)
+        XCTAssertThrowsError(try FeedSource.parse("tws/"))
+    }
+
+    /// `twid` est la seule identité dont les signets ont besoin : elle évite un
+    /// appel de résolution de compte et sépare deux sessions X successives.
+    func testTwidUserID() {
+        XCTAssertEqual(XTwitterCookiePolicy.userID(cookies: [cookie("twid", "u%3D12345")]), "12345")
+        XCTAssertEqual(XTwitterCookiePolicy.userID(cookies: [cookie("twid", "u=12345")]), "12345")
+        XCTAssertNil(XTwitterCookiePolicy.userID(cookies: [cookie("twid", "v=12345")]))
+        XCTAssertNil(XTwitterCookiePolicy.userID(cookies: [cookie("twid", "u=")]))
+        XCTAssertNil(XTwitterCookiePolicy.userID(cookies: [cookie("auth_token", "session")]))
+    }
+
     /// `tw.nasa` ne doit jamais être confondu avec `x.nasa` (X-Fetish) ni avec
     /// un profil Reddit nu.
     func testFolderNoCollision() {
@@ -57,8 +78,10 @@ final class XTwitterTests: XCTestCase {
 
     func testSourceKindCycleReachesTwitter() {
         XCTAssertEqual(SourceKind.xFetish.next, .twitter)
-        XCTAssertEqual(SourceKind.twitter.next, .tiktok)
+        XCTAssertEqual(SourceKind.twitter.next, .twitterSaved)
+        XCTAssertEqual(SourceKind.twitterSaved.next, .tiktok)
         XCTAssertEqual(SourceKind.twitter.rawValue, "tw")
+        XCTAssertEqual(SourceKind.twitterSaved.rawValue, "tws")
     }
 
     // MARK: - URLs
@@ -75,6 +98,28 @@ final class XTwitterTests: XCTestCase {
 
         let second = XTwitterAPI.userMedia(userID: "123", cursor: "DAABC")
         XCTAssertTrue(second.absoluteString.contains("cursor"))
+    }
+
+    func testBookmarksGraphQLURL() throws {
+        let first = XTwitterAPI.bookmarks(cursor: nil)
+        XCTAssertEqual(first.path, "/i/api/graphql/fjf5b5Lu82lYMSBRhppK2g/Bookmarks")
+        let items = try XCTUnwrap(URLComponents(url: first, resolvingAgainstBaseURL: false)?.queryItems)
+        let featuresRaw = try XCTUnwrap(items.first { $0.name == "features" }?.value)
+        let features = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(featuresRaw.utf8)) as? [String: Bool])
+        XCTAssertEqual(features["graphql_timeline_v2_bookmark_timeline"], true)
+        let variablesRaw = try XCTUnwrap(items.first { $0.name == "variables" }?.value)
+        let variables = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(variablesRaw.utf8)) as? [String: Any])
+        XCTAssertEqual(variables["count"] as? Int, 100)
+        XCTAssertNil(variables["cursor"])
+
+        let next = XTwitterAPI.bookmarks(cursor: "a+b/c=")
+        let nextItems = try XCTUnwrap(URLComponents(url: next, resolvingAgainstBaseURL: false)?.queryItems)
+        let nextRaw = try XCTUnwrap(nextItems.first { $0.name == "variables" }?.value)
+        let nextVariables = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(nextRaw.utf8)) as? [String: Any])
+        XCTAssertEqual(nextVariables["cursor"] as? String, "a+b/c=")
+
+        let legacy = XTwitterAPI.bookmarks(cursor: nil, legacy: true)
+        XCTAssertEqual(legacy.path, "/i/api/graphql/qToeLeMs43Q8cr7tRYXmaQ/Bookmarks")
     }
 
     /// Le curseur est imbriqué dans le JSON des `variables`, pas dans un
@@ -444,8 +489,54 @@ final class XTwitterTests: XCTestCase {
         }
     }
 
+    // MARK: - Signets
+
+    func testParseBookmarkPage() throws {
+        let json = """
+        {"data":{"bookmark_timeline_v2":{"timeline":{"instructions":[
+          {"type":"TimelineAddEntries","entries":[
+            {"entryId":"tweet-1","content":{"itemContent":{"tweet_results":{"result":{
+              "legacy":{"id_str":"100","full_text":"Photo enregistrée",
+                "extended_entities":{"media":[
+                  {"media_key":"3_1","type":"photo","url":"https://pbs.twimg.com/media/AAA.jpg"}]}}}}}}},
+            {"entryId":"tweet-2","content":{"itemContent":{"tweet_results":{"result":{
+              "legacy":{"id_str":"200","full_text":"Signet texte seul"}}}}}},
+            {"entryId":"cursor-bottom-1","content":{"cursorType":"Bottom","value":"NEXT"}}
+          ]}]}}}}
+        """
+        let page = try XTwitterMedia.parseBookmarkPage(Data(json.utf8))
+        XCTAssertEqual(page.posts.map(\.id), ["100"])
+        XCTAssertEqual(page.nextCursor, "NEXT")
+        XCTAssertEqual(page.posts.first?.media.first?.storageKey, "xm-1")
+    }
+
+    /// Le mauvais conteneur (fil média au lieu des signets) doit produire une
+    /// erreur dédiée, pas un parcours vide présenté comme un compte sans média.
+    func testMissingBookmarkTimelineThrows() {
+        let json = #"{"data":{"user":{"result":{"timeline_v2":{"timeline":{"instructions":[]}}}}}}"#
+        XCTAssertThrowsError(try XTwitterMedia.parseBookmarkPage(Data(json.utf8))) { error in
+            guard case XTwitterError.invalidBookmarks = error else {
+                return XCTFail("attendu invalidBookmarks, reçu \(error)")
+            }
+        }
+    }
+
+    /// X a déjà renommé des timelines : la forme sans `_v2` reste lue.
+    func testParseBookmarkPageWithoutV2Suffix() throws {
+        let json = """
+        {"data":{"bookmark_timeline":{"timeline":{"instructions":[
+          {"type":"TimelineAddEntries","entries":[
+            {"entryId":"cursor-bottom-1","content":{"cursorType":"Bottom","value":"NEXT"}}
+          ]}]}}}}
+        """
+        let page = try XTwitterMedia.parseBookmarkPage(Data(json.utf8))
+        XCTAssertTrue(page.posts.isEmpty)
+        XCTAssertNil(page.nextCursor)
+    }
+
     func testMalformedJSONThrows() {
         XCTAssertThrowsError(try XTwitterMedia.parseMediaPage(Data("pas du json".utf8)))
+        XCTAssertThrowsError(try XTwitterMedia.parseBookmarkPage(Data("pas du json".utf8)))
         XCTAssertThrowsError(try XTwitterMedia.parseUser(Data("[]".utf8)))
     }
 

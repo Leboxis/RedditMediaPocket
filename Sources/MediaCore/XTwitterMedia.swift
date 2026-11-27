@@ -101,9 +101,32 @@ public enum XTwitterMedia {
     public static func parseMediaPage(_ data: Data) throws -> XMediaPage {
         let root = try object(data)
         let user = dictionary(dictionary(dictionary(root, "data"), "user"), "result")
-        let timeline = dictionary(dictionary(user, "timeline_v2"), "timeline")
-        guard let instructions = objects(timeline, "instructions") else {
+        guard let timeline = dictionary(dictionary(user, "timeline_v2"), "timeline") else {
             throw XTwitterError.invalidTimeline
+        }
+        return try parseTimeline(timeline, missing: .invalidTimeline)
+    }
+
+    /// Une page des signets du compte connecté. La timeline est rangée sous
+    /// `data.bookmark_timeline_v2.timeline`, pas sous `data.user…` : le reste
+    /// des entrées (posts, curseur Bottom) est identique au fil `/media`.
+    public static func parseBookmarkPage(_ data: Data) throws -> XMediaPage {
+        let root = try object(data, invalid: .invalidBookmarks)
+        let payload = dictionary(root, "data")
+        // `bookmark_timeline_v2` est la forme du front actuel ; X a déjà
+        // renommé des timelines (dossiers de signets), le repli sans `_v2`
+        // évite de perdre la lecture au premier renommage.
+        let timeline = dictionary(dictionary(payload, "bookmark_timeline_v2"), "timeline")
+            ?? dictionary(dictionary(payload, "bookmark_timeline"), "timeline")
+        guard let timeline else {
+            throw XTwitterError.invalidBookmarks
+        }
+        return try parseTimeline(timeline, missing: .invalidBookmarks)
+    }
+
+    private static func parseTimeline(_ timeline: [String: Any], missing: XTwitterError) throws -> XMediaPage {
+        guard let instructions = objects(timeline, "instructions") else {
+            throw missing
         }
         var posts: [XPost] = []
         var nextCursor: String?
@@ -136,7 +159,9 @@ public enum XTwitterMedia {
             for entry in entries {
                 let entryID = text(entry, "entryId") ?? ""
                 let content = dictionary(entry, "content")
-                if text(content, "cursorType") == "Bottom" || entryID.hasPrefix("cursor-bottom") {
+                let cursorType = text(content, "cursorType")
+                if cursorType == "Bottom" || cursorType == "ShowMore"
+                    || entryID.hasPrefix("cursor-bottom") || entryID.hasPrefix("cursor-showMore") {
                     if let value = text(content, "value"), !value.isEmpty { nextCursor = value }
                     continue
                 }
@@ -227,9 +252,9 @@ public enum XTwitterMedia {
         return host == "pbs.twimg.com" || host == "video.twimg.com"
     }
 
-    private static func object(_ data: Data) throws -> [String: Any] {
+    private static func object(_ data: Data, invalid: XTwitterError = .invalidTimeline) throws -> [String: Any] {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            throw XTwitterError.invalidTimeline
+            throw invalid
         }
         return root
     }

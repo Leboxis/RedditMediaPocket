@@ -107,6 +107,13 @@ import MediaCore
         return token
     }
 
+    /// Identifiant du compte connecté (`twid`), pour nommer la collection des
+    /// signets sans appel API. `nil` si le cookie n'est pas encore posé.
+    func userID() async -> String? {
+        if cachedCookies.isEmpty { cachedCookies = await allCookies() }
+        return XTwitterCookiePolicy.userID(cookies: cachedCookies)
+    }
+
     /// Invalide le cache après un refus 401/403 : le jeton servi était
     /// peut-être périmé, le prochain appel doit relire les cookies.
     func invalidateCSRF() {

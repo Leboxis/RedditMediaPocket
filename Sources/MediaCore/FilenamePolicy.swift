@@ -278,8 +278,8 @@ public enum FilenamePolicy {
     /// Nom de dossier kDrive : juste le pseudo/sub, première lettre en
     /// majuscule, assaini pour l'API (interdits Windows, réservés, longueur).
     /// Accepte aussi les libellés `u/pseudo`, `r/sub`, `saved/pseudo`, `x/model`,
-    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tt/pseudo`,
-    /// `ts/pseudo`, `ttv/videos`, `ig/pseudo` et `reddit/posts`.
+    /// `rg/pseudo`, `rg/#tag`, `rg/gif/<id>`, `tw/pseudo`, `tws/<id>`,
+    /// `tt/pseudo`, `ts/pseudo`, `ttv/videos`, `ig/pseudo` et `reddit/posts`.
     public static func kDriveFolderName(_ raw: String, fallback: String = "Pocket", maxUTF8Bytes: Int = 100) -> String {
         var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let labelSeparators = CharacterSet(charactersIn: "/／\\＼")
@@ -312,6 +312,9 @@ public enum FilenamePolicy {
             // `tw` doit rester distinct de `t` : un compte X ne doit jamais
             // hériter du dossier d'un profil Reddit au même pseudo.
             else if first == "tw" { typeSuffix = " - X" }
+            // `tws` (signets X) reste distinct d'un profil `tw/`, et le
+            // suffixe est propre pour que kDrive puisse le réinférer.
+            else if first == "tws" { typeSuffix = " - X Saved" }
             // `tt` reste distinct de `tw` : un compte TikTok ne doit jamais
             // hériter du dossier d'un compte X au même pseudo. `ttv` (vidéo
             // TikTok isolée) porte la même mention, au moins autant qu'un

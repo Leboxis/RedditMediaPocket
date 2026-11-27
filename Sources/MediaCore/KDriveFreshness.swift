@@ -506,6 +506,11 @@ public enum KDriveFreshness {
             guard !name.isEmpty else { return nil }
             return try? FeedSource.parse("tt/\(name.lowercased())")
         }
+        if lower.hasSuffix(" - x saved") {
+            let name = String(trimmed.dropLast(" - x saved".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return nil }
+            return try? FeedSource.parse("tws/\(name.lowercased())")
+        }
         if lower.hasSuffix(" - x") {
             let name = String(trimmed.dropLast(" - x".count)).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { return nil }
