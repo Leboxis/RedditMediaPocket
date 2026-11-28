@@ -228,11 +228,30 @@ struct NewDownloadView: View {
                 .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity, alignment: .center)
         } else if model.sourceKind == "tws" {
-            Label(L("Les signets (posts enregistrés) du compte X connecté seront parcourus.", "The signed-in X account's bookmarks (saved posts) will be scanned."),
-                  systemImage: "bookmark")
-                .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, alignment: .center)
+            VStack(spacing: DS.space(2)) {
+                Picker(L("Posts enregistrés X", "X saved posts"), selection: $model.xBookmarkPostLimit) {
+                    ForEach(XBookmarkPostLimit.allCases, id: \.self) { option in
+                        Text(option.maximumPosts.map { "\($0)" } ?? L("Tous", "All")).tag(option)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.running)
+                .accessibilityLabel(L("Nombre de posts enregistrés X", "X saved posts count"))
+
+                Text(xBookmarksLimitSummary)
+                    .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
+    }
+
+    private var xBookmarksLimitSummary: String {
+        if let limit = model.xBookmarkPostLimit.maximumPosts {
+            return L("Jusqu’à \(limit) posts avec média les plus récents.",
+                     "Up to the \(limit) newest posts with media.")
+        }
+        return L("Tous les signets (posts avec média) du compte X connecté.",
+                 "All bookmarks (posts with media) of the signed-in X account.")
     }
 
     private var isTwitterInput: Bool {

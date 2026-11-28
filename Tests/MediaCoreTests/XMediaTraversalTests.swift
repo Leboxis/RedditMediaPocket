@@ -167,4 +167,123 @@ final class XMediaTraversalTests: XCTestCase {
         XCTAssertEqual(fetched, 3)
         XCTAssertEqual(cursor, "p3", "Le curseur doit être conservé pour reprendre")
     }
+
+    func testXBookmarkPostLimitDefaultsAndOptions() {
+        XCTAssertEqual(XBookmarkPostLimit.defaultsKey, "xBookmarkPostLimit")
+        XCTAssertEqual(XBookmarkPostLimit.resolved(nil), .all)
+        XCTAssertEqual(XBookmarkPostLimit.resolved("invalide"), .all)
+        XCTAssertEqual(XBookmarkPostLimit.resolved("50"), .fifty)
+        XCTAssertEqual(XBookmarkPostLimit.fifty.maximumPosts, 50)
+        XCTAssertEqual(XBookmarkPostLimit.hundred.maximumPosts, 100)
+        XCTAssertEqual(XBookmarkPostLimit.twoHundredFifty.maximumPosts, 250)
+        XCTAssertNil(XBookmarkPostLimit.all.maximumPosts)
+    }
+
+    @MainActor func testMaximumPostsStopsMidPageWithoutFetchingNextOrPersistingCursor() async throws {
+        var fetched = 0
+        var receivedIDs: [String] = []
+        var persisted: [String?] = []
+        let posts = (1...5).map { XPost(id: "\($0)", text: "", publishedAt: nil, media: []) }
+
+        let completed = try await XMediaTraversal.run(
+            cursor: nil,
+            maximumPosts: 3,
+            stopAfterIdlePages: false,
+            fetch: { _ in
+                fetched += 1
+                return XMediaPage(posts: posts, nextCursor: "p2")
+            },
+            process: { batch in
+                receivedIDs.append(contentsOf: batch.map(\.id))
+                return true
+            },
+            persist: { persisted.append($0) }
+        )
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fetched, 1)
+        XCTAssertEqual(receivedIDs, ["1", "2", "3"])
+        XCTAssertTrue(persisted.isEmpty, "Une page tronquée par la limite ne doit pas valider son curseur")
+    }
+
+    @MainActor func testMaximumPostsAccumulatesAcrossPagesAndTruncatesLastPage() async throws {
+        var fetched = 0
+        var receivedIDs: [String] = []
+        var persisted: [String?] = []
+        let page1 = ["1", "2"].map { XPost(id: $0, text: "", publishedAt: nil, media: []) }
+        let page2 = ["3", "4", "5"].map { XPost(id: $0, text: "", publishedAt: nil, media: []) }
+
+        let completed = try await XMediaTraversal.run(
+            cursor: nil,
+            maximumPosts: 4,
+            stopAfterIdlePages: false,
+            fetch: { cursor in
+                fetched += 1
+                return cursor == nil
+                    ? XMediaPage(posts: page1, nextCursor: "p2")
+                    : XMediaPage(posts: page2, nextCursor: "p3")
+            },
+            process: { batch in
+                receivedIDs.append(contentsOf: batch.map(\.id))
+                return true
+            },
+            persist: { persisted.append($0) }
+        )
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fetched, 2)
+        XCTAssertEqual(receivedIDs, ["1", "2", "3", "4"])
+        XCTAssertEqual(persisted, ["p2"])
+    }
+
+    @MainActor func testMaximumPostsSkipsTextOnlyPagesWithoutStoppingEarly() async throws {
+        var fetched = 0
+        var receivedIDs: [String] = []
+        let page3 = ["1", "2", "3"].map { XPost(id: $0, text: "", publishedAt: nil, media: []) }
+
+        let completed = try await XMediaTraversal.run(
+            cursor: nil,
+            maximumPosts: 2,
+            stopAfterIdlePages: false,
+            fetch: { cursor in
+                fetched += 1
+                switch cursor {
+                case nil: return XMediaPage(posts: [], nextCursor: "p2")
+                case "p2": return XMediaPage(posts: [], nextCursor: "p3")
+                default: return XMediaPage(posts: page3, nextCursor: "p4")
+                }
+            },
+            process: { batch in
+                receivedIDs.append(contentsOf: batch.map(\.id))
+                return !batch.isEmpty
+            },
+            persist: { _ in }
+        )
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fetched, 3)
+        XCTAssertEqual(receivedIDs, ["1", "2"])
+    }
+
+    @MainActor func testNonPositivePostLimitThrowsInsteadOfTrapping() async {
+        for limit in [0, -1] {
+            do {
+                _ = try await XMediaTraversal.run(
+                    cursor: nil,
+                    maximumPosts: limit,
+                    fetch: { _ in
+                        XCTFail("Do not fetch with an invalid post limit")
+                        return XMediaPage(posts: [], nextCursor: nil)
+                    },
+                    process: { _ in true },
+                    persist: { _ in }
+                )
+                XCTFail("Expected invalid limit error")
+            } catch XTwitterError.invalidPageLimit {
+                XCTAssertLessThanOrEqual(limit, 0)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
 }

@@ -565,6 +565,15 @@ final class Downloader {
             UserDefaults.standard.set(valid.rawValue, forKey: XFetishMediaKind.defaultsKey)
         }
     }
+    /// Nombre maximal de posts avec média retenus pour les signets X (`tws`).
+    /// `.all` conserve le comportement historique (tout le fil disponible).
+    var xBookmarkPostLimit: XBookmarkPostLimit = {
+        XBookmarkPostLimit.resolved(UserDefaults.standard.string(forKey: XBookmarkPostLimit.defaultsKey))
+    }() {
+        didSet {
+            UserDefaults.standard.set(xBookmarkPostLimit.rawValue, forKey: XBookmarkPostLimit.defaultsKey)
+        }
+    }
     var active = 0
     private var failed = 0
     /// Contexte du parcours en cours, pour le journal des échecs : collection
@@ -2243,6 +2252,7 @@ final class Downloader {
                               preparedCount: inout Int) async throws -> Bool {
         guard await XSession.shared.hasSession else { throw XTwitterError.loginRequired }
         let isBookmarks = feed.isBookmarks
+        let postLimit = isBookmarks ? xBookmarkPostLimit.maximumPosts : nil
         let identity: String
         let resumeKey: String
         switch feed {
@@ -2271,7 +2281,7 @@ final class Downloader {
         // Les anciens points de reprise du fil média utilisent `userID` : le
         // lire encore évite de relire un profil déjà archivé après mise à jour.
         let storedIdentity = stored?["identity"] ?? stored?["userID"]
-        let resumeCursor = storedIdentity == identity ? stored?["cursor"] : nil
+        let resumeCursor = (postLimit == nil && storedIdentity == identity) ? stored?["cursor"] : nil
         var scanned = Set<String>()
         var scannedPages = 0
         var xAPIAcceptedThisRun = false
@@ -2336,6 +2346,7 @@ final class Downloader {
         let completed = try await XMediaTraversal.run(
             cursor: resumeCursor,
             maximumPages: 100,
+            maximumPosts: postLimit,
             // Les signets contiennent des posts texte seul : deux pages sans
             // média nouveau ne prouvent pas que les plus anciens sont archivés.
             stopAfterIdlePages: !isBookmarks,
@@ -2413,6 +2424,9 @@ final class Downloader {
             for item in downloads { channel.send((item, activePageIndex)) }
             return true
         }, persist: { cursor in
+            // Un parcours borné part toujours des signets récents sans écraser
+            // une reprise `Tous` en cours.
+            guard postLimit == nil else { return }
             pageCheckpoints[activePageIndex] = cursor
             flushCheckpoints()
         })
@@ -2426,7 +2440,7 @@ final class Downloader {
         flushCheckpoints()
         preparedCount += preparedHere
         guard completed else { return false }
-        UserDefaults.standard.removeObject(forKey: resumeKey)
+        if postLimit == nil { UserDefaults.standard.removeObject(forKey: resumeKey) }
 
         if let index = collections.firstIndex(where: { $0.id == canonical }) {
             collections[index].lastRun = Date()
