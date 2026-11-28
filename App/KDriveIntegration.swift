@@ -938,15 +938,14 @@ struct KDriveConcurrentUploadsPicker: View {
                     .monospacedDigit()
                     .foregroundStyle(DS.onSurfaceMuted)
             }
-            Picker(L("Uploads simultanés", "Concurrent uploads"), selection: Binding(
-                get: { clamped },
-                set: { concurrentUploads = KDriveUploadPolicy.clampedConcurrentUploads($0) }
-            )) {
-                ForEach(KDriveUploadPolicy.uploadConcurrencyOptions, id: \.self) { count in
-                    Text("\(count)").tag(count)
-                }
-            }
-            .pickerStyle(.segmented)
+            DSSegmentedControl(
+                L("Uploads simultanés", "Concurrent uploads"),
+                selection: Binding(
+                    get: { clamped },
+                    set: { concurrentUploads = KDriveUploadPolicy.clampedConcurrentUploads($0) }
+                ),
+                options: KDriveUploadPolicy.uploadConcurrencyOptions.map { ($0, "\($0)") }
+            )
             .accessibilityValue("\(clamped)")
         }
     }

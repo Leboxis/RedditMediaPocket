@@ -632,12 +632,11 @@ struct KDriveCollectionsStatusView: View {
                         .listRowBackground(Color.clear)
 
                         Section {
-                            Picker(L("Filtre", "Filter"), selection: $filter) {
-                                ForEach(KDriveFreshnessFilter.allCases) { item in
-                                    Text(item.label).tag(item)
-                                }
-                            }
-                            .pickerStyle(.segmented)
+                            DSSegmentedControl(
+                                L("Filtre", "Filter"),
+                                selection: $filter,
+                                options: KDriveFreshnessFilter.allCases.map { ($0, $0.label) }
+                            )
                         }
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: DS.space(2), trailing: 0))

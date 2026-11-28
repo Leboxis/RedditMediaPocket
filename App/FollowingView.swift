@@ -165,12 +165,15 @@ struct FollowingView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker(L("Plateforme", "Platform"), selection: $plateforme) {
-                    Text("Reddit").tag(PlateformeSuivi.reddit)
-                    Text("X").tag(PlateformeSuivi.x)
-                    Text("TikTok").tag(PlateformeSuivi.tiktok)
-                }
-                .pickerStyle(.segmented)
+                DSSegmentedControl(
+                    L("Plateforme", "Platform"),
+                    selection: $plateforme,
+                    options: [
+                        (.reddit, "Reddit"),
+                        (.x, "X"),
+                        (.tiktok, "TikTok")
+                    ]
+                )
                 .padding(.horizontal, DS.space(4))
                 .padding(.vertical, DS.space(2))
 

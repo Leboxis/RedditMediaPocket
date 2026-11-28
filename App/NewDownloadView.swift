@@ -205,23 +205,27 @@ struct NewDownloadView: View {
     /// ne montre que ce qui concerne la source en cours.
     @ViewBuilder private var optionsRow: some View {
         if isSubredditInput {
-            Picker(L("Tri du subreddit", "Subreddit sort"), selection: $model.subSort) {
-                Text(L("Nouveaux", "New")).tag("new")
-                Text(L("Chauds", "Hot")).tag("hot")
-                Text(L("Top du mois", "Top this month")).tag("top")
-            }
-            .pickerStyle(.segmented)
+            DSSegmentedControl(
+                L("Tri du subreddit", "Subreddit sort"),
+                selection: $model.subSort,
+                options: [
+                    ("new", L("Nouveaux", "New")),
+                    ("hot", L("Chauds", "Hot")),
+                    ("top", L("Top du mois", "Top this month"))
+                ]
+            )
             .disabled(model.running)
-            .accessibilityLabel(L("Tri du subreddit", "Subreddit sort"))
         } else if isXFetishInput {
-            Picker(L("Médias X-Fetish", "X-Fetish media"), selection: $model.xFetishMediaKind) {
-                Text(L("Images", "Images")).tag(XFetishMediaKind.images)
-                Text(L("Vidéos", "Videos")).tag(XFetishMediaKind.videos)
-                Text(L("Les deux", "Both")).tag(XFetishMediaKind.both)
-            }
-            .pickerStyle(.segmented)
+            DSSegmentedControl(
+                L("Médias X-Fetish", "X-Fetish media"),
+                selection: $model.xFetishMediaKind,
+                options: [
+                    (.images, L("Images", "Images")),
+                    (.videos, L("Vidéos", "Videos")),
+                    (.both, L("Les deux", "Both"))
+                ]
+            )
             .disabled(model.running)
-            .accessibilityLabel(L("Médias X-Fetish", "X-Fetish media"))
         } else if model.sourceKind == "ts" {
             Label(L("Les dossiers de favoris TikTok sont proposés au lancement.", "TikTok favorites folders are offered when starting."),
                   systemImage: "folder.badge.clock")
@@ -229,14 +233,14 @@ struct NewDownloadView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
         } else if model.sourceKind == "tws" {
             VStack(spacing: DS.space(2)) {
-                Picker(L("Posts enregistrés X", "X saved posts"), selection: $model.xBookmarkPostLimit) {
-                    ForEach(XBookmarkPostLimit.allCases, id: \.self) { option in
-                        Text(option.maximumPosts.map { "\($0)" } ?? L("Tous", "All")).tag(option)
+                DSSegmentedControl(
+                    L("Nombre de posts enregistrés X", "X saved posts count"),
+                    selection: $model.xBookmarkPostLimit,
+                    options: XBookmarkPostLimit.allCases.map {
+                        ($0, $0.maximumPosts.map { "\($0)" } ?? L("Tous", "All"))
                     }
-                }
-                .pickerStyle(.segmented)
+                )
                 .disabled(model.running)
-                .accessibilityLabel(L("Nombre de posts enregistrés X", "X saved posts count"))
 
                 Text(xBookmarksLimitSummary)
                     .font(.caption).foregroundStyle(DS.onSurfaceMuted).lineLimit(2).multilineTextAlignment(.center)

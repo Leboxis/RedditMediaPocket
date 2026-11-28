@@ -68,12 +68,11 @@ private struct DownloadSettings: View {
                     }
                 }
                 Section {
-                    Picker(L("Morceaux par vidéo", "Parts per video"), selection: $model.xFetishSegments) {
-                        ForEach(XFetishRangeDownload.segmentOptions, id: \.self) { count in
-                            Text("\(count)").tag(count)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    DSSegmentedControl(
+                        L("Morceaux par vidéo", "Parts per video"),
+                        selection: $model.xFetishSegments,
+                        options: XFetishRangeDownload.segmentOptions.map { ($0, "\($0)") }
+                    )
                     .accessibilityValue("\(model.xFetishSegments)")
                 } header: {
                     Text("X-Fetish")

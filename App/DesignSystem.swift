@@ -151,3 +151,68 @@ struct DSCardModifier: ViewModifier {
 extension View {
     func dsCard() -> some View { modifier(DSCardModifier()) }
 }
+
+/// Sélecteur segmenté en SwiftUI pur : contourne le bug tactile du
+/// `UISegmentedControl` Liquid Glass d'iOS 26 (notamment dans les fenêtres et
+/// listes) où la bulle de sélection revient sur le premier segment sans changer
+/// de valeur.
+struct DSSegmentedControl<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(value: Value, label: String)]
+
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)]) {
+        self.title = title
+        self._selection = selection
+        self.options = options.map { (value: $0.0, label: $0.1) }
+    }
+
+    var body: some View {
+        HStack(spacing: DS.space(1)) {
+            ForEach(Array(options.enumerated()), id: \.offset) { _, option in
+                let selected = selection == option.value
+                Button {
+                    guard selection != option.value else { return }
+                    if reduceMotion {
+                        selection = option.value
+                    } else {
+                        withAnimation(DS.micro) {
+                            selection = option.value
+                        }
+                    }
+                } label: {
+                    Text(option.label)
+                        .font(.footnote.weight(selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? DS.onAccent : DS.onSurface)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                        .padding(.horizontal, DS.space(1))
+                        .background(
+                            RoundedRectangle(cornerRadius: DS.radiusS, style: .continuous)
+                                .fill(selected ? DS.accent : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? [.isSelected] : [])
+                .accessibilityLabel(option.label)
+            }
+        }
+        .padding(DS.space(1))
+        .background(
+            RoundedRectangle(cornerRadius: DS.radiusM, style: .continuous)
+                .fill(DS.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: DS.radiusM, style: .continuous)
+                .stroke(DS.separator.opacity(0.6), lineWidth: 1)
+        )
+        .opacity(isEnabled ? 1 : 0.45)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(title)
+    }
+}
