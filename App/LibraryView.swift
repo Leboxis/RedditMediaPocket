@@ -1,5 +1,6 @@
 import SwiftUI
 import MediaCore
+import UIKit
 
 private struct Selection: Identifiable {
     let url: URL
@@ -29,6 +30,8 @@ struct LibraryView: View {
     @State private var mediaPendingDeletion: URL?
     @State private var selectingMedia = false
     @State private var selectedMedia: Set<URL> = []
+    @State private var dragSelection: GalleryDragSelection<URL>?
+    @State private var gridWidth: Double = 0
     @State private var bulkDeletePending = false
     @State private var savingToGallery = false
     @State private var gallerySaveMessage: String?
@@ -95,6 +98,7 @@ struct LibraryView: View {
                 }
             }
             .onChange(of: model.activeUser) { _, _ in exitSelection() }
+            .onChange(of: model.displayedFiles) { _, _ in dragSelection = nil }
             .sheet(isPresented: $savedPostsPresented) {
                 SavedPostsView(model: model) { _ in
                     savedPostsPresented = false
@@ -304,6 +308,18 @@ struct LibraryView: View {
                             thumbnailButton(url)
                         }
                     }
+                    .onGeometryChange(for: Double.self) { Double($0.size.width) } action: {
+                        gridWidth = $0
+                    }
+                    .simultaneousGesture(
+                        GridHorizontalPanGesture(
+                            isEnabled: selectingMedia,
+                            onBegan: beginDragSelection,
+                            onChanged: updateDragSelection,
+                            onEnded: { dragSelection = nil }
+                        ),
+                        including: selectingMedia ? .all : .subviews
+                    )
                 }
                 .scrollDismissesKeyboard(.interactively)
             }
@@ -446,7 +462,43 @@ struct LibraryView: View {
 
     private func exitSelection() {
         selectingMedia = false
+        dragSelection = nil
         selectedMedia.removeAll()
+    }
+
+    private func gridIndex(at point: CGPoint, clampToBounds: Bool) -> Int? {
+        GalleryDragSelection<URL>.itemIndex(
+            x: Double(point.x),
+            y: Double(point.y),
+            gridWidth: gridWidth,
+            columns: columns.count,
+            spacing: Double(DS.gridGap),
+            count: model.displayedFiles.count,
+            clampToBounds: clampToBounds
+        )
+    }
+
+    private func beginDragSelection(start: CGPoint, current: CGPoint) -> Bool {
+        let items = model.displayedFiles
+        guard let anchorIndex = gridIndex(at: start, clampToBounds: false),
+              var session = GalleryDragSelection(items: items, anchorIndex: anchorIndex, initialSelection: selectedMedia) else {
+            dragSelection = nil
+            return false
+        }
+        let targetIndex = gridIndex(at: current, clampToBounds: true) ?? anchorIndex
+        session.update(to: targetIndex, items: items, selection: &selectedMedia)
+        dragSelection = session
+        return true
+    }
+
+    private func updateDragSelection(at current: CGPoint) -> Bool {
+        guard var session = dragSelection,
+              let targetIndex = gridIndex(at: current, clampToBounds: true) else {
+            return false
+        }
+        let changed = session.update(to: targetIndex, items: model.displayedFiles, selection: &selectedMedia)
+        dragSelection = session
+        return changed
     }
 
     private func saveSelectionToGallery() {
@@ -461,6 +513,83 @@ struct LibraryView: View {
             } catch {
                 gallerySaveMessage = error.localizedDescription
             }
+        }
+    }
+}
+
+/// Reconnaît un glissement horizontal dans `LazyVGrid` sans gêner le défilement
+/// vertical du `ScrollView`, l'appui simple ni le menu contextuel des vignettes.
+private struct GridHorizontalPanGesture: UIGestureRecognizerRepresentable {
+    let isEnabled: Bool
+    let onBegan: (_ start: CGPoint, _ current: CGPoint) -> Bool
+    let onChanged: (_ current: CGPoint) -> Bool
+    let onEnded: () -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator()
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.minimumNumberOfTouches = 1
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.cancelsTouchesInView = true
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        recognizer.isEnabled = isEnabled
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        let current = context.converter.localLocation
+        switch recognizer.state {
+        case .began:
+            let translation = context.converter.localTranslation ?? .zero
+            let start = CGPoint(x: current.x - translation.x, y: current.y - translation.y)
+            if onBegan(start, current) {
+                context.coordinator.feedback.selectionChanged()
+            }
+        case .changed:
+            if onChanged(current) {
+                context.coordinator.feedback.selectionChanged()
+            }
+        case .ended, .cancelled, .failed:
+            onEnded()
+        default:
+            break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let feedback = UISelectionFeedbackGenerator()
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer.isEnabled,
+                  let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let velocity = pan.velocity(in: pan.view)
+            let horizontal = velocity != .zero
+                ? abs(velocity.x) > abs(velocity.y)
+                : {
+                    let translation = pan.translation(in: pan.view)
+                    return abs(translation.x) > abs(translation.y)
+                }()
+            if horizontal { feedback.prepare() }
+            return horizontal
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            false
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer.isEnabled else { return false }
+            // Laisse défiler verticalement dès qu'un mouvement part haut/bas, mais
+            // coupe le pan du ScrollView dès qu'une sélection horizontale s'engage.
+            return otherGestureRecognizer is UIPanGestureRecognizer && otherGestureRecognizer !== gestureRecognizer
         }
     }
 }
