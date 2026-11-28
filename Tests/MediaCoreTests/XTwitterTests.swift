@@ -113,6 +113,9 @@ final class XTwitterTests: XCTestCase {
         XCTAssertNil(variables["cursor"])
 
         let next = XTwitterAPI.bookmarks(cursor: "a+b/c=")
+        let nextQuery = try XCTUnwrap(URLComponents(url: next, resolvingAgainstBaseURL: false)?.percentEncodedQuery)
+        XCTAssertTrue(nextQuery.contains("a%2Bb%2Fc%3D"), "Le + du curseur Base64 doit être encodé en %2B pour x.com")
+        XCTAssertFalse(nextQuery.contains("+"))
         let nextItems = try XCTUnwrap(URLComponents(url: next, resolvingAgainstBaseURL: false)?.queryItems)
         let nextRaw = try XCTUnwrap(nextItems.first { $0.name == "variables" }?.value)
         let nextVariables = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(nextRaw.utf8)) as? [String: Any])
@@ -125,9 +128,14 @@ final class XTwitterTests: XCTestCase {
     /// Le curseur est imbriqué dans le JSON des `variables`, pas dans un
     /// paramètre de l'URL : il n'a donc pas de `queryItems` à lui. Ce qui
     /// compte est que le JSON produit reste valide et que le curseur y figure
-    /// intact, échappé ou non : c'est x.com qui le décode, pas l'app.
+    /// avec `+`, `/` et `=` percent-encodés (`%2B`, `%2F`, `%3D`), car x.com
+    /// décode les paramètres en `application/x-www-form-urlencoded` et prend
+    /// sinon un `+` littéral pour une espace.
     func testCursorIsEmbeddedInValidVariablesJSON() throws {
         let url = XTwitterAPI.userMedia(userID: "1", cursor: "a+b/c=")
+        let rawQuery = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery)
+        XCTAssertTrue(rawQuery.contains("a%2Bb%2Fc%3D"), "Un + non encodé serait lu comme une espace par x.com")
+        XCTAssertFalse(rawQuery.contains("+"))
         let items = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         let raw = try XCTUnwrap(items.first { $0.name == "variables" }?.value)
         // Rétablit le JSON après le décodage des percent-encodages de l'URL.

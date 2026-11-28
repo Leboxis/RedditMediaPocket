@@ -110,13 +110,25 @@ public enum XTwitterAPI {
                           operation: "Bookmarks", variables: variables, features: features)
     }
 
+    /// Jeu RFC 3986 non réservé : tout le reste (`+`, `/`, `=`, `&`, …) est
+    /// percent-encodé pour éviter que x.com (`application/x-www-form-urlencoded`)
+    /// ne transforme un `+` de curseur Base64 en espace.
+    private static let queryComponentAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+
     private static func graphqlURL(queryID: String, operation: String, variables: String, features: String, fieldToggles: String? = nil) -> URL {
         var components = URLComponents(string: "https://x.com/i/api/graphql/\(queryID)/\(operation)")!
-        components.queryItems = [
-            URLQueryItem(name: "variables", value: variables),
-            URLQueryItem(name: "features", value: features)
+        var items: [(String, String)] = [
+            ("variables", variables),
+            ("features", features)
         ]
-        if let fieldToggles { components.queryItems?.append(URLQueryItem(name: "fieldToggles", value: fieldToggles)) }
+        if let fieldToggles { items.append(("fieldToggles", fieldToggles)) }
+        components.percentEncodedQuery = items.map { name, value in
+            let encodedName = name.addingPercentEncoding(withAllowedCharacters: queryComponentAllowed) ?? name
+            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: queryComponentAllowed) ?? value
+            return "\(encodedName)=\(encodedValue)"
+        }.joined(separator: "&")
         return components.url!
     }
 
