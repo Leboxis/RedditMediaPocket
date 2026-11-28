@@ -311,14 +311,13 @@ struct LibraryView: View {
                     .onGeometryChange(for: Double.self) { Double($0.size.width) } action: {
                         gridWidth = $0
                     }
-                    .simultaneousGesture(
+                    .gesture(
                         GridHorizontalPanGesture(
                             isEnabled: selectingMedia,
                             onBegan: beginDragSelection,
                             onChanged: updateDragSelection,
                             onEnded: { dragSelection = nil }
-                        ),
-                        including: selectingMedia ? .all : .subviews
+                        )
                     )
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -581,7 +580,11 @@ private struct GridHorizontalPanGesture: UIGestureRecognizerRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            false
+            guard gestureRecognizer.isEnabled else { return false }
+            // Laisse les gestes non-pan des cellules (appui simple, menu contextuel)
+            // suivre le toucher sans bloquer le pan horizontal, tout en restant
+            // exclusif face au ScrollView.
+            return !(otherGestureRecognizer is UIPanGestureRecognizer)
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,

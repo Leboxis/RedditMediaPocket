@@ -1,7 +1,7 @@
 import XCTest
 @testable import MediaCore
 
-final class GalleryDragSelectionTests: XCTestestCase {
+final class GalleryDragSelectionTests: XCTestCase {
     func testItemIndexMapsCoordinatesAcrossColumnsAndRows() {
         // Largeur 374 = 3 cellules carrées de 123,33… espacées de 2 pt (pas ~ 125,33).
         let width = 374.0
